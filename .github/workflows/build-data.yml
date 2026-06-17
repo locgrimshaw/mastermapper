@@ -1,0 +1,43 @@
+name: Build data layer
+
+# Run this from the website: Actions tab -> "Build data layer" -> "Run workflow".
+# It processes whatever you've put in data/raw/ into the map-ready file the
+# site serves. If no raw data is present yet, it generates synthetic sample
+# data so the map still shows something.
+
+on:
+  workflow_dispatch:        # the "Run workflow" button on the website
+
+permissions:
+  contents: write           # lets the Action commit the processed file back
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Build the data layer (real data if present, else sample)
+        run: |
+          if [ -f data/raw/imd2019_scores.csv ] && [ -f data/raw/lsoa_boundaries.geojson ]; then
+            echo "Raw data found — building real England layer."
+            python pipeline/build_imd_layer.py
+          else
+            echo "No raw data found — generating synthetic sample so the map works."
+            python pipeline/make_sample_data.py
+          fi
+
+      - name: Commit the processed layer
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add -f web/data/lsoa_imd.geojson
+          git commit -m "Build data layer [automated]" || echo "No changes to commit"
+          git push
