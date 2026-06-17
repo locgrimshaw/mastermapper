@@ -26,11 +26,12 @@ jobs:
 
       - name: Build the data layer (real data if present, else sample)
         run: |
-          if [ -f data/raw/imd2019_scores.csv ] && [ -f data/raw/lsoa_boundaries.geojson ]; then
-            echo "Raw data found — building real England layer."
+          if [ -f data/raw/imd2019_scores.csv ]; then
+            echo "IMD data found — fetching boundaries from ONS, then building real layer."
+            python pipeline/fetch_boundaries.py
             python pipeline/build_imd_layer.py
           else
-            echo "No raw data found — generating synthetic sample so the map works."
+            echo "No IMD data found — generating synthetic sample so the map works."
             python pipeline/make_sample_data.py
           fi
 
