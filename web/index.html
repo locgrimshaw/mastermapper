@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Welfare Mapper — England</title>
+
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
+  <link rel="stylesheet" href="src/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="panel">
+      <header>
+        <h1>Welfare Mapper</h1>
+        <p class="tagline">England · socio-economic context for site appraisal</p>
+      </header>
+
+      <section class="block">
+        <h2>Combined score weighting</h2>
+        <p class="hint">Adjust how much each domain counts toward the combined deprivation score. The map updates live.</p>
+        <div id="sliders"></div>
+        <button id="reset-weights" class="ghost">Reset to equal weighting</button>
+      </section>
+
+      <section class="block">
+        <h2>Site context</h2>
+        <p class="hint" id="draw-hint">Use the draw tool (top-right of map) to outline a plot, or click a single area.</p>
+        <div id="report"><p class="empty">No site selected yet.</p></div>
+      </section>
+
+      <footer>
+        <p class="datasource" id="datasource">Loading data…</p>
+      </footer>
+    </aside>
+
+    <main id="map"></main>
+    <div id="legend"></div>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.js"></script>
+  <script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
