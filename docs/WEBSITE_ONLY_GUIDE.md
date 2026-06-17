@@ -67,36 +67,33 @@ the draw-a-plot report. The footer warns it's synthetic data — correct.
 You download two files in your browser (just clicking), then upload them to
 GitHub and re-run the build. Full source details are in `docs/DATASETS.md`.
 
-### 4a. Download the two files to your computer
+### 4a. Download the ONE file you need
 
-**File 1 — Deprivation scores:**
+**Deprivation scores (the only file you handle):**
 - Go to https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019
 - Download **"File 7: all ranks, deciles and scores…"** (an Excel .xlsx).
 - Open it in Excel/Numbers/Google Sheets. Go to the sheet named
   **"IoD2019 Scores"**. Use **File → Save As / Download as → CSV**.
 - Name the saved file exactly: `imd2019_scores.csv`
 
-**File 2 — LSOA boundaries:**
-- Go to the ONS Open Geography Portal: https://geoportal.statistics.gov.uk
-- Search: **Lower layer Super Output Areas December 2011 Boundaries
-  Generalised Clipped**.
-- Open that dataset, find the **Download** options, choose **GeoJSON**.
-- Rename the downloaded file exactly: `lsoa_boundaries.geojson`
+> **Boundaries are handled for you.** You do NOT download or upload any boundary
+> file. The build Action fetches the LSOA boundaries straight from the ONS
+> Open Geography Portal API (the Super Generalised 200m version — small and
+> fast). This is why you only deal with one small file.
 
-> Use the *Generalised* (BGC/BSC) version, not full resolution — full-res is
-> huge and slow in the browser.
-
-### 4b. Upload them into the repo's data/raw folder
+### 4b. Upload the scores file into data/raw
 
 1. In your repo, click into the **data** folder, then the **raw** folder.
 2. Click **Add file → Upload files**.
-3. Drag in `imd2019_scores.csv` and `lsoa_boundaries.geojson`.
+3. Drag in `imd2019_scores.csv` (it's small — well under the 25MB limit).
 4. Commit changes.
 
 ### 4c. Re-run the build
 
 1. **Actions** tab → **Build data layer** → **Run workflow** → confirm.
-2. This time it detects the real files and processes all 32,844 English LSOAs.
+2. It fetches the boundaries from ONS automatically (about a minute), detects
+   your IMD file, and processes all ~32,844 English LSOAs. (Welsh areas in the
+   boundary set are dropped automatically, since the IMD data is England-only.)
    It commits the processed file, which triggers a fresh Pages deploy.
 3. Refresh your live URL. The "synthetic data" warning is gone — you're now
    looking at real England deprivation data, fully reweightable.
