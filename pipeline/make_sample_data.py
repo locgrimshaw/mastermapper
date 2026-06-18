@@ -59,6 +59,11 @@ def main():
                 props[f"{d}_norm"] = norm
                 props[f"{d}_score_raw"] = round(norm / 100 * 60, 2)
                 props[f"{d}_decile"] = max(1, min(10, 11 - math.ceil(norm / 10)))
+            # Synthetic house prices: loosely inverse to deprivation, with noise.
+            pnorm = round(smooth_field(c, r, seed=200) * 100, 1)
+            props["price_norm"] = pnorm
+            props["price_median"] = int(180000 + pnorm / 100 * 720000)
+            props["price_count"] = int(8 + smooth_field(c, r, seed=300) * 40)
             features.append({
                 "type": "Feature",
                 "properties": props,

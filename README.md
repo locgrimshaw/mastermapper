@@ -79,9 +79,12 @@ welfare-mapper/
 
 - [x] LSOA deprivation choropleth (1.1)
 - [x] Live domain reweighting → combined score (1.2)
+- [x] Quantile colour scaling + click-to-inspect single areas
+- [x] Domain tooltips explaining each IMD measure
 - [x] Draw a plot → area-weighted context report (1.3)
+- [x] Housing context overlay — median sale price (1.5, partial)
 - [ ] Isochrones + nearest amenities (1.4) — needs routing API
-- [ ] Housing context overlay (1.5) — needs Land Registry layer
+- [ ] Council waiting lists / rents (1.5, deeper)
 - [ ] Policy/constraint overlays (1.6) — needs planning.data.gov.uk layers
 - [ ] Portfolio batch scoring + need×feasibility quadrant (2.1)
 - [ ] Indicative viability proxy (2.2) — later phase

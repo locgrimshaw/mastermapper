@@ -104,6 +104,25 @@ GitHub and re-run the build. Full source details are in `docs/DATASETS.md`.
 
 ---
 
+## Part 5 — Add house prices (optional)
+
+Once your real deprivation map is live, you can add a house-price overlay.
+You don't download or upload anything — the build does it in the cloud.
+
+1. **Actions** tab → **Build data layer** → **Run workflow**.
+2. Before clicking the final confirm, tick **"Also add house prices"**.
+3. Run it. This is slower than the deprivation-only build because it downloads
+   a full year of Land Registry sales and the postcode lookup, then aggregates
+   them. Give it several minutes.
+4. When it finishes and Pages redeploys, refresh your live URL. You'll see a
+   **Deprivation / House prices** toggle under the title, and clicking or
+   drawing on an area now shows its median sale price too.
+
+> Prices are a median per LSOA from the most recent full year. Areas with no
+> recorded sales that year show "no sales" rather than a misleading figure.
+
+---
+
 ## Making changes later (all in the browser)
 
 - To edit any file: click it in GitHub, click the **pencil** icon, edit,

@@ -67,9 +67,14 @@ app. You'll have a real, national, reweightable deprivation map.
 - **Licence:** OGL v3.
 
 ### 4. House prices — HM Land Registry Price Paid Data
-- **Where:** https://www.gov.uk/government/statistics/price-paid-data
-  (full file, or yearly). CSV.
-- **Use:** aggregate sold prices to postcode/area for the housing overlay (1.5).
+- **Now automatic.** The build Action fetches a year of Price Paid data from
+  Land Registry and the postcode→LSOA lookup from ONS, aggregates sales to a
+  median price per LSOA, and merges it into the map layer. You upload nothing.
+- To include it: on the **Build data layer** workflow, tick
+  **"Also add house prices"** before running. (It's slower — a year of sales is
+  a large download — so it's off by default.)
+- The map then shows a "Deprivation / House prices" toggle, and the site
+  context report includes a median sale price.
 - **Licence:** OGL v3. Attribution: "Contains HM Land Registry data © Crown
   copyright and database right."
 

@@ -80,6 +80,61 @@ html, body {
   color: var(--text-dim);
 }
 
+/* ---- Layer toggle (segmented control) ---- */
+.layer-toggle {
+  display: flex;
+  margin-top: 14px;
+  gap: 0;
+  border: 1px solid var(--ink-line);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.layer-toggle:empty { display: none; }
+
+.layer-toggle .seg {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.layer-toggle .seg + .seg { border-left: 1px solid var(--ink-line); }
+
+.layer-toggle .seg.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+.layer-toggle .seg:not(.on):hover { color: var(--text); }
+
+/* ---- Price line in reports ---- */
+.price-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 0 12px;
+  border-bottom: 1px solid var(--ink-line);
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.price-line strong {
+  font-family: var(--font-data);
+  font-size: 16px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.price-line .dim { font-size: 11px; }
+.price-line.dim { color: var(--text-dim); font-style: italic; }
+
 /* ---- Sliders ---- */
 .slider-row {
   margin-bottom: 12px;
@@ -95,6 +150,77 @@ html, body {
 .slider-row .name {
   font-size: 13px;
   color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---- Info marker + tooltip ---- */
+.info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--text-dim);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-style: italic;
+  font-family: var(--font-data);
+  line-height: 1;
+  cursor: help;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.info:hover,
+.info:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
+.info .tip {
+  position: absolute;
+  left: -8px;
+  bottom: calc(100% + 8px);
+  width: 220px;
+  background: var(--ink-2);
+  border: 1px solid var(--ink-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11.5px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--text);
+  text-align: left;
+  letter-spacing: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  z-index: 50;
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.info .tip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 14px;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--ink-2);
+}
+
+.info:hover .tip,
+.info:focus-visible .tip {
+  opacity: 1;
+  visibility: visible;
 }
 
 .slider-row .val {
@@ -268,6 +394,13 @@ footer {
   display: flex;
   justify-content: space-between;
   margin-top: 5px;
+  font-family: var(--font-data);
+}
+
+#legend .legend-note {
+  margin-top: 6px;
+  font-size: 9.5px;
+  color: var(--text-dim);
   font-family: var(--font-data);
 }
 
