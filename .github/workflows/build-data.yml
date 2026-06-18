@@ -1,20 +1,15 @@
 name: Build data layer
 
-# Run this from the website: Actions tab -> "Build data layer" -> "Run workflow".
-# It processes whatever you've put in data/raw/ into the map-ready file the
-# site serves. If no raw data is present yet, it generates synthetic sample
-# data so the map still shows something.
-
 on:
-  workflow_dispatch:        # the "Run workflow" button on the website
+  workflow_dispatch:
     inputs:
       include_prices:
-        description: "Also add house prices (slower — downloads a year of Land Registry data)"
+        description: "Also add house prices (slower - downloads a year of Land Registry data)"
         type: boolean
         default: false
 
 permissions:
-  contents: write           # lets the Action commit the processed file back
+  contents: write
 
 jobs:
   build:
@@ -29,18 +24,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r pipeline/requirements.txt
 
-- name: Build the data layer (real data if present, else sample)
+      - name: Build the data layer
         run: |
           if [ -f data/raw/imd2019_scores.csv ]; then
-            echo "IMD data found — fetching boundaries from ONS, then building real layer."
+            echo "IMD data found - fetching boundaries, building real layer."
             python pipeline/fetch_boundaries.py
             python pipeline/build_imd_layer.py
           elif grep -qE '"lsoa_code" *: *"E[0-9]' web/data/lsoa_imd.geojson 2>/dev/null; then
-            echo "No IMD CSV uploaded, but a REAL England layer already exists."
-            echo "Refusing to overwrite it with synthetic sample data. Nothing to do."
-            echo "To rebuild from scratch, upload data/raw/imd2019_scores.csv first."
+            echo "No IMD CSV uploaded, but a real England layer already exists."
+            echo "Refusing to overwrite it with synthetic sample data."
+            echo "To rebuild, upload data/raw/imd2019_scores.csv first."
           else
-            echo "No IMD data and no real layer — generating synthetic sample so the map works."
+            echo "No IMD data and no real layer - generating synthetic sample."
             python pipeline/make_sample_data.py
           fi
 
