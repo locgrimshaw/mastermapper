@@ -104,22 +104,30 @@ def main() -> int:
     print(f"  {len(merged)} LSOAs matched "
           f"({len(geo)} boundaries, {len(imd)} score rows)")
 
-    # Simplify geometry a touch to keep file size sane for the prototype.
-    # Tolerance is in the CRS units. Reproject to British National Grid (m)
-    # so the tolerance is meaningful, simplify, then back to WGS84 for web.
-    print("Simplifying geometry for web delivery...")
+    # Simplify geometry and round coordinates to keep the file small enough to
+    # serve as plain GeoJSON. Two levers, both safe at LSOA-on-a-national-map
+    # scale where you never zoom in far enough to see the detail we're dropping:
+    #   SIMPLIFY_M  — drop vertices closer together than this many metres
+    #   COORD_DP    — decimal places kept in the output lon/lat
+    # 50m tolerance + 4dp (~11m) is invisible at the zoom levels planners use
+    # but typically shrinks the file several-fold versus 20m + 5dp.
+    SIMPLIFY_M = 50
+    COORD_DP = 4
+    print(f"Simplifying geometry (tolerance {SIMPLIFY_M}m, {COORD_DP}dp)...")
     merged = merged.to_crs(27700)
-    merged["geometry"] = merged["geometry"].simplify(20, preserve_topology=True)
+    merged["geometry"] = merged["geometry"].simplify(SIMPLIFY_M, preserve_topology=True)
     merged = merged.to_crs(4326)
 
     OUT.mkdir(parents=True, exist_ok=True)
     out_path = OUT / "lsoa_imd.geojson"
-    merged.to_file(out_path, driver="GeoJSON")
+    # Write with limited coordinate precision (GeoPandas passes COORDINATE_PRECISION
+    # through to the GeoJSON driver).
+    merged.to_file(out_path, driver="GeoJSON", COORDINATE_PRECISION=COORD_DP)
     size_mb = out_path.stat().st_size / 1e6
     print(f"Wrote {out_path}  ({size_mb:.1f} MB)")
-    if size_mb > 50:
-        print("  NOTE: file is large. For production, convert to vector tiles")
-        print("  with tippecanoe rather than serving raw GeoJSON.")
+    if size_mb > 25:
+        print("  NOTE: still large. If the map feels slow, the next step is")
+        print("  vector tiles (tippecanoe) rather than raw GeoJSON.")
     return 0
 
 
