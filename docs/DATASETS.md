@@ -47,6 +47,11 @@ England only for v1, as agreed.
 - **Licence:** OGL v3. Contains OS data © Crown copyright.
 - The code column is usually `LSOA11CD`; the pipeline auto-detects it if not.
 
+> **Borough/district names** are added automatically. The build fetches an ONS
+> lookup that maps each LSOA to its name and Local Authority District (e.g.
+> "Southwark"), so clicking an area on the map shows where it is. No extra
+> download needed.
+
 > ⚠ IMD 2019 uses **2011** LSOA boundaries. Census 2021 introduced **2021**
 > LSOAs (some changed). For v1, stay on 2011 boundaries to match IMD. When you
 > add Census 2021 data later, you'll need the 2011↔2021 lookup (also on the

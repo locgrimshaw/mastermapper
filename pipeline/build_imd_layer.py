@@ -17,6 +17,8 @@ Run:  python pipeline/build_imd_layer.py
 
 import json
 import sys
+import urllib.request
+import urllib.parse
 from pathlib import Path
 
 import pandas as pd
@@ -25,6 +27,14 @@ import geopandas as gpd
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 OUT = ROOT / "web" / "data"
+
+# ONS lookup giving each 2011 LSOA its name and its Local Authority District
+# (the "borough/district"). Field names: LSOA11CD, LSOA11NM, LAD22CD, LAD22NM.
+LSOA_LAD_BASE = (
+    "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/"
+    "LSOA_2011_to_LSOA_2021_to_Local_Authority_District_2022_Lookup_for_England__2022"
+    "/FeatureServer/0/query"
+)
 
 # The 7 IMD domains we expose as adjustable metrics, plus overall.
 # Keys are our internal names; values are the *score* column names as they
@@ -44,6 +54,49 @@ DOMAIN_SCORE_COLUMNS = {
 IMD_LSOA_CODE = "LSOA code (2011)"
 # The LSOA code field in the boundary file (ONS calls it LSOA11CD).
 GEO_LSOA_CODE = "LSOA11CD"
+
+
+def fetch_lsoa_names() -> pd.DataFrame:
+    """Fetch {lsoa_code, lsoa_name, lad_name} from ONS, paging through results.
+    Returns an empty frame on failure so the build can continue without names.
+    """
+    print("Fetching LSOA & district names from ONS...")
+    rows = []
+    offset, PAGE = 0, 4000
+    try:
+        while True:
+            params = {
+                "where": "1=1",
+                "outFields": "LSOA11CD,LSOA11NM,LAD22NM",
+                "returnGeometry": "false",
+                "f": "json",
+                "resultOffset": str(offset),
+                "resultRecordCount": str(PAGE),
+            }
+            url = LSOA_LAD_BASE + "?" + urllib.parse.urlencode(params)
+            req = urllib.request.Request(url, headers={"User-Agent": "welfare-mapper"})
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            feats = data.get("features", [])
+            if not feats:
+                break
+            for ft in feats:
+                a = ft.get("attributes", {})
+                code = a.get("LSOA11CD")
+                if code:
+                    rows.append({
+                        "lsoa_code": code,
+                        "lsoa_name": a.get("LSOA11NM"),
+                        "lad_name": a.get("LAD22NM"),
+                    })
+            print(f"  {len(rows)} names fetched...")
+            if len(feats) < PAGE:
+                break
+            offset += len(feats)
+    except Exception as e:
+        print(f"  WARNING: name lookup failed ({e}). Continuing without names.")
+        return pd.DataFrame(columns=["lsoa_code", "lsoa_name", "lad_name"])
+    return pd.DataFrame(rows).drop_duplicates("lsoa_code")
 
 
 def normalise_0_100(series: pd.Series) -> pd.Series:
@@ -103,6 +156,16 @@ def main() -> int:
     merged = geo.merge(imd, on="lsoa_code", how="inner")
     print(f"  {len(merged)} LSOAs matched "
           f"({len(geo)} boundaries, {len(imd)} score rows)")
+
+    # Attach the LSOA name and Local Authority District (borough/district) name.
+    names = fetch_lsoa_names()
+    if not names.empty:
+        merged = merged.merge(names, on="lsoa_code", how="left")
+        n_named = merged["lad_name"].notna().sum()
+        print(f"  attached district names to {n_named}/{len(merged)} LSOAs")
+    else:
+        merged["lsoa_name"] = None
+        merged["lad_name"] = None
 
     # Simplify geometry and round coordinates to keep the file small enough to
     # serve as plain GeoJSON. Two levers, both safe at LSOA-on-a-national-map

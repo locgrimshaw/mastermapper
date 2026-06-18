@@ -416,6 +416,73 @@ footer {
 /* ---- Map ---- */
 #map { position: relative; height: 100%; }
 
+/* ---- Floating detail panel (single-area click) ---- */
+#floating-detail {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  width: 300px;
+  max-height: calc(100% - 120px);
+  overflow-y: auto;
+  background: rgba(26, 34, 48, 0.96);
+  border: 1px solid var(--ink-line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  z-index: 20;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+#floating-detail.open {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.fd-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.fd-close:hover { color: var(--text); background: var(--ink-line); }
+
+.fd-location { margin-bottom: 14px; padding-right: 24px; }
+
+.fd-district {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.fd-sub {
+  font-family: var(--font-data);
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+
+@media (max-width: 720px) {
+  #floating-detail {
+    width: auto;
+    left: 12px;
+    right: 12px;
+    top: 12px;
+  }
+}
+
 #legend {
   position: absolute;
   bottom: 22px;

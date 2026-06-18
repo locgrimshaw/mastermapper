@@ -54,6 +54,10 @@ def main():
                 [lon, lat],
             ]
             props = {"lsoa_code": f"S{r:02d}{c:02d}"}
+            # Fake names so the click panel can show borough/district in dev.
+            boroughs = ["Camden", "Hackney", "Lambeth", "Southwark", "Islington", "Westminster"]
+            props["lad_name"] = boroughs[(r + c) % len(boroughs)]
+            props["lsoa_name"] = f"{props['lad_name']} {(r * 24 + c) % 40 + 1:03d}A"
             for i, d in enumerate(DOMAINS):
                 norm = round(smooth_field(c, r, seed=100 + i) * 100, 1)
                 props[f"{d}_norm"] = norm
