@@ -1,0 +1,18 @@
+# Big raw downloads — keep these out of the repo
+data/raw/*
+!data/raw/.gitkeep
+# ...EXCEPT the IMD scores CSV, which is small and must persist so every
+# cloud build can see it (this fixes the recurring "sample data" problem).
+!data/raw/imd2019_scores.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# NOTE: web/data/lsoa_imd.geojson is intentionally NOT ignored —
+# GitHub Pages must serve it. The Action commits it for you.

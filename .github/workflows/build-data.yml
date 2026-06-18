@@ -45,10 +45,18 @@ jobs:
           echo "Adding house-price overlay from Land Registry + ONS lookup..."
           python pipeline/build_price_layer.py
 
-      - name: Commit the processed layer
+      - name: Install tippecanoe (for vector tiles)
+        run: pip install tippecanoe
+
+      - name: Build vector tiles
+        run: |
+          echo "Converting GeoJSON to PMTiles for fast on-demand loading..."
+          python pipeline/build_tiles.py
+
+      - name: Commit the processed layer + tiles
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add -f web/data/lsoa_imd.geojson
-          git commit -m "Build data layer [automated]" || echo "No changes to commit"
+          git add -f web/data/lsoa_imd.geojson web/data/lsoa.pmtiles web/data/breaks.json
+          git commit -m "Build data layer + tiles [automated]" || echo "No changes to commit"
           git push
