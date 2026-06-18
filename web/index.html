@@ -27,7 +27,7 @@
 
       <section class="block">
         <h2>Site context</h2>
-        <p class="hint" id="draw-hint">Use the draw tool (top-right of map) to outline a plot, or click a single area.</p>
+        <p class="hint" id="draw-hint">Click any area to see its details in a panel on the map. Use the draw tool (top-right) to outline a plot and get an aggregated report here.</p>
         <div id="report"><p class="empty">No site selected yet.</p></div>
       </section>
 
@@ -37,12 +37,14 @@
     </aside>
 
     <main id="map"></main>
+    <div id="floating-detail"></div>
     <div id="legend"></div>
   </div>
 
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.js"></script>
   <script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
+  <script src="https://unpkg.com/pmtiles@3.0.6/dist/pmtiles.js"></script>
   <script type="module" src="src/app.js"></script>
 </body>
 </html>
