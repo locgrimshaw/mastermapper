@@ -42,32 +42,27 @@ const state = {
   weights: Object.fromEntries(DOMAINS.map(d => [d.key, 1])),
   enabled: Object.fromEntries(DOMAINS.map(d => [d.key, true])), // counts toward combined?
   solo: null,            // if set, map shows just this one domain
-  geojson: null,
+  breaksData: null,      // precomputed colour breaks loaded from breaks.json
   usingSampleData: true,
-  breaks: [],            // quantile breakpoints for the colour scale
   selectedCode: null,    // LSOA pinned by click-to-inspect
   layer: "deprivation",  // "deprivation" | "price"
   hasPrice: false,       // whether the loaded data includes price fields
 };
 
-// The field and ramp currently driving the choropleth.
+// The ramp currently driving the choropleth.
 function activeRamp() {
   return state.layer === "price" ? PRICE_RAMP : RAMP;
-}
-function activeField() {
-  if (state.layer === "price") return "price_norm";
-  if (state.solo) return `${state.solo}_norm`;  // solo a single domain
-  return "_combined";
 }
 
 // ---- Scoring engine -------------------------------------------------------
 
-// Combined score for one feature's properties, given current weights.
-// Each domain is already normalised 0-100 (higher = more deprived).
+// Combined score for ONE feature's properties (used by the click panel and
+// plot report, which work on individual features). Each domain is normalised
+// 0-100, higher = more deprived. Respects the enable toggles and weights.
 function combinedScore(props, weights) {
   let wsum = 0, acc = 0;
   for (const d of DOMAINS) {
-    if (!state.enabled[d.key]) continue;   // toggled off -> excluded entirely
+    if (!state.enabled[d.key]) continue;
     const w = weights[d.key];
     const v = props[`${d.key}_norm`];
     if (v == null) continue;
@@ -77,44 +72,51 @@ function combinedScore(props, weights) {
   return wsum > 0 ? acc / wsum : 0;
 }
 
-// Write the combined score into every feature so the map can style by it.
-function recomputeScores() {
-  for (const f of state.geojson.features) {
-    f.properties._combined = combinedScore(f.properties, state.weights);
+// Build a MapLibre expression that computes the combined score on the GPU
+// from the tile attributes. This is what keeps reweighting fast and live with
+// vector tiles: we never loop features in JS, the style engine does it per
+// visible feature. Equivalent to combinedScore() but as an expression tree.
+function combinedScoreExpression() {
+  const terms = [];      // weighted values
+  let wsum = 0;
+  for (const d of DOMAINS) {
+    if (!state.enabled[d.key]) continue;
+    const w = state.weights[d.key];
+    if (w === 0) continue;
+    terms.push(["*", w, ["coalesce", ["get", `${d.key}_norm`], 0]]);
+    wsum += w;
   }
-  computeBreaks();
+  if (!terms.length || wsum === 0) return 0;
+  const sum = terms.length === 1 ? terms[0] : ["+", ...terms];
+  return ["/", sum, wsum];
 }
 
-// Quantile breakpoints across the CURRENT active field. Using quantiles
-// (equal-count classes) rather than fixed cutoffs means the full colour ramp
-// is always in play, so differences stay visible no matter how the user
-// weights the domains, switches layer, or zooms.
-function computeBreaks() {
-  const field = activeField();
-  const ramp = activeRamp();
-  const vals = state.geojson.features
-    .map(f => f.properties[field])
-    .filter(v => v != null)
-    .sort((a, b) => a - b);
-  const n = vals.length;
-  if (!n) { state.breaks = []; return; }
-  const breaks = [];
-  for (let i = 1; i < ramp.length; i++) {
-    breaks.push(vals[Math.floor((i / ramp.length) * n)]);
-  }
-  state.breaks = breaks;
+// The value expression the map colours by, depending on layer/solo mode.
+function activeValueExpression() {
+  if (state.layer === "price") return ["coalesce", ["get", "price_norm"], -1];
+  if (state.solo) return ["coalesce", ["get", `${state.solo}_norm`], -1];
+  return combinedScoreExpression();
 }
 
-// MapLibre 'step' expression built from the current quantile breaks.
-// Areas with no value for the active field render transparent.
+// Breaks now come from the precomputed sidecar (breaks.json), because a tiled
+// map only holds visible features and can't see the whole distribution. We
+// pick the right set for the current mode.
+function currentBreaks() {
+  if (!state.breaksData) return [];
+  if (state.layer === "price") return state.breaksData.price || [];
+  if (state.solo) return state.breaksData[state.solo] || [];
+  return state.breaksData.combined_equal || [];
+}
+
+// MapLibre 'step' expression: map the active value through the breaks to the
+// ramp colours. Negative sentinel (no data) renders transparent.
 function fillColorExpression() {
   const ramp = activeRamp();
-  const field = activeField();
-  if (!state.breaks.length) return ramp[0];
-  const expr = ["step", ["coalesce", ["get", field], -1], "rgba(0,0,0,0)"];
-  // First real class starts at 0; below 0 (our sentinel) stays transparent.
+  const breaks = currentBreaks();
+  if (!breaks.length) return ramp[0];
+  const expr = ["step", activeValueExpression(), "rgba(0,0,0,0)"];
   expr.push(0, ramp[0]);
-  state.breaks.forEach((b, i) => { expr.push(b, ramp[i + 1]); });
+  breaks.forEach((b, i) => { expr.push(b, ramp[i + 1]); });
   return expr;
 }
 
@@ -148,29 +150,37 @@ map.addControl(new maplibregl.NavigationControl(), "top-right");
 
 // ---- Data load ------------------------------------------------------------
 
+const SOURCE_LAYER = "lsoa";   // must match the tippecanoe -l layer name
+
 async function loadData() {
-  // Data lives inside web/ so GitHub Pages can serve it at this relative path.
-  const res = await fetch("data/lsoa_imd.geojson");
-  if (!res.ok) throw new Error(`Could not load data (${res.status})`);
-  state.geojson = await res.json();
+  // Register the PMTiles protocol so MapLibre can read our single tile file
+  // via HTTP range requests (only the visible tiles are fetched).
+  const protocol = new pmtiles.Protocol();
+  maplibregl.addProtocol("pmtiles", protocol.tile);
 
-  // Heuristic: synthetic codes start with "S".
-  state.usingSampleData =
-    state.geojson.features[0]?.properties.lsoa_code?.startsWith("S") ?? true;
+  // Load the precomputed colour breaks (tiny sidecar). The map can't compute
+  // quantiles itself anymore since it only holds visible features.
+  try {
+    const br = await fetch("data/breaks.json");
+    if (br.ok) state.breaksData = await br.json();
+  } catch { state.breaksData = null; }
 
-  // Does this dataset include the house-price overlay?
-  state.hasPrice = state.geojson.features.some(
-    f => f.properties.price_norm != null
-  );
+  // Flags the pipeline records in breaks.json so we don't need all features.
+  state.usingSampleData = state.breaksData?.meta?.sample ?? true;
+  state.hasPrice = (state.breaksData?.price?.length ?? 0) > 0;
 
-  recomputeScores();
+  const tilesUrl = "pmtiles://" + new URL("data/lsoa.pmtiles", location.href).href;
 
-  map.addSource("lsoa", { type: "geojson", data: state.geojson });
+  map.addSource("lsoa", {
+    type: "vector",
+    url: tilesUrl,
+  });
 
   map.addLayer({
     id: "lsoa-fill",
     type: "fill",
     source: "lsoa",
+    "source-layer": SOURCE_LAYER,
     paint: {
       "fill-color": fillColorExpression(),
       "fill-opacity": 0.78,
@@ -181,6 +191,7 @@ async function loadData() {
     id: "lsoa-line",
     type: "line",
     source: "lsoa",
+    "source-layer": SOURCE_LAYER,
     paint: { "line-color": "#1a223080", "line-width": 0.4 },
   });
 
@@ -189,13 +200,10 @@ async function loadData() {
     id: "lsoa-selected",
     type: "line",
     source: "lsoa",
+    "source-layer": SOURCE_LAYER,
     paint: { "line-color": "#1a2230", "line-width": 2.4 },
     filter: ["==", "lsoa_code", ""],
   });
-
-  // Fit to the data extent.
-  const b = turf.bbox(state.geojson);
-  map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, duration: 0 });
 
   updateDataSourceNote();
 }
@@ -218,8 +226,6 @@ function updateDataSourceNote() {
 // ---- Choropleth restyle on weight change ----------------------------------
 
 function restyle() {
-  recomputeScores();
-  map.getSource("lsoa").setData(state.geojson);
   map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
   buildLegend();
   if (state.selectedCode) inspectLSOA(state.selectedCode);
@@ -229,7 +235,6 @@ function restyle() {
 function setLayer(mode) {
   state.layer = mode;
   if (mode === "price") setSolo(null);   // solo is a deprivation-only view
-  computeBreaks();
   map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
   buildLegend();
   buildLayerToggle();
@@ -323,7 +328,6 @@ function setSolo(key) {
   }
   // Solo only applies to the deprivation layer; force it if on prices.
   if (key && state.layer === "price") state.layer = "deprivation";
-  computeBreaks();
   map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
   buildLegend();
   buildLayerToggle();
@@ -337,8 +341,7 @@ function onDrawChange() {
   const data = draw.getAll();
   if (!data.features.length) { lastDrawnPolygon = null; return; }
   lastDrawnPolygon = data.features[data.features.length - 1];
-  state.selectedCode = null;
-  map.setFilter("lsoa-selected", ["==", "lsoa_code", ""]);
+  closeDetail();   // a drawn plot supersedes a single-area inspection
   buildReport(lastDrawnPolygon);
 }
 
@@ -346,29 +349,44 @@ function refreshReportIfActive() {
   if (lastDrawnPolygon) buildReport(lastDrawnPolygon);
 }
 
-// Area-weighted aggregation: for each LSOA the plot overlaps, weight its
-// metrics by the area of overlap. This gives the plot's immediate context
-// rather than a single LSOA's value.
+// Area-weighted aggregation over the LSOAs a drawn plot overlaps. With vector
+// tiles we don't hold all features in memory, so we ask the map which rendered
+// features fall under the plot's screen bounds, then intersect those. The plot
+// must be on-screen (it always is, since the user just drew it).
 function buildReport(plot) {
+  const report = document.getElementById("report");
+
+  // Screen bounding box of the drawn polygon, for queryRenderedFeatures.
+  const bbox = turf.bbox(plot);
+  const sw = map.project([bbox[0], bbox[1]]);
+  const ne = map.project([bbox[2], bbox[3]]);
+  const rendered = map.queryRenderedFeatures(
+    [[Math.min(sw.x, ne.x), Math.min(sw.y, ne.y)],
+     [Math.max(sw.x, ne.x), Math.max(sw.y, ne.y)]],
+    { layers: ["lsoa-fill"] }
+  );
+
+  // Deduplicate by LSOA code (tiles can repeat a feature across tile edges)
+  // and keep those genuinely intersecting the plot.
+  const seen = new Set();
   const overlaps = [];
-  for (const f of state.geojson.features) {
+  for (const f of rendered) {
+    const code = f.properties.lsoa_code;
+    if (seen.has(code)) continue;
+    seen.add(code);
     let inter;
     try {
-      // Turf v7: intersect takes a FeatureCollection of two polygons.
-      inter = turf.intersect(
-        turf.featureCollection([turf.feature(plot.geometry), f])
-      );
+      inter = turf.intersect(turf.featureCollection([turf.feature(plot.geometry), f]));
     } catch { inter = null; }
     if (!inter) continue;
     const area = turf.area(inter);
     if (area > 0) overlaps.push({ props: f.properties, area });
   }
 
-  const report = document.getElementById("report");
   if (!overlaps.length) {
     report.innerHTML =
       `<p class="empty">Plot doesn't overlap any data areas. ` +
-      `Draw within the coloured region.</p>`;
+      `Draw within the coloured region, and zoom in so the areas are loaded.</p>`;
     return;
   }
 
@@ -426,25 +444,36 @@ function buildReport(plot) {
 }
 
 function rampColor(v) {
-  // Colour a 0-100 value by the current quantile breaks (matches the map).
-  if (!state.breaks.length) return RAMP[0];
-  for (let i = 0; i < state.breaks.length; i++) {
-    if (v < state.breaks[i]) return RAMP[i];
+  // Colour a 0-100 value by the current breaks (matches the map). Uses the
+  // combined-score breaks regardless of solo, since the report bars are always
+  // per-domain percentiles on the same 0-100 scale.
+  const breaks = state.breaksData?.combined_equal || [];
+  if (!breaks.length) return RAMP[0];
+  for (let i = 0; i < breaks.length; i++) {
+    if (v < breaks[i]) return RAMP[i];
   }
   return RAMP[RAMP.length - 1];
 }
 
 // ---- Click to inspect a single LSOA ---------------------------------------
 
-function inspectLSOA(code) {
-  const f = state.geojson.features.find(x => x.properties.lsoa_code === code);
-  if (!f) return;
+function inspectLSOA(propsOrCode) {
+  // Accept either a properties object (from a fresh click) or, on refresh,
+  // the stored code -> reuse the cached properties.
+  let p;
+  if (typeof propsOrCode === "string") {
+    p = state.selectedProps;
+    if (!p || p.lsoa_code !== propsOrCode) return;
+  } else {
+    p = propsOrCode;
+  }
+  if (!p) return;
+  const code = p.lsoa_code;
   state.selectedCode = code;
-  lastDrawnPolygon = null;                       // clicking supersedes a drawn plot
+  state.selectedProps = p;
   map.setFilter("lsoa-selected", ["==", "lsoa_code", code]);
 
-  const p = f.properties;
-  const combined = p._combined;
+  const combined = combinedScore(p, state.weights);
   const priceLine = p.price_median != null
     ? `<div class="price-line"><span>Median sale price</span>
          <strong>${priceFmt(p.price_median)}</strong>
@@ -462,17 +491,37 @@ function inspectLSOA(code) {
     </tr>`;
   }).join("");
 
-  document.getElementById("report").innerHTML = `
+  // Location header: district (borough) prominent, LSOA name + code beneath.
+  const district = p.lad_name || "Unknown district";
+  const sub = p.lsoa_name ? `${p.lsoa_name} · ${code}` : code;
+
+  const panel = document.getElementById("floating-detail");
+  panel.innerHTML = `
+    <button class="fd-close" aria-label="Close" title="Close">×</button>
+    <div class="fd-location">
+      <div class="fd-district">${district}</div>
+      <div class="fd-sub">${sub}</div>
+    </div>
     <div class="report-headline">
       <div class="big">${combined.toFixed(0)}<span style="font-size:14px">/100</span></div>
-      <div class="cap">${code} · single area · weighted</div>
+      <div class="cap">Combined deprivation · weighted</div>
     </div>
     ${priceLine}
     <table class="metric-table">${rows}</table>
-    <p class="hint" style="margin-top:14px">
-      Each value is that domain's national percentile (100 = most deprived
-      in England). Draw a plot to aggregate several areas instead.
+    <p class="hint" style="margin-top:12px">
+      Values are national percentiles (100 = most deprived in England).
     </p>`;
+  panel.classList.add("open");
+  panel.querySelector(".fd-close").addEventListener("click", closeDetail);
+}
+
+function closeDetail() {
+  state.selectedCode = null;
+  state.selectedProps = null;
+  map.setFilter("lsoa-selected", ["==", "lsoa_code", ""]);
+  const panel = document.getElementById("floating-detail");
+  panel.classList.remove("open");
+  panel.innerHTML = "";
 }
 
 // ---- Hover popup ----------------------------------------------------------
@@ -497,15 +546,13 @@ function wireInteractions() {
 
   // Click a single area to pin its full breakdown.
   map.on("click", "lsoa-fill", (e) => {
-    inspectLSOA(e.features[0].properties.lsoa_code);
+    inspectLSOA(e.features[0].properties);
   });
 
   map.on("draw.create", onDrawChange);
   map.on("draw.update", onDrawChange);
   map.on("draw.delete", () => {
     lastDrawnPolygon = null;
-    state.selectedCode = null;
-    map.setFilter("lsoa-selected", ["==", "lsoa_code", ""]);
     document.getElementById("report").innerHTML =
       `<p class="empty">No site selected yet.</p>`;
   });
@@ -518,39 +565,32 @@ function buildLegend() {
   const ramp = activeRamp();
   const swatches = ramp.map(c => `<span style="background:${c}"></span>`).join("");
   if (state.layer === "price") {
-    const lo = priceFmt(quantilePrice(0.16));
-    const hi = priceFmt(quantilePrice(0.84));
+    const band = state.breaksData?.price_band;
+    const note = band
+      ? `Land Registry 2024 · ${priceFmt(band[0])}–${priceFmt(band[1])} typical band`
+      : `Land Registry 2024`;
     el.innerHTML = `
       <div class="title">Median sale price</div>
       <div class="ramp">${swatches}</div>
       <div class="scale"><span>lower</span><span>higher</span></div>
-      <div class="legend-note">Land Registry 2024 · ${lo}–${hi} typical band</div>`;
+      <div class="legend-note">${note}</div>`;
   } else {
-    const lo = state.breaks.length ? state.breaks[0].toFixed(0) : "0";
-    const hi = state.breaks.length ? state.breaks[state.breaks.length - 1].toFixed(0) : "100";
+    const breaks = currentBreaks();
+    const lo = breaks.length ? breaks[0].toFixed(0) : "0";
+    const hi = breaks.length ? breaks[breaks.length - 1].toFixed(0) : "100";
     const soloName = state.solo
       ? DOMAINS.find(d => d.key === state.solo).name
       : null;
     const title = soloName ? `${soloName} only` : "Combined score";
     const note = soloName
-      ? `Single domain · equal-count classes`
-      : `Equal-count classes · breaks ${lo}–${hi}`;
+      ? `Single domain · fixed classes`
+      : `Fixed classes · breaks ${lo}–${hi}`;
     el.innerHTML = `
       <div class="title">${title}</div>
       <div class="ramp">${swatches}</div>
       <div class="scale"><span>less deprived</span><span>more deprived</span></div>
       <div class="legend-note">${note}</div>`;
   }
-}
-
-// A price at a given fraction through the sorted medians (for legend labels).
-function quantilePrice(frac) {
-  const vals = state.geojson.features
-    .map(f => f.properties.price_median)
-    .filter(v => v != null)
-    .sort((a, b) => a - b);
-  if (!vals.length) return null;
-  return vals[Math.floor(frac * (vals.length - 1))];
 }
 
 function priceFmt(v) {
@@ -567,8 +607,12 @@ buildLegend();
 map.on("load", async () => {
   try {
     await loadData();
+    buildLegend();          // now that breaks.json is loaded
     buildLayerToggle();
     wireInteractions();
+    // Fit to the data's own bounding box (from the sidecar).
+    const bb = state.breaksData?.bbox;
+    if (bb) map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 20, duration: 0 });
   } catch (err) {
     document.getElementById("datasource").className = "datasource warn";
     document.getElementById("datasource").textContent =
