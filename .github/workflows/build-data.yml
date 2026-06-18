@@ -7,6 +7,11 @@ name: Build data layer
 
 on:
   workflow_dispatch:        # the "Run workflow" button on the website
+    inputs:
+      include_prices:
+        description: "Also add house prices (slower — downloads a year of Land Registry data)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write           # lets the Action commit the processed file back
@@ -34,6 +39,12 @@ jobs:
             echo "No IMD data found — generating synthetic sample so the map works."
             python pipeline/make_sample_data.py
           fi
+
+      - name: Add house prices (optional)
+        if: ${{ inputs.include_prices && hashFiles('data/raw/imd2019_scores.csv') != '' }}
+        run: |
+          echo "Adding house-price overlay from Land Registry + ONS lookup..."
+          python pipeline/build_price_layer.py
 
       - name: Commit the processed layer
         run: |
