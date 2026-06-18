@@ -29,14 +29,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r pipeline/requirements.txt
 
-      - name: Build the data layer (real data if present, else sample)
+- name: Build the data layer (real data if present, else sample)
         run: |
           if [ -f data/raw/imd2019_scores.csv ]; then
             echo "IMD data found — fetching boundaries from ONS, then building real layer."
             python pipeline/fetch_boundaries.py
             python pipeline/build_imd_layer.py
+          elif grep -qE '"lsoa_code" *: *"E[0-9]' web/data/lsoa_imd.geojson 2>/dev/null; then
+            echo "No IMD CSV uploaded, but a REAL England layer already exists."
+            echo "Refusing to overwrite it with synthetic sample data. Nothing to do."
+            echo "To rebuild from scratch, upload data/raw/imd2019_scores.csv first."
           else
-            echo "No IMD data found — generating synthetic sample so the map works."
+            echo "No IMD data and no real layer — generating synthetic sample so the map works."
             python pipeline/make_sample_data.py
           fi
 
