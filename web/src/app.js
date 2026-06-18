@@ -40,6 +40,8 @@ const PRICE_RAMP = ["#e8eef2", "#b9cfdc", "#89b0c6", "#5a8fb0", "#356f97", "#1c4
 
 const state = {
   weights: Object.fromEntries(DOMAINS.map(d => [d.key, 1])),
+  enabled: Object.fromEntries(DOMAINS.map(d => [d.key, true])), // counts toward combined?
+  solo: null,            // if set, map shows just this one domain
   geojson: null,
   usingSampleData: true,
   breaks: [],            // quantile breakpoints for the colour scale
@@ -53,7 +55,9 @@ function activeRamp() {
   return state.layer === "price" ? PRICE_RAMP : RAMP;
 }
 function activeField() {
-  return state.layer === "price" ? "price_norm" : "_combined";
+  if (state.layer === "price") return "price_norm";
+  if (state.solo) return `${state.solo}_norm`;  // solo a single domain
+  return "_combined";
 }
 
 // ---- Scoring engine -------------------------------------------------------
@@ -63,6 +67,7 @@ function activeField() {
 function combinedScore(props, weights) {
   let wsum = 0, acc = 0;
   for (const d of DOMAINS) {
+    if (!state.enabled[d.key]) continue;   // toggled off -> excluded entirely
     const w = weights[d.key];
     const v = props[`${d.key}_norm`];
     if (v == null) continue;
@@ -223,6 +228,7 @@ function restyle() {
 // Switch the choropleth between deprivation and house prices.
 function setLayer(mode) {
   state.layer = mode;
+  if (mode === "price") setSolo(null);   // solo is a deprivation-only view
   computeBreaks();
   map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
   buildLegend();
@@ -249,18 +255,26 @@ function buildSliders() {
   for (const d of DOMAINS) {
     const row = document.createElement("div");
     row.className = "slider-row";
+    row.id = `row-${d.key}`;
     row.innerHTML = `
       <div class="label-line">
-        <span class="name">${d.name}<button class="info" type="button"
+        <span class="name">
+          <input type="checkbox" class="enable" id="enable-${d.key}"
+                 aria-label="Include ${d.name} in combined score" checked />
+          ${d.name}<button class="info" type="button"
               aria-label="What ${d.name} covers" tabindex="0">i<span
               class="tip" role="tooltip">${d.about}</span></button></span>
-        <span class="val" id="val-${d.key}">1.0×</span>
+        <span class="row-controls">
+          <button class="solo" id="solo-${d.key}" type="button"
+                  aria-label="Show only ${d.name} on the map" title="Show only this on the map">solo</button>
+          <span class="val" id="val-${d.key}">1.0×</span>
+        </span>
       </div>
       <input type="range" min="0" max="3" step="0.1" value="1"
              id="slider-${d.key}" aria-label="${d.name} weight" />`;
     wrap.appendChild(row);
 
-    const input = row.querySelector("input");
+    const input = row.querySelector(`#slider-${d.key}`);
     input.addEventListener("input", () => {
       state.weights[d.key] = parseFloat(input.value);
       document.getElementById(`val-${d.key}`).textContent =
@@ -268,17 +282,51 @@ function buildSliders() {
       restyle();
       refreshReportIfActive();
     });
+
+    // Checkbox: include/exclude this domain from the combined score.
+    row.querySelector(`#enable-${d.key}`).addEventListener("change", (e) => {
+      state.enabled[d.key] = e.target.checked;
+      row.classList.toggle("disabled", !e.target.checked);
+      // A disabled domain can't be soloed; drop solo if it was on this one.
+      if (!e.target.checked && state.solo === d.key) setSolo(null);
+      restyle();
+      refreshReportIfActive();
+    });
+
+    // Solo: show just this domain's choropleth (toggle).
+    row.querySelector(`#solo-${d.key}`).addEventListener("click", () => {
+      setSolo(state.solo === d.key ? null : d.key);
+    });
   }
 
   document.getElementById("reset-weights").addEventListener("click", () => {
+    setSolo(null);
     for (const d of DOMAINS) {
       state.weights[d.key] = 1;
+      state.enabled[d.key] = true;
       document.getElementById(`slider-${d.key}`).value = 1;
       document.getElementById(`val-${d.key}`).textContent = "1.0×";
+      document.getElementById(`enable-${d.key}`).checked = true;
+      document.getElementById(`row-${d.key}`).classList.remove("disabled");
     }
     restyle();
     refreshReportIfActive();
   });
+}
+
+// Switch the map to a single domain's choropleth, or back to combined (null).
+function setSolo(key) {
+  state.solo = key;
+  for (const d of DOMAINS) {
+    document.getElementById(`solo-${d.key}`)
+      .classList.toggle("on", state.solo === d.key);
+  }
+  // Solo only applies to the deprivation layer; force it if on prices.
+  if (key && state.layer === "price") state.layer = "deprivation";
+  computeBreaks();
+  map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
+  buildLegend();
+  buildLayerToggle();
 }
 
 // ---- Plot context report (spatial aggregation, client-side) ---------------
@@ -480,11 +528,18 @@ function buildLegend() {
   } else {
     const lo = state.breaks.length ? state.breaks[0].toFixed(0) : "0";
     const hi = state.breaks.length ? state.breaks[state.breaks.length - 1].toFixed(0) : "100";
+    const soloName = state.solo
+      ? DOMAINS.find(d => d.key === state.solo).name
+      : null;
+    const title = soloName ? `${soloName} only` : "Combined score";
+    const note = soloName
+      ? `Single domain · equal-count classes`
+      : `Equal-count classes · breaks ${lo}–${hi}`;
     el.innerHTML = `
-      <div class="title">Combined score</div>
+      <div class="title">${title}</div>
       <div class="ramp">${swatches}</div>
       <div class="scale"><span>less deprived</span><span>more deprived</span></div>
-      <div class="legend-note">Equal-count classes · breaks ${lo}–${hi}</div>`;
+      <div class="legend-note">${note}</div>`;
   }
 }
 
