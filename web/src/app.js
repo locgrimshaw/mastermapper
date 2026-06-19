@@ -888,9 +888,14 @@ function inspectLSOA(propsOrCode, point) {
     <table class="metric-table">${rows}</table>
     <p class="hint" style="margin-top:12px">
       Values are national percentiles (100 = most deprived in England).
-    </p>`;
+    </p>
+    <button class="deepdive-btn" id="deepdive-${code}" type="button">
+      Deep dive into this area →
+    </button>`;
   panel.classList.add("open");
   panel.querySelector(".fd-close").addEventListener("click", closeDetail);
+  const ddBtn = panel.querySelector(".deepdive-btn");
+  if (ddBtn) ddBtn.addEventListener("click", () => enterDeepDive(p));
 
   positionFloatingPanel(panel, state.selectedPoint);
 }
@@ -1160,6 +1165,239 @@ function priceFmt(v) {
   if (v == null) return "—";
   if (v >= 1e6) return "£" + (v / 1e6).toFixed(1) + "m";
   return "£" + Math.round(v / 1000) + "k";
+}
+
+// ---- Deep dive ------------------------------------------------------------
+// A focused look at one sub-area. Two ways to define the catchment (only the
+// first is wired now; the circular/isochrone plot mode comes next):
+//   1. Click a zone -> the LSOA polygon IS the catchment.
+//   2. (later) draw/upload a plot -> circular buffer, then isochrone.
+// Once we have a catchment polygon, the flow is identical: query each amenity
+// dataset for what's inside it, draw those points, and summarise. The data
+// lives in Supabase (PostGIS); the IMD choropleth stays on the tile path.
+
+// The amenity datasets we can show in a deep dive. Start with GPs; pharmacies,
+// schools, bus stops, etc. slot in here as each loader lands. `kind` matches
+// the `amenities.kind` column in Supabase.
+const AMENITY_KINDS = [
+  { kind: "gp", label: "GP surgeries", color: "#2563eb", glyph: "✚" },
+];
+
+// Lazily-created Supabase client. Null when no config is present (the map still
+// works for IMD + rail; only deep-dive amenity layers are unavailable).
+let supa = null;
+let supaTried = false;
+function getSupabase() {
+  if (supaTried) return supa;
+  supaTried = true;
+  const cfg = window.MASTERMAPPER_CONFIG || {};
+  if (cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY && window.supabase?.createClient) {
+    supa = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+  }
+  return supa;
+}
+
+const deep = {
+  active: false,
+  catchment: null,       // GeoJSON Polygon (the area of interest)
+  prevView: null,        // {center, zoom} to restore on exit
+  enabledKinds: new Set(),  // which amenity layers are toggled on
+  cache: {},             // kind -> array of features {lng,lat,name,props}
+};
+
+async function enterDeepDive(p) {
+  // Build the catchment from the selected LSOA's geometry. We query the vector
+  // tile for the feature so we have its polygon (the click only gave us props).
+  const code = p.lsoa_code;
+  const feats = map.querySourceFeatures("lsoa", {
+    sourceLayer: SOURCE_LAYER,
+    filter: ["==", "lsoa_code", code],
+  });
+  if (!feats.length) {
+    alert("Couldn't read this area's boundary — try zooming in slightly and clicking again.");
+    return;
+  }
+  // A LSOA can be split across tiles; merge into one polygon with Turf.
+  let merged = feats[0];
+  try {
+    if (feats.length > 1 && window.turf) {
+      merged = feats.reduce((acc, f) => acc ? turf.union(acc, f) : f, null) || feats[0];
+    }
+  } catch (_) { merged = feats[0]; }
+  // Normalise to a GeoJSON Feature with a .geometry we can send to the RPC.
+  const geom = merged.geometry || merged;
+  deep.catchment = { type: "Feature", properties: {}, geometry: geom };
+
+  deep.active = true;
+  deep.prevView = { center: map.getCenter(), zoom: map.getZoom() };
+  deep.enabledKinds = new Set();
+  deep.cache = {};
+
+  // Dim the choropleth so amenity points read clearly, and zoom to the area.
+  if (map.getLayer("lsoa-fill")) map.setPaintProperty("lsoa-fill", "fill-opacity", 0.35);
+  closeDetail();
+  const bbox = turf.bbox(deep.catchment);
+  map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 60, duration: 600 });
+
+  // Draw the catchment outline so the user sees the area being analysed.
+  setCatchmentOutline(deep.catchment);
+
+  buildDeepDivePanel(p);
+}
+
+function exitDeepDive() {
+  deep.active = false;
+  for (const a of AMENITY_KINDS) removeAmenityLayer(a.kind);
+  removeCatchmentOutline();
+  if (map.getLayer("lsoa-fill"))
+    map.setPaintProperty("lsoa-fill", "fill-opacity", state.fillOpacity);
+  const panel = document.getElementById("floating-detail");
+  panel.classList.remove("open");
+  panel.innerHTML = "";
+  if (deep.prevView) {
+    map.easeTo({ center: deep.prevView.center, zoom: deep.prevView.zoom, duration: 500 });
+  }
+}
+
+function setCatchmentOutline(feature) {
+  const data = { type: "FeatureCollection", features: [feature] };
+  if (map.getSource("catchment")) {
+    map.getSource("catchment").setData(data);
+  } else {
+    map.addSource("catchment", { type: "geojson", data });
+    map.addLayer({
+      id: "catchment-line", type: "line", source: "catchment",
+      paint: { "line-color": "#111", "line-width": 2, "line-dasharray": [2, 1] },
+    });
+  }
+}
+function removeCatchmentOutline() {
+  if (map.getLayer("catchment-line")) map.removeLayer("catchment-line");
+  if (map.getSource("catchment")) map.removeSource("catchment");
+}
+
+// Query Supabase for amenities of one kind inside the current catchment, cache
+// and render them. Returns the count (or null if the DB isn't configured).
+async function loadAmenityKind(kind) {
+  const sb = getSupabase();
+  if (!sb) return null;
+  if (deep.cache[kind]) return deep.cache[kind].length;
+  const { data, error } = await sb.rpc("amenities_in_polygon", {
+    catchment: deep.catchment.geometry,
+    kinds: [kind],
+  });
+  if (error) { console.error("amenities_in_polygon", error); return null; }
+  deep.cache[kind] = data || [];
+  return deep.cache[kind].length;
+}
+
+function renderAmenityLayer(kind) {
+  const meta = AMENITY_KINDS.find(a => a.kind === kind);
+  const rows = deep.cache[kind] || [];
+  const fc = {
+    type: "FeatureCollection",
+    features: rows.map(r => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [r.lng, r.lat] },
+      properties: { name: r.name || meta.label, kind },
+    })),
+  };
+  const srcId = `amenity-${kind}`;
+  if (map.getSource(srcId)) {
+    map.getSource(srcId).setData(fc);
+  } else {
+    map.addSource(srcId, { type: "geojson", data: fc });
+    map.addLayer({
+      id: `${srcId}-dot`, type: "circle", source: srcId,
+      paint: {
+        "circle-radius": 6,
+        "circle-color": meta.color,
+        "circle-stroke-color": "#fff",
+        "circle-stroke-width": 1.5,
+      },
+    });
+    // Tap an amenity for its name.
+    map.on("click", `${srcId}-dot`, (e) => {
+      const pr = e.features[0].properties;
+      new maplibregl.Popup({ offset: 8 })
+        .setLngLat(e.lngLat)
+        .setHTML(`<strong>${pr.name}</strong><br>${meta.label}`)
+        .addTo(map);
+    });
+  }
+}
+
+function removeAmenityLayer(kind) {
+  const srcId = `amenity-${kind}`;
+  if (map.getLayer(`${srcId}-dot`)) map.removeLayer(`${srcId}-dot`);
+  if (map.getSource(srcId)) map.removeSource(srcId);
+}
+
+async function toggleAmenityKind(kind, on) {
+  if (on) {
+    deep.enabledKinds.add(kind);
+    const n = await loadAmenityKind(kind);
+    if (n === null) {
+      updateDeepStat(kind, "DB not configured");
+      deep.enabledKinds.delete(kind);
+      const cb = document.getElementById(`dd-${kind}`);
+      if (cb) cb.checked = false;
+      return;
+    }
+    renderAmenityLayer(kind);
+    updateDeepStat(kind, `${n} in catchment`);
+  } else {
+    deep.enabledKinds.delete(kind);
+    removeAmenityLayer(kind);
+    updateDeepStat(kind, "");
+  }
+}
+
+function updateDeepStat(kind, text) {
+  const el = document.getElementById(`dd-stat-${kind}`);
+  if (el) el.textContent = text;
+}
+
+function buildDeepDivePanel(p) {
+  const district = p.lad_name || "Unknown district";
+  const sub = p.lsoa_name ? `${p.lsoa_name} · ${p.lsoa_code}` : p.lsoa_code;
+  const combined = combinedScore(p, state.weights);
+
+  const toggles = AMENITY_KINDS.map(a => `
+    <label class="dd-row">
+      <input type="checkbox" class="enable" id="dd-${a.kind}" />
+      <span class="dd-swatch" style="background:${a.color}"></span>
+      <span class="dd-label">${a.label}</span>
+      <span class="dd-stat" id="dd-stat-${a.kind}"></span>
+    </label>`).join("");
+
+  const configured = !!getSupabase();
+  const note = configured ? "" :
+    `<p class="hint" style="margin-top:10px">Connect Supabase (see config.js) to load amenity layers.</p>`;
+
+  const panel = document.getElementById("floating-detail");
+  panel.innerHTML = `
+    <button class="fd-close" aria-label="Close deep dive" title="Close">×</button>
+    <div class="fd-location">
+      <div class="fd-district">Deep dive · ${district}</div>
+      <div class="fd-sub">${sub}</div>
+    </div>
+    <div class="report-headline">
+      <div class="big">${combined.toFixed(0)}<span style="font-size:14px">/100</span></div>
+      <div class="cap">Combined deprivation · weighted</div>
+    </div>
+    <div class="dd-section-title">Amenities in this area</div>
+    <div class="dd-toggles">${toggles}</div>
+    ${note}
+    <p class="hint" style="margin-top:8px">Toggle a layer to load and map it within the catchment.</p>`;
+  panel.classList.add("open");
+  panel.querySelector(".fd-close").addEventListener("click", exitDeepDive);
+  for (const a of AMENITY_KINDS) {
+    const cb = panel.querySelector(`#dd-${a.kind}`);
+    if (cb) cb.addEventListener("change", (e) => toggleAmenityKind(a.kind, e.target.checked));
+  }
+  // Anchor the deep-dive panel where the LSOA panel was.
+  positionFloatingPanel(panel, state.selectedPoint);
 }
 
 // ---- Boot -----------------------------------------------------------------
