@@ -59,6 +59,7 @@ GEO_LSOA_CODE = "LSOA11CD"
 def fetch_lsoa_names() -> pd.DataFrame:
     """Fetch {lsoa_code, lsoa_name, lad_name} from ONS, paging through results.
     Returns an empty frame on failure so the build can continue without names.
+    Logs loudly on every outcome so build logs are diagnostic.
     """
     print("Fetching LSOA & district names from ONS...")
     rows = []
@@ -77,8 +78,17 @@ def fetch_lsoa_names() -> pd.DataFrame:
             req = urllib.request.Request(url, headers={"User-Agent": "welfare-mapper"})
             with urllib.request.urlopen(req, timeout=180) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
+
+            # ArcGIS reports problems as an "error" object, not an HTTP failure.
+            if "error" in data:
+                print(f"  ONS service returned an error: {data['error']}")
+                break
+
             feats = data.get("features", [])
             if not feats:
+                if offset == 0:
+                    print("  ONS service returned no features on the first page.")
+                    print(f"  (response keys: {list(data.keys())})")
                 break
             for ft in feats:
                 a = ft.get("attributes", {})
@@ -95,8 +105,21 @@ def fetch_lsoa_names() -> pd.DataFrame:
             offset += len(feats)
     except Exception as e:
         print(f"  WARNING: name lookup failed ({e}). Continuing without names.")
-        return pd.DataFrame(columns=["lsoa_code", "lsoa_name", "lad_name"])
-    return pd.DataFrame(rows).drop_duplicates("lsoa_code")
+
+    df = pd.DataFrame(rows).drop_duplicates("lsoa_code") if rows else \
+        pd.DataFrame(columns=["lsoa_code", "lsoa_name", "lad_name"])
+    print(f"  name lookup returned {len(df)} rows")
+    return df
+
+
+def district_from_lsoa_name(name):
+    """LSOA names look like 'Camden 001A' — the district is everything before
+    the trailing 'NNNX' code. A reliable fallback if the LAD lookup is empty."""
+    if not isinstance(name, str):
+        return None
+    import re
+    m = re.match(r"^(.*?)\s+\d{3}[A-Z]?$", name.strip())
+    return m.group(1) if m else name
 
 
 def normalise_0_100(series: pd.Series) -> pd.Series:
@@ -125,6 +148,11 @@ def main() -> int:
 
     # Keep only the columns we need, renamed to our internal names.
     keep = {IMD_LSOA_CODE: "lsoa_code"}
+    # The IMD File 7 CSV includes the LSOA name; keep it as a reliable source
+    # for names and the district fallback, independent of any network lookup.
+    IMD_LSOA_NAME = "LSOA name (2011)"
+    if IMD_LSOA_NAME in imd.columns:
+        keep[IMD_LSOA_NAME] = "lsoa_name_csv"
     for name, col in DOMAIN_SCORE_COLUMNS.items():
         if col not in imd.columns:
             print(f"  WARNING: column not found in CSV: '{col}'")
@@ -161,11 +189,25 @@ def main() -> int:
     names = fetch_lsoa_names()
     if not names.empty:
         merged = merged.merge(names, on="lsoa_code", how="left")
-        n_named = merged["lad_name"].notna().sum()
-        print(f"  attached district names to {n_named}/{len(merged)} LSOAs")
     else:
         merged["lsoa_name"] = None
         merged["lad_name"] = None
+
+    # Reliable LSOA name from the CSV fills any gaps the lookup left.
+    if "lsoa_name_csv" in merged.columns:
+        merged["lsoa_name"] = merged["lsoa_name"].fillna(merged["lsoa_name_csv"])
+        merged = merged.drop(columns=["lsoa_name_csv"])
+
+    # Fallback: derive the district from the LSOA name ("Camden 001A" -> "Camden")
+    # wherever the LAD lookup didn't supply one. Guarantees a usable label even
+    # if the ONS lookup returns nothing at all.
+    missing = merged["lad_name"].isna()
+    if missing.any():
+        merged.loc[missing, "lad_name"] = merged.loc[missing, "lsoa_name"].apply(
+            district_from_lsoa_name
+        )
+    n_named = merged["lad_name"].notna().sum()
+    print(f"  district names present on {n_named}/{len(merged)} LSOAs")
 
     # Simplify geometry and round coordinates to keep the file small enough to
     # serve as plain GeoJSON. Two levers, both safe at LSOA-on-a-national-map
