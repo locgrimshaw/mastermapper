@@ -123,6 +123,16 @@ def main() -> int:
         "-l", "lsoa",               # layer name the map will reference
         "-Z", "5",                  # min zoom (whole-of-England view)
         "-z", "12",                 # max zoom (street-ish; LSOAs are areas)
+        # --- Border integrity (fixes the "fragmented / gappy" look) ----------
+        # By default tippecanoe simplifies each polygon independently, so a
+        # border shared by two LSOAs gets simplified twice and the two edges
+        # drift apart, leaving hairline slivers that show the basemap through.
+        # These flags keep adjacent borders stitched together:
+        "--detect-shared-borders",        # simplify a shared edge identically
+        "--no-simplification-of-shared-nodes",
+        "--simplification", "4",          # gentler simplification overall
+        "--buffer", "8",                  # wider tile buffer = fewer edge gaps
+        # ---------------------------------------------------------------------
         "--coalesce-densest-as-needed",  # keep tiles small where dense (cities)
         "--extend-zooms-if-still-dropping",
         "--no-tile-size-limit",

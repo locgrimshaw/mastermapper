@@ -9,6 +9,14 @@
   --accent-dim: #b5613212;
   --good: #4a7a6a;
 
+  /* Floating overlays (click panel, legend, popup). These sit ON TOP of the
+     map, so they need their own surface variable that flips with the theme —
+     they can't inherit the map's dark canvas. rgba keeps the backdrop blur. */
+  --surface-float: rgba(26, 34, 48, 0.96);
+  --surface-float-soft: rgba(26, 34, 48, 0.92);
+  --float-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  --track: #3a465a;
+
   --font-ui: "Inter", system-ui, -apple-system, sans-serif;
   --font-data: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
@@ -20,6 +28,14 @@ body.light {
   --ink-line: #c9d0db80;
   --text: #1c2533;
   --text-dim: #5d6b80;
+
+  /* Light floating overlays: near-white surface, darker hairline, soft shadow.
+     Without this the click panel + legend stayed dark and their (now dark)
+     text was invisible. */
+  --surface-float: rgba(255, 255, 255, 0.97);
+  --surface-float-soft: rgba(255, 255, 255, 0.94);
+  --float-shadow: 0 10px 36px rgba(28, 37, 51, 0.18);
+  --track: #d3d9e2;
 }
 
 /* Legend controls (colour mode / fade / theme) */
@@ -361,7 +377,7 @@ input[type="range"] {
   width: 100%;
   height: 3px;
   border-radius: 2px;
-  background: #3a465a;
+  background: var(--track);
   outline: none;
 }
 
@@ -431,7 +447,7 @@ button.ghost:hover {
 .minibar {
   height: 6px;
   border-radius: 3px;
-  background: #3a465a;
+  background: var(--track);
   overflow: hidden;
 }
 
@@ -491,12 +507,12 @@ footer {
   width: 290px;
   max-height: calc(100% - 40px);
   overflow-y: auto;
-  background: rgba(26, 34, 48, 0.96);
+  background: var(--surface-float);
   border: 1px solid var(--ink-line);
   border-radius: 12px;
   padding: 16px 18px;
   backdrop-filter: blur(8px);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--float-shadow);
   z-index: 20;
   opacity: 0;
   visibility: hidden;
@@ -556,13 +572,14 @@ footer {
   position: absolute;
   bottom: 22px;
   right: 22px;
-  background: rgba(26, 34, 48, 0.92);
+  background: var(--surface-float-soft);
   border: 1px solid var(--ink-line);
   border-radius: 8px;
   padding: 12px 14px;
   font-size: 11px;
   color: var(--text-dim);
   backdrop-filter: blur(6px);
+  box-shadow: var(--float-shadow);
 }
 
 #legend .title {

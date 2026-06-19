@@ -58,6 +58,16 @@ function RAMP() {
   return state.colourMode === "spectrum" ? RAMP_SPECTRUM : RAMP_SINGLE;
 }
 
+// Boundary hairline colour, theme-aware. Dark ink on light themes reads as a
+// crisp border; a translucent light line on dark themes keeps areas cohesive
+// rather than carving them up.
+function LINE_COLOR() {
+  return state.theme === "light" ? "rgba(40,52,70,0.28)" : "rgba(220,228,238,0.18)";
+}
+function SELECT_COLOR() {
+  return state.theme === "light" ? "#1c2533" : "#ffffff";
+}
+
 const state = {
   weights: Object.fromEntries(DOMAINS.map(d => [d.key, 1])),
   enabled: Object.fromEntries(DOMAINS.map(d => [d.key, true])), // counts toward combined?
@@ -68,7 +78,7 @@ const state = {
   layer: "deprivation",  // "deprivation" | "price"
   hasPrice: false,       // whether the loaded data includes price fields
   colourMode: "single",  // "single" | "spectrum"
-  fillOpacity: 0.78,     // choropleth opacity (slider fades to basemap)
+  fillOpacity: 0.85,     // choropleth opacity (slider fades to basemap)
   theme: "dark",         // "dark" | "light"
 };
 
@@ -207,15 +217,28 @@ async function loadData() {
     paint: {
       "fill-color": fillColorExpression(),
       "fill-opacity": state.fillOpacity,
+      // Paint each polygon's own outline in its own fill colour. Because
+      // tippecanoe simplifies shared borders slightly differently per
+      // polygon, adjacent LSOAs can leave hairline gaps that show the bright
+      // basemap through (the "fragmented" look). A same-colour outline
+      // closes those sub-pixel slivers without needing a tile rebuild.
+      "fill-outline-color": fillColorExpression(),
     },
   });
 
+  // Soft hairline between areas — just enough to read boundaries, not so much
+  // that it fragments the surface. Sits ABOVE the fill, low opacity, and only
+  // fades in as you zoom in (at the national view, borders would be noise).
   map.addLayer({
     id: "lsoa-line",
     type: "line",
     source: "lsoa",
     "source-layer": SOURCE_LAYER,
-    paint: { "line-color": "#1a223080", "line-width": 0.4 },
+    paint: {
+      "line-color": LINE_COLOR(),
+      "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0, 11, 0.4, 14, 0.7],
+      "line-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0, 11, 0.5, 14, 0.8],
+    },
   });
 
   // Highlight outline for the LSOA pinned by click-to-inspect.
@@ -224,7 +247,7 @@ async function loadData() {
     type: "line",
     source: "lsoa",
     "source-layer": SOURCE_LAYER,
-    paint: { "line-color": "#1a2230", "line-width": 2.4 },
+    paint: { "line-color": SELECT_COLOR(), "line-width": 2.4 },
     filter: ["==", "lsoa_code", ""],
   });
 
@@ -248,8 +271,17 @@ function updateDataSourceNote() {
 
 // ---- Choropleth restyle on weight change ----------------------------------
 
+// Apply the current fill-colour expression to BOTH the fill and its gap-
+// bridging outline, so they never diverge (the outline closes hairline gaps
+// only if it matches the fill exactly).
+function applyFillColor() {
+  const expr = fillColorExpression();
+  map.setPaintProperty("lsoa-fill", "fill-color", expr);
+  map.setPaintProperty("lsoa-fill", "fill-outline-color", expr);
+}
+
 function restyle() {
-  map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
+  applyFillColor();
   buildLegend();
   if (state.selectedCode) inspectLSOA(state.selectedCode);
 }
@@ -258,7 +290,7 @@ function restyle() {
 function setLayer(mode) {
   state.layer = mode;
   if (mode === "price") setSolo(null);   // solo is a deprivation-only view
-  map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
+  applyFillColor();
   buildLegend();
   buildLayerToggle();
   if (state.selectedCode) inspectLSOA(state.selectedCode);
@@ -351,7 +383,7 @@ function setSolo(key) {
   }
   // Solo only applies to the deprivation layer; force it if on prices.
   if (key && state.layer === "price") state.layer = "deprivation";
-  map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
+  applyFillColor();
   buildLegend();
   buildLayerToggle();
 }
@@ -677,7 +709,7 @@ function buildLegend() {
 
 function setColourMode(mode) {
   state.colourMode = mode;
-  map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
+  applyFillColor();
   buildLegend();
   if (state.selectedCode) inspectLSOA(state.selectedCode);
   if (lastDrawnPolygon) buildReport(lastDrawnPolygon);
@@ -691,6 +723,9 @@ function setTheme(theme) {
     ? "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"
     : "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png";
   if (map.getSource("carto")) map.getSource("carto").setTiles([url]);
+  // Boundary + selection lines are tuned per theme so areas stay cohesive.
+  if (map.getLayer("lsoa-line")) map.setPaintProperty("lsoa-line", "line-color", LINE_COLOR());
+  if (map.getLayer("lsoa-selected")) map.setPaintProperty("lsoa-selected", "line-color", SELECT_COLOR());
   buildLegend();
 }
 
