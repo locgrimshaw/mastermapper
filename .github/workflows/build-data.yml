@@ -67,7 +67,42 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+
+          echo "=== Files on disk after build ==="
+          ls -lh web/data/ || true
+
+          echo "=== Is anything in web/data ignored by git? ==="
+          git check-ignore -v web/data/* || echo "(nothing in web/data is ignored — good)"
+
+          echo "=== Staging outputs ==="
           git add -f web/data/lsoa_imd.geojson web/data/lsoa.pmtiles web/data/breaks.json
-          git add -f web/data/rail.geojson 2>/dev/null || true
-          git commit -m "Build data layer + tiles [automated]" || echo "No changes to commit"
-          git push
+          if [ -f web/data/rail.geojson ]; then
+            git add -f web/data/rail.geojson
+            echo "Staged rail.geojson ($(du -h web/data/rail.geojson | cut -f1))"
+          else
+            echo "No rail.geojson on disk (rail step was off or failed)."
+          fi
+
+          echo "=== What is staged? ==="
+          git status --short
+          git diff --cached --stat
+
+          echo "=== Commit + push (no-op safe) ==="
+          if git diff --cached --quiet; then
+            echo "Outputs identical to what's already committed — nothing to push."
+          else
+            git commit -m "Build data layer + tiles [automated]"
+            git push
+          fi
+
+  # Always (re)publish the site after a build, even when the data commit was a
+  # no-op. The data and deploy workflows are separate: deploy normally fires on
+  # 'push', but a no-op build produces no push event, so the new tiles would
+  # never go live. Calling deploy here guarantees publication every build.
+  deploy:
+    needs: build
+    uses: ./.github/workflows/deploy-pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
