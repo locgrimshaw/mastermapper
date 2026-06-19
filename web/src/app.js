@@ -226,9 +226,34 @@ const map = new maplibregl.Map({
   zoom: 10.5,
   // A tap on a phone rarely lands pixel-perfect; without a tolerance a tap that
   // wobbles a few px is treated as a drag and the click handler never fires.
-  // This is the main reason zones/stops felt "untappable" on iPad/phone.
   clickTolerance: 5,
 });
+
+// --- Touch fix for mapbox-gl-draw on MapLibre --------------------------------
+// @mapbox/mapbox-gl-draw registers some listeners with a { passive: true }
+// THIRD argument: map.on("touchstart", handler, { passive: true }). MapLibre's
+// Map#on signature is on(type, listener) OR on(type, layerId, listener) — it
+// has no 3rd "options" form. So Draw's options object gets mistaken for the
+// listener/layerId, and on the first touch MapLibre runs `layerIds.filter(...)`
+// on it and throws "filter is not a function". That uncaught error kills the
+// whole touch event chain, so NOTHING responds to taps on mobile (zones,
+// stops, controls) — while desktop, which never fires touchstart, works fine.
+//
+// Fix: drop the 3rd argument whenever the 2nd argument is the listener function
+// (i.e. a plain on(type, listener, opts) call). Real delegated calls pass a
+// string/array layer id as the 2nd arg and are left untouched.
+(function patchTouchOptionArg(m) {
+  for (const method of ["on", "off", "once"]) {
+    const orig = m[method];
+    if (typeof orig !== "function") continue;
+    m[method] = function (type, second, third) {
+      if (typeof second === "function" && arguments.length > 2) {
+        return orig.call(this, type, second);   // strip the options object
+      }
+      return orig.apply(this, arguments);
+    };
+  }
+})(map);
 
 const draw = new MapboxDraw({
   displayControlsDefault: false,
