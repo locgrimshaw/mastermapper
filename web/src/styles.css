@@ -419,10 +419,8 @@ footer {
 /* ---- Floating detail panel (single-area click) ---- */
 #floating-detail {
   position: absolute;
-  top: 18px;
-  left: 18px;
-  width: 300px;
-  max-height: calc(100% - 120px);
+  width: 290px;
+  max-height: calc(100% - 40px);
   overflow-y: auto;
   background: rgba(26, 34, 48, 0.96);
   border: 1px solid var(--ink-line);
@@ -435,12 +433,14 @@ footer {
   visibility: hidden;
   transform: translateY(-6px);
   transition: opacity 0.14s ease, transform 0.14s ease;
+  pointer-events: none;
 }
 
 #floating-detail.open {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
+  pointer-events: auto;
 }
 
 .fd-close {
