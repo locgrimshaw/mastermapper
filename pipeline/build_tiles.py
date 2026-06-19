@@ -21,6 +21,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -84,6 +85,10 @@ def write_breaks():
     # all features.
     first_code = feats[0]["properties"].get("lsoa_code", "") if feats else ""
     out["meta"] = {"sample": first_code.startswith("S")}
+    # Unique per-build stamp. The frontend appends this to the tile URL so a
+    # rebuilt lsoa.pmtiles is never served from a stale browser/CDN cache (the
+    # filename stays the same, so without this a cached copy can hide new data).
+    out["meta"]["build_id"] = str(int(time.time()))
 
     # Data bounding box, so the map can fit to it on load (the tiles don't
     # hand us an extent up front).

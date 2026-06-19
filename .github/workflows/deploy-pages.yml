@@ -28,6 +28,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      # The site only needs the vector tiles + the breaks sidecar. The raw
+      # GeoJSON sources (lsoa_imd.geojson ~26MB, rail.geojson ~25MB) are build
+      # inputs, not site assets — drop them so each Pages deploy stays small.
+      - name: Trim build-only data from the publish folder
+        run: |
+          rm -f web/data/*.geojson
+          echo "Publishing web/ with:"
+          ls -lh web/data/ || true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

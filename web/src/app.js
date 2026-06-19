@@ -233,9 +233,11 @@ async function loadData() {
   maplibregl.addProtocol("pmtiles", protocol.tile);
 
   // Load the precomputed colour breaks (tiny sidecar). The map can't compute
-  // quantiles itself anymore since it only holds visible features.
+  // quantiles itself anymore since it only holds visible features. Fetch with
+  // no-store so the build_id we read here is always the latest (otherwise a
+  // cached breaks.json would hand us a stale build_id and defeat the buster).
   try {
-    const br = await fetch("data/breaks.json");
+    const br = await fetch("data/breaks.json", { cache: "no-store" });
     if (br.ok) state.breaksData = await br.json();
   } catch { state.breaksData = null; }
 
@@ -254,7 +256,12 @@ async function loadData() {
     if ((stopCounts[m.key] || 0) > 0) state.railStopModes[m.key] = true;
   }
 
-  const tilesUrl = "pmtiles://" + new URL("data/lsoa.pmtiles", location.href).href;
+  // Append the per-build stamp so a rebuilt lsoa.pmtiles (same filename) is
+  // fetched fresh rather than served from a stale browser/CDN cache. PMTiles
+  // uses HTTP range requests; the query string makes each build a new URL.
+  const buildId = state.breaksData?.meta?.build_id || "";
+  const tilesPath = "data/lsoa.pmtiles" + (buildId ? `?v=${buildId}` : "");
+  const tilesUrl = "pmtiles://" + new URL(tilesPath, location.href).href;
 
   map.addSource("lsoa", {
     type: "vector",
