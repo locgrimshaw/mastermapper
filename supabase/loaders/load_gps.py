@@ -301,8 +301,13 @@ def upsert(records: list):
 def main() -> int:
     rows = fetch_epraccur_rows()
 
-    # Keep ACTIVE practices (status 'A'). rows are dicts: code/name/postcode/status.
-    active = [r for r in rows if (r.get("status") or "").strip().upper() == "A"]
+    # Keep ACTIVE practices. The new DSE file spells the status as the word
+    # "ACTIVE"/"INACTIVE" (index 12); the legacy file used a single letter
+    # 'A'/'C'/'D'/'P'. Accept either form.
+    def is_active(r):
+        s = (r.get("status") or "").strip().upper()
+        return s == "ACTIVE" or s == "A"
+    active = [r for r in rows if is_active(r)]
     print(f"  {len(active)} active practices")
     if not active:
         print("  No active practices parsed — the file format may have changed.")
