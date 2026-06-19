@@ -30,21 +30,21 @@ jobs:
 
       - name: Build the data layer
         run: |
-          if [ -f data/raw/imd2019_scores.csv ]; then
+          if [ -f data/raw/imd2025_scores.csv ]; then
             echo "IMD data found - fetching boundaries, building real layer."
             python pipeline/fetch_boundaries.py
             python pipeline/build_imd_layer.py
           elif grep -qE '"lsoa_code" *: *"E[0-9]' web/data/lsoa_imd.geojson 2>/dev/null; then
             echo "No IMD CSV uploaded, but a real England layer already exists."
             echo "Refusing to overwrite it with synthetic sample data."
-            echo "To rebuild, upload data/raw/imd2019_scores.csv first."
+            echo "To rebuild, upload data/raw/imd2025_scores.csv first."
           else
             echo "No IMD data and no real layer - generating synthetic sample."
             python pipeline/make_sample_data.py
           fi
 
       - name: Add house prices (optional)
-        if: ${{ inputs.include_prices && hashFiles('data/raw/imd2019_scores.csv') != '' }}
+        if: ${{ inputs.include_prices && hashFiles('data/raw/imd2025_scores.csv') != '' }}
         run: |
           echo "Adding house-price overlay from Land Registry + ONS lookup..."
           python pipeline/build_price_layer.py
