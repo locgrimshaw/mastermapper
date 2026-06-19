@@ -25,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "web" / "data" / "lsoa_imd.geojson"
+RAIL_SRC = ROOT / "web" / "data" / "rail.geojson"   # optional overlay (lines+stations)
 OUT = ROOT / "web" / "data" / "lsoa.pmtiles"
 BREAKS = ROOT / "web" / "data" / "breaks.json"
 
@@ -99,6 +100,19 @@ def write_breaks():
     if xs:
         out["bbox"] = [min(xs), min(ys), max(xs), max(ys)]
 
+    # Tell the frontend whether the rail overlay is present (and how much), so
+    # it only shows the Rail toggle when there's something to show.
+    if RAIL_SRC.exists():
+        try:
+            rail = json.loads(RAIL_SRC.read_text())
+            rfeats = rail.get("features", [])
+            out["meta"]["rail"] = {
+                "lines": sum(1 for f in rfeats if f["properties"].get("kind") == "line"),
+                "stations": sum(1 for f in rfeats if f["properties"].get("kind") == "station"),
+            }
+        except (ValueError, KeyError):
+            pass
+
     BREAKS.write_text(json.dumps(out))
     print(f"Wrote {BREAKS} (colour breaks for {len(feats)} features)")
 
@@ -116,13 +130,41 @@ def main() -> int:
     for a in KEEP_ATTRS:
         keep_flags += ["-y", a]
 
+    # Optional rail overlay. tippecanoe can take extra inputs as their OWN named
+    # layers via -L; we split rail.geojson into a line layer and a station layer
+    # so the frontend can style/toggle them independently. We don't pass -y here
+    # (no -y means "keep all attributes") so name/usage/crs survive into tiles.
+    rail_layer_flags = []
+    rail_tmp = []
+    if RAIL_SRC.exists():
+        try:
+            rail = json.loads(RAIL_SRC.read_text())
+            feats = rail.get("features", [])
+            lines = [f for f in feats if f["properties"].get("kind") == "line"]
+            stations = [f for f in feats if f["properties"].get("kind") == "station"]
+            if lines:
+                p = ROOT / "web" / "data" / "_rail_line.geojson"
+                p.write_text(json.dumps({"type": "FeatureCollection", "features": lines}))
+                rail_tmp.append(p)
+                # -L NAME:FILE  — line layer rendered across the zoom range.
+                rail_layer_flags += ["-L", f"rail_line:{p}"]
+            if stations:
+                p = ROOT / "web" / "data" / "_rail_station.geojson"
+                p.write_text(json.dumps({"type": "FeatureCollection", "features": stations}))
+                rail_tmp.append(p)
+                rail_layer_flags += ["-L", f"rail_station:{p}"]
+            print(f"Rail overlay: {len(lines)} lines, {len(stations)} stations "
+                  "-> bundling into tiles.")
+        except (ValueError, KeyError) as exc:
+            print(f"Could not read {RAIL_SRC.name} ({exc}); building without rail.")
+
     cmd = [
         "tippecanoe",
         "-o", str(OUT),
         "-f",                       # overwrite if exists
-        "-l", "lsoa",               # layer name the map will reference
+        "-L", "lsoa:" + str(SRC),   # main choropleth layer (named-layer form)
         "-Z", "5",                  # min zoom (whole-of-England view)
-        "-z", "12",                 # max zoom (street-ish; LSOAs are areas)
+        "-z", "13",                 # max zoom (a touch deeper so stations read)
         # --- Border integrity (fixes the "fragmented / gappy" look) ----------
         # By default tippecanoe simplifies each polygon independently, so a
         # border shared by two LSOAs gets simplified twice and the two edges
@@ -137,10 +179,16 @@ def main() -> int:
         "--extend-zooms-if-still-dropping",
         "--no-tile-size-limit",
         *keep_flags,
-        str(SRC),
+        *rail_layer_flags,
     ]
     print("Running tippecanoe:\n  " + " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
+    # Clean up the temporary split files regardless of outcome.
+    for p in rail_tmp:
+        try:
+            p.unlink()
+        except OSError:
+            pass
     if result.returncode != 0:
         print("tippecanoe failed:")
         print(result.stderr[-2000:])

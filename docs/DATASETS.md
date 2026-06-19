@@ -143,3 +143,42 @@ There is **no free, complete national land-parcel dataset**. For v1:
 > Licence v3.0. Indices of Deprivation 2019 © MHCLG. Boundaries © ONS, contains
 > OS data © Crown copyright and database right 2019. Price data © HM Land
 > Registry.
+
+---
+
+## Rail overlay (passenger lines + stations)
+
+The rail overlay is an **optional layer** that draws on top of the choropleth.
+It never touches the deprivation scores, so it's safe to rebuild on its own.
+Tick **"include_rail"** when running the *Build data layer* workflow.
+
+Two inputs, two sources:
+
+**Line routes — OpenStreetMap (no upload needed).**
+`build_rail_layer.py` queries the Overpass API for England and keeps only the
+**passenger network**: `railway=rail` with `usage=main` or `usage=branch`,
+excluding sidings/yards (`service=*`) and disused/abandoned/under-construction
+track (those carry lifecycle-prefixed tags and are skipped automatically).
+Trams, subways and light rail are different `railway=*` values, so they're
+excluded by definition. If Overpass is unavailable the step skips cleanly and
+the build still succeeds (same policy as house prices).
+
+**Stations — a small committed CSV.**
+Download a UK stations CSV and commit it as **`data/raw/uk_stations.csv`**.
+Recommended: the `davwheat/uk-railway-stations` dataset (CSV with header
+`stationName,lat,long,crsCode,iataAirportCode,constituentCountry`). The parser
+keeps England rows and is tolerant of column-name variants
+(`lat`/`latitude`, `long`/`lng`/`longitude`, `stationName`/`name`, etc).
+Upload it the same way as the IMD CSV: in GitHub, **Add file → Upload files**
+(a normal CSV uploads fine; only dotfiles get skipped by drag-and-drop).
+If the CSV is absent, the overlay shows lines only.
+
+**Licensing — important.** Both OSM and the Trainline-derived station data are
+**ODbL** (attribution **and** share-alike), which is stricter than the OGL data
+used elsewhere. The footer credits "© OpenStreetMap contributors & Trainline
+(ODbL)" automatically whenever the rail layer is present.
+
+**Frontend note.** Station labels use the `Noto Sans Regular` font stack served
+by the MapLibre demo glyph endpoint. If you switch glyph servers, update the
+`text-font` value in the `rail-station-label` layer in `app.js` to a stack that
+server provides, or labels will silently not render (the dots still will).

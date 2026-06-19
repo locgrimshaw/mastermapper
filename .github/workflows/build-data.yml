@@ -7,6 +7,10 @@ on:
         description: "Also add house prices (slower - downloads a year of Land Registry data)"
         type: boolean
         default: false
+      include_rail:
+        description: "Also add the rail overlay (passenger lines from OpenStreetMap + stations from CSV)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -45,6 +49,12 @@ jobs:
           echo "Adding house-price overlay from Land Registry + ONS lookup..."
           python pipeline/build_price_layer.py
 
+      - name: Add rail overlay (optional)
+        if: ${{ inputs.include_rail }}
+        run: |
+          echo "Building rail overlay: passenger lines (OSM/Overpass) + stations (CSV)..."
+          python pipeline/build_rail_layer.py
+
       - name: Install tippecanoe (for vector tiles)
         run: pip install tippecanoe
 
@@ -58,5 +68,6 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add -f web/data/lsoa_imd.geojson web/data/lsoa.pmtiles web/data/breaks.json
+          git add -f web/data/rail.geojson 2>/dev/null || true
           git commit -m "Build data layer + tiles [automated]" || echo "No changes to commit"
           git push

@@ -68,6 +68,26 @@ function SELECT_COLOR() {
   return state.theme === "light" ? "#1c2533" : "#ffffff";
 }
 
+// --- Rail overlay colours (theme-aware) ------------------------------------
+// Lines use a desaturated near-neutral so they read over both the blue and
+// red ends of the choropleth without being mistaken for data. Stations are a
+// crisp contrasting dot.
+function RAIL_LINE_COLOR() {
+  return state.theme === "light" ? "#2b2f38" : "#f4f6fb";
+}
+function RAIL_STATION_FILL() {
+  return state.theme === "light" ? "#111418" : "#ffffff";
+}
+function RAIL_STATION_STROKE() {
+  return state.theme === "light" ? "#ffffff" : "#111418";
+}
+function RAIL_LABEL_COLOR() {
+  return state.theme === "light" ? "#1c2533" : "#f4f6fb";
+}
+function RAIL_LABEL_HALO() {
+  return state.theme === "light" ? "#ffffff" : "#11141b";
+}
+
 const state = {
   weights: Object.fromEntries(DOMAINS.map(d => [d.key, 1])),
   enabled: Object.fromEntries(DOMAINS.map(d => [d.key, true])), // counts toward combined?
@@ -80,6 +100,9 @@ const state = {
   colourMode: "single",  // "single" | "spectrum"
   fillOpacity: 0.85,     // choropleth opacity (slider fades to basemap)
   theme: "dark",         // "dark" | "light"
+  hasRail: false,        // whether the tiles include the rail overlay
+  railLines: true,       // show passenger line routes
+  railStations: true,    // show station points
 };
 
 // The ramp currently driving the choropleth.
@@ -201,6 +224,8 @@ async function loadData() {
   // Flags the pipeline records in breaks.json so we don't need all features.
   state.usingSampleData = state.breaksData?.meta?.sample ?? true;
   state.hasPrice = (state.breaksData?.price?.length ?? 0) > 0;
+  const railMeta = state.breaksData?.meta?.rail;
+  state.hasRail = !!railMeta && ((railMeta.lines || 0) + (railMeta.stations || 0) > 0);
 
   const tilesUrl = "pmtiles://" + new URL("data/lsoa.pmtiles", location.href).href;
 
@@ -251,6 +276,68 @@ async function loadData() {
     filter: ["==", "lsoa_code", ""],
   });
 
+  // --- Rail overlay (optional) ---------------------------------------------
+  // Same vector source, different source-layers baked by build_tiles.py.
+  // These sit ABOVE the choropleth so routes/stations read over the colour.
+  if (state.hasRail) {
+    map.addLayer({
+      id: "rail-line",
+      type: "line",
+      source: "lsoa",
+      "source-layer": "rail_line",
+      layout: {
+        "line-join": "round",
+        "line-cap": "round",
+        visibility: state.railLines ? "visible" : "none",
+      },
+      paint: {
+        "line-color": RAIL_LINE_COLOR(),
+        // Thicken with zoom so lines stay visible when zoomed out but don't
+        // smother the map up close.
+        "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.6, 10, 1.4, 14, 2.6],
+        "line-opacity": 0.9,
+      },
+    });
+
+    // A subtle casing under stations so they pop on any colour underneath.
+    map.addLayer({
+      id: "rail-station",
+      type: "circle",
+      source: "lsoa",
+      "source-layer": "rail_station",
+      layout: { visibility: state.railStations ? "visible" : "none" },
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 7, 1.6, 11, 3.2, 14, 5],
+        "circle-color": RAIL_STATION_FILL(),
+        "circle-stroke-color": RAIL_STATION_STROKE(),
+        "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 11, 1, 14, 1.5],
+      },
+    });
+
+    // Station labels only when zoomed in enough to be legible.
+    map.addLayer({
+      id: "rail-station-label",
+      type: "symbol",
+      source: "lsoa",
+      "source-layer": "rail_station",
+      minzoom: 11,
+      layout: {
+        "text-field": ["get", "name"],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": 11,
+        "text-offset": [0, 1.1],
+        "text-anchor": "top",
+        "text-optional": true,
+        visibility: state.railStations ? "visible" : "none",
+      },
+      paint: {
+        "text-color": RAIL_LABEL_COLOR(),
+        "text-halo-color": RAIL_LABEL_HALO(),
+        "text-halo-width": 1.4,
+      },
+    });
+  }
+
   updateDataSourceNote();
 }
 
@@ -266,6 +353,10 @@ function updateDataSourceNote() {
     el.textContent =
       "Source: English Indices of Deprivation 2019 (MHCLG, OGL v3) · " +
       "LSOA 2011 boundaries (ONS, OGL v3). Combined score is user-weighted.";
+    if (state.hasRail) {
+      el.textContent +=
+        " Rail overlay © OpenStreetMap contributors & Trainline (ODbL).";
+    }
   }
 }
 
@@ -306,6 +397,45 @@ function buildLayerToggle() {
   el.innerHTML = opt("deprivation", "Deprivation") + opt("price", "House prices");
   el.querySelectorAll("button").forEach(b =>
     b.addEventListener("click", () => setLayer(b.dataset.mode)));
+}
+
+// Rail overlay toggle: two checkboxes (lines, stations). Only shown when the
+// tiles actually carry a rail layer (flagged in breaks.json).
+function buildRailToggle() {
+  const block = document.getElementById("rail-block");
+  const el = document.getElementById("rail-toggle");
+  if (!block || !el) return;
+  if (!state.hasRail) { block.hidden = true; return; }
+  block.hidden = false;
+
+  const railMeta = state.breaksData?.meta?.rail || {};
+  const row = (key, label, count) => `
+    <label class="rail-row">
+      <input type="checkbox" class="enable" id="rail-${key}" ${state[key] ? "checked" : ""} />
+      <span class="rail-name">${label}</span>
+      ${count != null ? `<span class="rail-count">${count.toLocaleString()}</span>` : ""}
+    </label>`;
+
+  el.innerHTML =
+    row("railLines", "Line routes", railMeta.lines) +
+    row("railStations", "Stations", railMeta.stations);
+
+  el.querySelector("#rail-railLines").addEventListener("change", (e) =>
+    setRailVisibility("railLines", e.target.checked));
+  el.querySelector("#rail-railStations").addEventListener("change", (e) =>
+    setRailVisibility("railStations", e.target.checked));
+}
+
+function setRailVisibility(which, on) {
+  state[which] = on;
+  const vis = on ? "visible" : "none";
+  if (which === "railLines") {
+    if (map.getLayer("rail-line")) map.setLayoutProperty("rail-line", "visibility", vis);
+  } else {
+    for (const id of ["rail-station", "rail-station-label"]) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+    }
+  }
 }
 
 // ---- Sliders UI -----------------------------------------------------------
@@ -635,6 +765,30 @@ function wireInteractions() {
     document.getElementById("report").innerHTML =
       `<p class="empty">No site selected yet.</p>`;
   });
+
+  // Station hover: a compact popup with the station name + CRS code. Bound
+  // only when the rail layer exists. Stations sit above the choropleth, so
+  // this popup takes priority when hovering directly over a dot.
+  if (state.hasRail) {
+    const stationPopup = new maplibregl.Popup({
+      closeButton: false, closeOnClick: false, offset: 10,
+    });
+    map.on("mouseenter", "rail-station", (e) => {
+      const p = e.features[0].properties;
+      map.getCanvas().style.cursor = "pointer";
+      const crs = p.crs ? ` · ${p.crs}` : "";
+      stationPopup.setLngLat(e.lngLat)
+        .setHTML(`<strong>${p.name || "Station"}</strong>${crs}`)
+        .addTo(map);
+    });
+    map.on("mousemove", "rail-station", (e) => {
+      stationPopup.setLngLat(e.lngLat);
+    });
+    map.on("mouseleave", "rail-station", () => {
+      map.getCanvas().style.cursor = "";
+      stationPopup.remove();
+    });
+  }
 }
 
 // ---- Legend ---------------------------------------------------------------
@@ -726,6 +880,16 @@ function setTheme(theme) {
   // Boundary + selection lines are tuned per theme so areas stay cohesive.
   if (map.getLayer("lsoa-line")) map.setPaintProperty("lsoa-line", "line-color", LINE_COLOR());
   if (map.getLayer("lsoa-selected")) map.setPaintProperty("lsoa-selected", "line-color", SELECT_COLOR());
+  // Rail overlay also flips with the theme.
+  if (map.getLayer("rail-line")) map.setPaintProperty("rail-line", "line-color", RAIL_LINE_COLOR());
+  if (map.getLayer("rail-station")) {
+    map.setPaintProperty("rail-station", "circle-color", RAIL_STATION_FILL());
+    map.setPaintProperty("rail-station", "circle-stroke-color", RAIL_STATION_STROKE());
+  }
+  if (map.getLayer("rail-station-label")) {
+    map.setPaintProperty("rail-station-label", "text-color", RAIL_LABEL_COLOR());
+    map.setPaintProperty("rail-station-label", "text-halo-color", RAIL_LABEL_HALO());
+  }
   buildLegend();
 }
 
@@ -745,6 +909,7 @@ map.on("load", async () => {
     await loadData();
     buildLegend();          // now that breaks.json is loaded
     buildLayerToggle();
+    buildRailToggle();
     wireInteractions();
     // Fit to the data's own bounding box (from the sidecar).
     const bb = state.breaksData?.bbox;

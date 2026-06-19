@@ -5,6 +5,11 @@ data/raw/*
 # cloud build can see it (this fixes the recurring "sample data" problem).
 !data/raw/imd2019_scores.csv
 
+# Station locations CSV for the rail overlay — same reasoning: small, must
+# persist so the cloud build can read it (drag-and-drop can't upload dotfiles,
+# but a normal CSV via "Add file" works fine).
+!data/raw/uk_stations.csv
+
 # Python
 __pycache__/
 *.pyc

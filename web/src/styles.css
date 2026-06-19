@@ -184,6 +184,32 @@ html, body {
 
 .layer-toggle .seg:not(.on):hover { color: var(--text); }
 
+/* ---- Rail overlay toggle ---- */
+.rail-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.rail-row .rail-name {
+  font-size: 13px;
+  color: var(--text);
+  flex: 1;
+}
+
+.rail-row .rail-count {
+  font-family: var(--font-data);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
 /* ---- Price line in reports ---- */
 .price-line {
   display: flex;
