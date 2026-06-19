@@ -315,55 +315,73 @@ async function loadData() {
   // (rail/subway/light_rail/tram). We colour by mode with a match expression
   // and show/hide modes with a filter, so a single layer covers all modes.
   if (state.hasRail) {
-    map.addLayer({
-      id: "rail-line",
-      type: "line",
-      source: "lsoa",
-      "source-layer": "rail_line",
-      layout: { "line-join": "round", "line-cap": "round" },
-      filter: railModeFilter("line"),
-      paint: {
-        "line-color": railColorExpression(),
-        "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.6, 10, 1.6, 14, 2.8],
-        "line-opacity": 0.92,
-      },
-    });
+    try {
+      map.addLayer({
+        id: "rail-line",
+        type: "line",
+        source: "lsoa",
+        "source-layer": "rail_line",
+        layout: { "line-join": "round", "line-cap": "round" },
+        filter: railModeFilter("line"),
+        paint: {
+          "line-color": railColorExpression(),
+          // Keep lines visible even at the national view (the map opens fitted
+          // to the whole-England bbox, ~zoom 6, where hairlines vanish).
+          "line-width": ["interpolate", ["linear"], ["zoom"], 5, 1.1, 10, 1.8, 14, 3],
+          "line-opacity": 0.95,
+        },
+      });
 
-    map.addLayer({
-      id: "rail-stop",
-      type: "circle",
-      source: "lsoa",
-      "source-layer": "rail_stop",
-      filter: railModeFilter("stop"),
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 7, 1.8, 11, 3.4, 14, 5.2],
-        "circle-color": railColorExpression(),
-        "circle-stroke-color": RAIL_STOP_STROKE(),
-        "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 7, 0.5, 11, 1.1, 14, 1.6],
-      },
-    });
+      map.addLayer({
+        id: "rail-stop",
+        type: "circle",
+        source: "lsoa",
+        "source-layer": "rail_stop",
+        filter: railModeFilter("stop"),
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 2.2, 11, 3.6, 14, 5.2],
+          "circle-color": railColorExpression(),
+          "circle-stroke-color": RAIL_STOP_STROKE(),
+          "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 5, 0.6, 11, 1.1, 14, 1.6],
+        },
+      });
 
-    // Stop labels, only when zoomed in enough to be legible.
-    map.addLayer({
-      id: "rail-stop-label",
-      type: "symbol",
-      source: "lsoa",
-      "source-layer": "rail_stop",
-      minzoom: 11,
-      filter: railModeFilter("stop"),
-      layout: {
-        "text-field": ["get", "name"],
-        "text-font": ["Noto Sans Regular"],
-        "text-size": 11,
-        "text-offset": [0, 1.1],
-        "text-anchor": "top",
-        "text-optional": true,
-      },
-      paint: {
-        "text-color": RAIL_LABEL_COLOR(),
-        "text-halo-color": RAIL_LABEL_HALO(),
-        "text-halo-width": 1.4,
-      },
+      // Stop labels, only when zoomed in enough to be legible.
+      map.addLayer({
+        id: "rail-stop-label",
+        type: "symbol",
+        source: "lsoa",
+        "source-layer": "rail_stop",
+        minzoom: 11,
+        filter: railModeFilter("stop"),
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 11,
+          "text-offset": [0, 1.1],
+          "text-anchor": "top",
+          "text-optional": true,
+        },
+        paint: {
+          "text-color": RAIL_LABEL_COLOR(),
+          "text-halo-color": RAIL_LABEL_HALO(),
+          "text-halo-width": 1.4,
+        },
+      });
+      console.log("[rail] layers added:", ["rail-line", "rail-stop", "rail-stop-label"]
+        .filter(id => map.getLayer(id)));
+    } catch (err) {
+      console.error("[rail] failed to add layers:", err);
+    }
+
+    // Probe once the source has loaded: how many rail features are actually in
+    // the current view? If this logs 0 at a city zoom, the tiles lack the
+    // rail_line/rail_stop source-layers (stale tiles) rather than a style bug.
+    map.on("idle", function railProbe() {
+      const lines = map.querySourceFeatures("lsoa", { sourceLayer: "rail_line" }).length;
+      const stops = map.querySourceFeatures("lsoa", { sourceLayer: "rail_stop" }).length;
+      console.log(`[rail] features in view — lines:${lines} stops:${stops} (zoom ${map.getZoom().toFixed(1)})`);
+      map.off("idle", railProbe);   // log once, not every idle
     });
   }
 
@@ -371,12 +389,16 @@ async function loadData() {
 }
 
 // Build a MapLibre filter that keeps only the rail modes currently toggled on
-// for the given kind ("line" or "stop"). If none are on, match nothing.
+// for the given kind ("line" or "stop"). Uses a `match` expression returning a
+// boolean — more robust across MapLibre versions than the `in` operator with a
+// ["literal", array], which can silently fail to parse and drop the layer.
 function railModeFilter(kind) {
   const flags = kind === "line" ? state.railLineModes : state.railStopModes;
   const on = Object.keys(flags).filter(k => flags[k]);
-  if (!on.length) return ["==", ["get", "mode"], "__none__"];
-  return ["in", ["get", "mode"], ["literal", on]];
+  if (!on.length) return false;          // show nothing
+  if (on.length === RAIL_MODES.length) return true;   // show everything
+  // match: if mode is one of `on`, output true, else false.
+  return ["match", ["get", "mode"], on, true, false];
 }
 
 function updateDataSourceNote() {
