@@ -204,3 +204,4 @@ overlay is present.
 the MapLibre demo glyph endpoint. If you switch glyph servers, update the
 `text-font` value in the `rail-stop-label` layer in `app.js` to a stack that
 server provides, or labels will silently not render (the dots still will).
+

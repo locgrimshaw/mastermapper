@@ -13,36 +13,45 @@
 //  - housing context + policy overlays (more layers)
 //  - portfolio batch scoring (server-side job)
 
+// Official IMD weights (the methodology MHCLG uses to combine the domains into
+// the overall Index of Multiple Deprivation). These are our DEFAULT slider
+// values, as percentages that sum to 100. Users can reweight from here; the
+// sliders rebalance so the total always stays 100%.
 const DOMAINS = [
-  { key: "income",      name: "Income",
+  { key: "income",      name: "Income", weight: 22.5,
     about: "Proportion of people on low income — those receiving income-related benefits and tax credits. Includes both out-of-work and in-work low earners.",
-    source: "English Indices of Deprivation 2019, Income domain (MHCLG)",
-    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
-  { key: "employment",  name: "Employment",
+    source: "English Indices of Deprivation 2025, Income domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025" },
+  { key: "employment",  name: "Employment", weight: 22.5,
     about: "Involuntary exclusion from work among the working-age population: claimants of jobseeker's, incapacity, and carer's benefits.",
-    source: "English Indices of Deprivation 2019, Employment domain (MHCLG)",
-    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
-  { key: "education",   name: "Education & skills",
+    source: "English Indices of Deprivation 2025, Employment domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025" },
+  { key: "education",   name: "Education & skills", weight: 13.5,
     about: "Lack of attainment and skills, combining children/young people's school results and the proportion of adults with low or no qualifications.",
-    source: "English Indices of Deprivation 2019, Education domain (MHCLG)",
-    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
-  { key: "health",      name: "Health & disability",
+    source: "English Indices of Deprivation 2025, Education domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025" },
+  { key: "health",      name: "Health & disability", weight: 13.5,
     about: "Risk of premature death and impairment to quality of life through poor physical or mental health. Measures morbidity and disability, not health-care access.",
-    source: "English Indices of Deprivation 2019, Health domain (MHCLG)",
-    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
-  { key: "crime",       name: "Crime",
+    source: "English Indices of Deprivation 2025, Health domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025" },
+  { key: "crime",       name: "Crime", weight: 9.3,
     about: "Risk of personal and material victimisation, derived from recorded rates of violence, burglary, theft, and criminal damage.",
-    source: "English Indices of Deprivation 2019, Crime domain (MHCLG)",
-    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
-  { key: "housing",     name: "Barriers to housing",
+    source: "English Indices of Deprivation 2025, Crime domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025" },
+  { key: "housing",     name: "Barriers to housing", weight: 9.3,
     about: "Physical and financial accessibility of housing and key local services — distance to a GP, shop, school, plus overcrowding, homelessness, and affordability.",
-    source: "English Indices of Deprivation 2019, Barriers to Housing & Services (MHCLG)",
-    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
-  { key: "environment", name: "Living environment",
+    source: "English Indices of Deprivation 2025, Barriers to Housing & Services (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025" },
+  { key: "environment", name: "Living environment", weight: 9.3,
     about: "Quality of the local environment: housing condition (indoor) and air quality plus road-traffic accident risk (outdoor).",
-    source: "English Indices of Deprivation 2019, Living Environment domain (MHCLG)",
-    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
+    source: "English Indices of Deprivation 2025, Living Environment domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025" },
 ];
+
+// Default weights as a map, e.g. { income: 22.5, ... }. Used to seed state and
+// to reset. They sum to 100 (allowing for the 9.3×3 rounding the official
+// methodology itself uses).
+const DEFAULT_WEIGHTS = Object.fromEntries(DOMAINS.map(d => [d.key, d.weight]));
 
 // ---- Colour ramps ----
 // "Single" = the original monochrome sequential ramps (light -> dark = worse).
@@ -105,7 +114,9 @@ function RAIL_LABEL_HALO() {
 }
 
 const state = {
-  weights: Object.fromEntries(DOMAINS.map(d => [d.key, 1])),
+  // Weights are PERCENTAGES that always sum to 100. Seeded from the official
+  // IMD methodology; the sliders rebalance the others when one is moved.
+  weights: { ...DEFAULT_WEIGHTS },
   enabled: Object.fromEntries(DOMAINS.map(d => [d.key, true])), // counts toward combined?
   solo: null,            // if set, map shows just this one domain
   breaksData: null,      // precomputed colour breaks loaded from breaks.json
@@ -213,6 +224,10 @@ const map = new maplibregl.Map({
   },
   center: [-0.11, 51.51],
   zoom: 10.5,
+  // A tap on a phone rarely lands pixel-perfect; without a tolerance a tap that
+  // wobbles a few px is treated as a drag and the click handler never fires.
+  // This is the main reason zones/stops felt "untappable" on iPad/phone.
+  clickTolerance: 5,
 });
 
 const draw = new MapboxDraw({
@@ -529,6 +544,66 @@ function setRailModeVisibility(kind, mode, on) {
 
 // ---- Sliders UI -----------------------------------------------------------
 
+// Redistribute weights so they always sum to 100. When the user sets `changed`
+// to `newVal`, the remaining ENABLED domains absorb the difference in
+// proportion to their current weights (so their relative balance is kept). If
+// the others are all at zero, the difference is spread equally among them.
+function rebalanceWeights(changedKey, newVal) {
+  const others = DOMAINS
+    .map(d => d.key)
+    .filter(k => k !== changedKey && state.enabled[k]);
+
+  newVal = Math.max(0, Math.min(100, newVal));
+  state.weights[changedKey] = newVal;
+
+  const remaining = 100 - newVal;        // budget for the others
+  if (!others.length) {
+    // Nothing else to absorb it; this domain alone carries 100 when enabled.
+    state.weights[changedKey] = state.enabled[changedKey] ? 100 : 0;
+    return;
+  }
+
+  const otherSum = others.reduce((s, k) => s + state.weights[k], 0);
+  if (otherSum <= 0) {
+    const each = remaining / others.length;
+    others.forEach(k => { state.weights[k] = each; });
+  } else {
+    others.forEach(k => {
+      state.weights[k] = state.weights[k] / otherSum * remaining;
+    });
+  }
+}
+
+// When a domain is enabled/disabled, re-spread to 100 across whatever is on.
+function renormaliseEnabled() {
+  const on = DOMAINS.map(d => d.key).filter(k => state.enabled[k]);
+  DOMAINS.forEach(d => { if (!state.enabled[d.key]) state.weights[d.key] = 0; });
+  if (!on.length) return;
+  const sum = on.reduce((s, k) => s + state.weights[k], 0);
+  if (sum <= 0) {
+    const each = 100 / on.length;
+    on.forEach(k => { state.weights[k] = each; });
+  } else {
+    on.forEach(k => { state.weights[k] = state.weights[k] / sum * 100; });
+  }
+}
+
+// Push current weights back into every slider position + % label (used after a
+// rebalance, since moving one slider changes all the others).
+function syncSliderUI() {
+  for (const d of DOMAINS) {
+    const slider = document.getElementById(`slider-${d.key}`);
+    const val = document.getElementById(`val-${d.key}`);
+    if (slider) slider.value = state.weights[d.key];
+    if (val) val.textContent = `${state.weights[d.key].toFixed(1)}%`;
+  }
+  const totalEl = document.getElementById("weight-total");
+  if (totalEl) {
+    const total = DOMAINS.reduce((s, d) => s + state.weights[d.key], 0);
+    totalEl.textContent = `Total: ${total.toFixed(0)}%`;
+  }
+}
+
 function buildSliders() {
   const wrap = document.getElementById("sliders");
   for (const d of DOMAINS) {
@@ -546,18 +621,17 @@ function buildSliders() {
         <span class="row-controls">
           <button class="solo" id="solo-${d.key}" type="button"
                   aria-label="Show only ${d.name} on the map" title="Show only this on the map">solo</button>
-          <span class="val" id="val-${d.key}">1.0×</span>
+          <span class="val" id="val-${d.key}">${d.weight.toFixed(1)}%</span>
         </span>
       </div>
-      <input type="range" min="0" max="3" step="0.1" value="1"
-             id="slider-${d.key}" aria-label="${d.name} weight" />`;
+      <input type="range" min="0" max="100" step="0.5" value="${d.weight}"
+             id="slider-${d.key}" aria-label="${d.name} weight (percent)" />`;
     wrap.appendChild(row);
 
     const input = row.querySelector(`#slider-${d.key}`);
     input.addEventListener("input", () => {
-      state.weights[d.key] = parseFloat(input.value);
-      document.getElementById(`val-${d.key}`).textContent =
-        `${parseFloat(input.value).toFixed(1)}×`;
+      rebalanceWeights(d.key, parseFloat(input.value));
+      syncSliderUI();        // reflect the knock-on changes on every slider
       restyle();
       refreshReportIfActive();
     });
@@ -568,6 +642,8 @@ function buildSliders() {
       row.classList.toggle("disabled", !e.target.checked);
       // A disabled domain can't be soloed; drop solo if it was on this one.
       if (!e.target.checked && state.solo === d.key) setSolo(null);
+      renormaliseEnabled();  // re-spread to 100 across the still-enabled domains
+      syncSliderUI();
       restyle();
       refreshReportIfActive();
     });
@@ -581,16 +657,17 @@ function buildSliders() {
   document.getElementById("reset-weights").addEventListener("click", () => {
     setSolo(null);
     for (const d of DOMAINS) {
-      state.weights[d.key] = 1;
+      state.weights[d.key] = d.weight;        // back to official IMD weights
       state.enabled[d.key] = true;
-      document.getElementById(`slider-${d.key}`).value = 1;
-      document.getElementById(`val-${d.key}`).textContent = "1.0×";
       document.getElementById(`enable-${d.key}`).checked = true;
       document.getElementById(`row-${d.key}`).classList.remove("disabled");
     }
+    syncSliderUI();
     restyle();
     refreshReportIfActive();
   });
+
+  syncSliderUI();   // set the total readout on first build
 }
 
 // Switch the map to a single domain's choropleth, or back to combined (null).
@@ -845,9 +922,13 @@ function wireInteractions() {
     popup.remove();
   });
 
-  // Click a single area to pin its full breakdown.
+  // Click a single area to pin its full breakdown. If the same tap also hit a
+  // rail stop, the stop handler set _stopClickGuard — skip the zone panel so
+  // the stop panel wins (both layers' click handlers fire for one tap).
   map.on("click", "lsoa-fill", (e) => {
+    if (window._stopClickGuard) { window._stopClickGuard = false; return; }
     inspectLSOA(e.features[0].properties, e.point);
+    setDrawer(false);   // on mobile, reveal the map result
   });
 
   map.on("draw.create", onDrawChange);
@@ -878,13 +959,14 @@ function wireInteractions() {
       stopPopup.remove();
     });
 
-    // Click a stop -> pin its details in the floating panel. We stop the event
-    // reaching the lsoa-fill click (which would otherwise also open the LSOA
-    // panel underneath) by handling rail-stop first; MapLibre fires layer
-    // handlers in add order, and we close the LSOA panel here to avoid both.
+    // Click a stop -> pin its details. Set a guard so the lsoa-fill handler,
+    // which also fires for this tap, doesn't immediately overwrite the stop
+    // panel with the zone panel. (stopPropagation alone doesn't prevent the
+    // other layer handler from running in the same MapLibre click cycle.)
     map.on("click", "rail-stop", (e) => {
-      e.originalEvent.stopPropagation();
+      window._stopClickGuard = true;
       inspectStop(e.features[0].properties, e.point);
+      setDrawer(false);
     });
   }
 }
@@ -1062,6 +1144,25 @@ function priceFmt(v) {
 // already created with the matching light tiles above.
 document.body.classList.toggle("light", state.theme === "light");
 
+// Mobile controls drawer: the toggle button and scrim show only on small
+// screens (CSS). Tapping the button slides the panel in/out; tapping the scrim
+// (or selecting something on the map) closes it so the map is usable.
+function setDrawer(open) {
+  const app = document.getElementById("app");
+  const btn = document.getElementById("panel-toggle");
+  const scrim = document.getElementById("panel-scrim");
+  app.classList.toggle("panel-open", open);
+  if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (scrim) scrim.hidden = !open;
+}
+(function wireDrawer() {
+  const btn = document.getElementById("panel-toggle");
+  const scrim = document.getElementById("panel-scrim");
+  if (btn) btn.addEventListener("click", () =>
+    setDrawer(!document.getElementById("app").classList.contains("panel-open")));
+  if (scrim) scrim.addEventListener("click", () => setDrawer(false));
+})();
+
 buildSliders();
 buildLegend();
 
@@ -1072,9 +1173,10 @@ map.on("load", async () => {
     buildLayerToggle();
     buildRailToggle();
     wireInteractions();
-    // Fit to the data's own bounding box (from the sidecar).
-    const bb = state.breaksData?.bbox;
-    if (bb) map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 20, duration: 0 });
+    // Intentionally NOT fitting to the national bbox — the map opens on London
+    // (set in the map constructor: center [-0.11, 51.51], zoom 10.5). A city
+    // view reads better and only loads the tiles in view, so it starts faster
+    // than rendering the whole country. Users can zoom out to see all England.
   } catch (err) {
     document.getElementById("datasource").className = "datasource warn";
     document.getElementById("datasource").textContent =

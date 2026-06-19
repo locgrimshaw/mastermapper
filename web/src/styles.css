@@ -474,6 +474,15 @@ button.ghost:hover {
   color: var(--text);
 }
 
+/* Running total of the weight sliders (should always read 100%). */
+.weight-total {
+  margin: 10px 0 12px;
+  font-family: var(--font-data);
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: right;
+}
+
 /* ---- Report ---- */
 #report .empty {
   font-size: 12.5px;
@@ -660,12 +669,66 @@ footer {
   margin-top: 12px;
 }
 
+/* ---- Mobile controls toggle (hidden on desktop) ---- */
+.panel-toggle {
+  display: none;            /* shown only in the mobile media query */
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 40;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-float);
+  border: 1px solid var(--ink-line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: var(--float-shadow);
+  cursor: pointer;
+}
+
+.panel-toggle .pt-bars {
+  width: 16px;
+  height: 12px;
+  position: relative;
+  display: inline-block;
+}
+.panel-toggle .pt-bars::before,
+.panel-toggle .pt-bars::after,
+.panel-toggle .pt-bars { background: none; }
+.panel-toggle .pt-bars {
+  border-top: 2px solid var(--text);
+  border-bottom: 2px solid var(--text);
+}
+.panel-toggle .pt-bars::after {
+  content: "";
+  position: absolute;
+  top: 5px; left: 0; right: 0;
+  border-top: 2px solid var(--text);
+}
+
+.panel-scrim {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 29;
+}
+
 @media (max-width: 720px) {
   #floating-detail {
     width: auto;
     left: 12px;
     right: 12px;
-    top: 12px;
+    /* Anchor near the bottom so it sits over the map, not the drawer, and
+       clear of the toggle button at top-left. */
+    top: auto !important;
+    bottom: 16px;
+    left: 12px !important;
+    max-height: 55%;
   }
 }
 
@@ -727,6 +790,57 @@ footer {
 .maplibregl-popup-tip { border-top-color: var(--ink-2) !important; }
 
 @media (max-width: 720px) {
-  #app { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
-  #panel { border-right: none; border-bottom: 1px solid var(--ink-line); }
+  /* Map fills the whole screen; the panel becomes a slide-in drawer over it.
+     This gives the map the entire touch surface so taps on zones and stops
+     register, instead of being squeezed into a half-height pane. */
+  #app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+
+  #map {
+    grid-column: 1;
+    grid-row: 1;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  .panel-toggle { display: inline-flex; }
+
+  #panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 30;
+    width: min(86vw, 360px);
+    height: 100%;
+    border-right: 1px solid var(--ink-line);
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: var(--float-shadow);
+  }
+
+  /* Drawer open state, toggled from JS by adding .panel-open to #app. */
+  #app.panel-open #panel { transform: translateX(0); }
+  #app.panel-open .panel-scrim { display: block; }
+
+  /* Bigger touch targets on mobile so checkboxes, solo, and the close button
+     are comfortably tappable (44px is the common minimum). */
+  .enable { width: 18px; height: 18px; }
+  .enable:checked::after { left: 5px; top: 2px; width: 4px; height: 8px; }
+  .solo { padding: 6px 10px; font-size: 10px; }
+  .fd-close { font-size: 26px; padding: 6px 12px; }
+  input[type="range"] { height: 6px; }
+  input[type="range"]::-webkit-slider-thumb { width: 22px; height: 22px; }
+  input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; }
+
+  /* Keep the legend out of the way of the toggle button (top-left) and the
+     detail panel (bottom). Tuck it to the top-right, a bit smaller. */
+  #legend {
+    top: 12px;
+    right: 12px;
+    bottom: auto;
+    font-size: 10px;
+  }
+  #legend .ramp { width: 130px; }
 }

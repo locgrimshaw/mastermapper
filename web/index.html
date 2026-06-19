@@ -11,6 +11,14 @@
 </head>
 <body>
   <div id="app">
+    <!-- Mobile-only button to open/close the controls drawer. Hidden on desktop
+         via CSS. The map is full-screen on mobile; this reveals the panel. -->
+    <button id="panel-toggle" class="panel-toggle" aria-label="Open controls" aria-expanded="false">
+      <span class="pt-bars" aria-hidden="true"></span>
+      <span class="pt-label">Controls</span>
+    </button>
+    <div id="panel-scrim" class="panel-scrim" hidden></div>
+
     <aside id="panel">
       <header>
         <h1>MasterMapper</h1>
@@ -20,14 +28,15 @@
 
       <section class="block">
         <h2>Combined score weighting</h2>
-        <p class="hint">Adjust how much each domain counts toward the combined deprivation score. The map updates live.</p>
+        <p class="hint">Domains are weighted as in the official Index of Multiple Deprivation. Move a slider and the others rebalance so the total stays 100%. The map updates live.</p>
         <div id="sliders"></div>
-        <button id="reset-weights" class="ghost">Reset to equal weighting</button>
+        <div id="weight-total" class="weight-total">Total: 100%</div>
+        <button id="reset-weights" class="ghost">Reset to official IMD weighting</button>
       </section>
 
       <section class="block">
         <h2>Site context</h2>
-        <p class="hint" id="draw-hint">Click any area to see its details in a panel on the map. Use the draw tool (top-right) to outline a plot and get an aggregated report here.</p>
+        <p class="hint" id="draw-hint">Tap any area to see its details. Use the draw tool (top-right) to outline a plot and get an aggregated report here.</p>
         <div id="report"><p class="empty">No site selected yet.</p></div>
       </section>
 
