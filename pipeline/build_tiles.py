@@ -131,18 +131,26 @@ def main() -> int:
         print("ERROR: tippecanoe not on PATH. (The Action installs it.)")
         return 1
 
-    # Build the -y flags that tell tippecanoe which attributes to retain.
-    keep_flags = []
-    for a in KEEP_ATTRS:
-        keep_flags += ["-y", a]
+    # Pre-trim the LSOA layer's attributes HERE, in Python, rather than with
+    # tippecanoe's -y flag. Critical: tippecanoe's -y is a GLOBAL whitelist —
+    # it applies to every layer, so using it would also strip mode/name/crs
+    # from the rail layers (leaving grey lines + "Unnamed/UNDEFINED" stops).
+    # We write a trimmed copy of just the LSOA layer and feed that instead.
+    lsoa_trimmed = ROOT / "web" / "data" / "_lsoa_trimmed.geojson"
+    rail_tmp = [lsoa_trimmed]
+    src_gj = json.loads(SRC.read_text())
+    for f in src_gj.get("features", []):
+        props = f.get("properties", {})
+        f["properties"] = {k: props[k] for k in KEEP_ATTRS if k in props}
+    lsoa_trimmed.write_text(json.dumps(src_gj))
+    print(f"Trimmed LSOA attributes to {len(KEEP_ATTRS)} fields "
+          f"(was {len(src_gj['features'][0]['properties']) if src_gj['features'] else 0} kept).")
 
     # Optional rail overlay. tippecanoe takes extra inputs as their OWN named
     # layers via -L. We split rail.geojson into a line layer and a stop layer;
-    # the per-feature `mode` attribute (rail/subway/light_rail/tram) is kept so
-    # the frontend can colour and filter each mode within these two layers.
-    # No -y here (keep all attrs) so mode/name/crs/operator survive into tiles.
+    # the per-feature `mode` attribute (rail/subway/light_rail/tram), plus name/
+    # crs/operator, are kept intact because we no longer pass a global -y.
     rail_layer_flags = []
-    rail_tmp = []
     if RAIL_SRC.exists():
         try:
             rail = json.loads(RAIL_SRC.read_text())
@@ -168,7 +176,7 @@ def main() -> int:
         "tippecanoe",
         "-o", str(OUT),
         "-f",                       # overwrite if exists
-        "-L", "lsoa:" + str(SRC),   # main choropleth layer (named-layer form)
+        "-L", "lsoa:" + str(lsoa_trimmed),   # trimmed choropleth layer
         "-Z", "5",                  # min zoom (whole-of-England view)
         "-z", "13",                 # max zoom (a touch deeper so stations read)
         # --- Border integrity (fixes the "fragmented / gappy" look) ----------
@@ -184,7 +192,6 @@ def main() -> int:
         "--coalesce-densest-as-needed",  # keep tiles small where dense (cities)
         "--extend-zooms-if-still-dropping",
         "--no-tile-size-limit",
-        *keep_flags,
         *rail_layer_flags,
     ]
     print("Running tippecanoe:\n  " + " ".join(cmd))
