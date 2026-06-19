@@ -268,7 +268,11 @@ def fetch_epraccur_rows() -> list:
 
 
 def upsert(records: list):
-    """Upsert records into Supabase via PostgREST (on_conflict kind,source_id)."""
+    """Upsert records into Supabase via PostgREST (on_conflict kind,source_id).
+
+    Resilient: if a batch fails, it reports the reason and keeps going, so one
+    hiccup doesn't throw away the whole (slow) run. Exits non-zero only if
+    nothing at all loaded."""
     if not (SUPABASE_URL and SUPABASE_KEY):
         print("ERROR: set SUPABASE_URL and SUPABASE_SERVICE_KEY env vars.")
         sys.exit(1)
@@ -282,7 +286,7 @@ def upsert(records: list):
         # merge-duplicates = upsert; return minimal to keep responses small.
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
-    total = 0
+    total, failed = 0, 0
     for i in range(0, len(records), BATCH):
         batch = records[i:i + BATCH]
         body = json.dumps(batch).encode("utf-8")
@@ -293,9 +297,15 @@ def upsert(records: list):
             total += len(batch)
             print(f"  upserted {total} / {len(records)}")
         except urllib.error.HTTPError as exc:
-            print(f"  batch {i} failed: {exc.code} {exc.read().decode('utf-8', 'replace')[:500]}")
-            sys.exit(1)
-    print(f"Done: upserted {total} GP practices.")
+            failed += len(batch)
+            detail = exc.read().decode("utf-8", "replace")[:500]
+            print(f"  batch starting {i} failed: HTTP {exc.code} {detail}")
+            # Keep going — a later batch may be fine, and partial load beats none.
+    if total == 0:
+        print("Nothing loaded — every batch failed. See the error above.")
+        sys.exit(1)
+    print(f"Done: upserted {total} GP practices"
+          + (f" ({failed} failed)." if failed else "."))
 
 
 def main() -> int:
@@ -330,8 +340,11 @@ def main() -> int:
             "source_id": (r["code"] or "").strip(),
             "name": (r["name"] or "").strip().title(),
             "props": {"postcode": pc},
-            # PostgREST accepts GeoJSON for a geography column.
-            "geom": {"type": "Point", "coordinates": [lng, lat]},
+            # Send the point as EWKT (SRID-tagged Well-Known Text). PostGIS
+            # parses this directly into a geography column via PostgREST; a
+            # raw GeoJSON object is NOT accepted here and triggers
+            # "parse error - invalid geometry".
+            "geom": f"SRID=4326;POINT({lng} {lat})",
         })
     print(f"  {len(records)} geocoded, {missing} unmatched postcodes")
 
