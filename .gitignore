@@ -10,6 +10,11 @@ data/raw/*
 # but a normal CSV via "Add file" works fine).
 !data/raw/uk_stations.csv
 
+# Optional GP practice file fallback: if the NHS auto-download is blocked, you
+# can download the CSV in your browser and commit it here, and the loader will
+# use it instead of downloading. Small, so safe to keep in the repo.
+!data/raw/epraccur.csv
+
 # Python
 __pycache__/
 *.pyc

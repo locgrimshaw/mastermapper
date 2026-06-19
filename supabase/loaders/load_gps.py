@@ -47,13 +47,25 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 RAW = ROOT / "data" / "raw"
 POSTCODES_CSV = RAW / "postcodes.csv"
 
-# NHS ODS epraccur — the current GP practice file (zipped CSV, no header row).
-# This is the long-standing stable download path on the TRUD/ODS distribution.
-EPRACCUR_URL = "https://files.digital.nhs.uk/assets/ods/current/epraccur.zip"
+# NHS ODS 'epraccur' — current GP practice file.
+#
+# NOTE (June 2026): NHS retired the old files.digital.nhs.uk/.../epraccur.zip
+# snapshot. The live replacement is the ODS Data Search & Export (DSE)
+# "predefined report" endpoint below, which returns a plain CSV (not a zip).
+# DSE replicates the legacy epraccur column layout. The file may or may not
+# carry a header row depending on the report settings, so the parser below
+# AUTO-DETECTS: it finds columns by header name when present, and otherwise
+# falls back to the legacy fixed positions.
+#
+# If you prefer not to rely on this endpoint at all, you can instead download
+# the CSV in your browser, commit it to data/raw/epraccur.csv, and the loader
+# will use that local file (see fetch_epraccur_rows). That mirrors the
+# "commit a CSV" approach used elsewhere in this project.
+EPRACCUR_URL = "https://www.odsdatasearchandexport.nhs.uk/api/getReport?report=epraccur"
+EPRACCUR_LOCAL = RAW / "epraccur.csv"
 
-# epraccur is headerless; these are the columns we care about by INDEX, per the
-# ODS epraccur record spec. (0) org code, (1) name, (9) postcode,
-# (12) status code: 'A' active / 'C' closed / 'D' dormant / 'P' proposed.
+# Legacy fixed column positions (used when the file has no header row):
+# (0) org code, (1) name, (9) postcode, (12) status: 'A' active.
 COL_CODE = 0
 COL_NAME = 1
 COL_POSTCODE = 9
@@ -151,17 +163,106 @@ def load_postcode_lookup(postcodes_needed: set) -> dict:
     return lookup
 
 
+def _parse_epraccur_bytes(blob: bytes, looks_zip: bool) -> list:
+    """Turn raw bytes (CSV or legacy zip) into normalised dict rows with keys
+    code, name, postcode, status. Auto-detects a header row; otherwise uses the
+    legacy fixed column positions."""
+    if looks_zip:
+        zf = zipfile.ZipFile(io.BytesIO(blob))
+        csv_name = next(n for n in zf.namelist() if n.lower().endswith(".csv"))
+        text = zf.read(csv_name).decode("latin-1")
+    else:
+        # ODS files are latin-1; fall back to utf-8 if that struggles.
+        try:
+            text = blob.decode("latin-1")
+        except UnicodeDecodeError:
+            text = blob.decode("utf-8", "replace")
+
+    raw = list(csv.reader(io.StringIO(text)))
+    if not raw:
+        return []
+
+    # Header detection: a header row has non-numeric, label-like first cells and
+    # known column names. epraccur data rows start with an org code like 'A81001'
+    # (letter + digits). If the first row's first cell looks like a code, there's
+    # no header and we use fixed positions.
+    first = raw[0]
+    header_like = any(
+        h.strip().lower() in (
+            "organisation code", "name", "postcode", "status code",
+            "practice code", "organisationcode"
+        ) for h in first
+    )
+
+    rows = []
+    if header_like:
+        hdr = [h.strip().lower() for h in first]
+
+        def idx(*names, default=None):
+            for n in names:
+                if n in hdr:
+                    return hdr.index(n)
+            return default
+
+        i_code = idx("organisation code", "organisationcode", "practice code", default=COL_CODE)
+        i_name = idx("name", default=COL_NAME)
+        i_pc = idx("postcode", default=COL_POSTCODE)
+        i_status = idx("status code", "status", default=COL_STATUS)
+        for r in raw[1:]:
+            if len(r) <= max(i_code, i_name, i_pc, i_status):
+                continue
+            rows.append({
+                "code": r[i_code], "name": r[i_name],
+                "postcode": r[i_pc], "status": r[i_status],
+            })
+    else:
+        for r in raw:
+            if len(r) <= COL_STATUS:
+                continue
+            rows.append({
+                "code": r[COL_CODE], "name": r[COL_NAME],
+                "postcode": r[COL_POSTCODE], "status": r[COL_STATUS],
+            })
+    return rows
+
+
 def fetch_epraccur_rows() -> list:
-    """Download epraccur.zip and return its CSV rows (list of lists)."""
+    """Return normalised GP practice rows.
+
+    Order of preference:
+      1. A committed local CSV at data/raw/epraccur.csv (download it in your
+         browser once, commit it — no live dependency).
+      2. The live ODS DSE endpoint (plain CSV). Sent with browser-like headers
+         because the host 403s bare requests.
+    """
+    if EPRACCUR_LOCAL.exists():
+        print(f"Using committed GP file: {EPRACCUR_LOCAL.name}")
+        blob = EPRACCUR_LOCAL.read_bytes()
+        rows = _parse_epraccur_bytes(blob, looks_zip=False)
+        print(f"  {len(rows)} practice records")
+        return rows
+
     print(f"Downloading {EPRACCUR_URL} ...")
-    req = urllib.request.Request(EPRACCUR_URL, headers={"User-Agent": "mastermapper-loader/1.0"})
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        blob = resp.read()
-    zf = zipfile.ZipFile(io.BytesIO(blob))
-    # The archive contains a single CSV (epraccur.csv).
-    csv_name = next(n for n in zf.namelist() if n.lower().endswith(".csv"))
-    text = zf.read(csv_name).decode("latin-1")   # ODS files are latin-1
-    rows = list(csv.reader(io.StringIO(text)))
+    # A plain urllib User-Agent gets a 403 from this host; mimic a browser.
+    req = urllib.request.Request(EPRACCUR_URL, headers={
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/124.0 Safari/537.36"),
+        "Accept": "text/csv,application/octet-stream,*/*",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            blob = resp.read()
+    except urllib.error.HTTPError as exc:
+        print(f"  Download failed: HTTP {exc.code}. The NHS endpoint may have "
+              f"changed or be blocking automated access.")
+        print(f"  WORKAROUND: open this URL in your browser, save the CSV, and "
+              f"commit it as data/raw/epraccur.csv, then re-run:")
+        print(f"    {EPRACCUR_URL}")
+        raise
+
+    looks_zip = blob[:2] == b"PK"   # zip magic number
+    rows = _parse_epraccur_bytes(blob, looks_zip=looks_zip)
     print(f"  {len(rows)} practice records")
     return rows
 
@@ -200,22 +301,20 @@ def upsert(records: list):
 def main() -> int:
     rows = fetch_epraccur_rows()
 
-    # Keep ACTIVE English practices (codes beginning with a letter; status 'A').
-    active = []
-    for r in rows:
-        if len(r) <= COL_STATUS:
-            continue
-        if (r[COL_STATUS] or "").strip().upper() != "A":
-            continue
-        active.append(r)
+    # Keep ACTIVE practices (status 'A'). rows are dicts: code/name/postcode/status.
+    active = [r for r in rows if (r.get("status") or "").strip().upper() == "A"]
     print(f"  {len(active)} active practices")
+    if not active:
+        print("  No active practices parsed — the file format may have changed.")
+        print("  Check data/raw/epraccur.csv or the DSE report columns.")
+        return 1
 
-    needed = {norm_pc(r[COL_POSTCODE]) for r in active}
+    needed = {norm_pc(r["postcode"]) for r in active}
     lookup = load_postcode_lookup(needed)
 
     records, missing = [], 0
     for r in active:
-        pc = norm_pc(r[COL_POSTCODE])
+        pc = norm_pc(r["postcode"])
         coord = lookup.get(pc)
         if not coord:
             missing += 1
@@ -223,8 +322,8 @@ def main() -> int:
         lng, lat = coord
         records.append({
             "kind": "gp",
-            "source_id": r[COL_CODE].strip(),
-            "name": (r[COL_NAME] or "").strip().title(),
+            "source_id": (r["code"] or "").strip(),
+            "name": (r["name"] or "").strip().title(),
             "props": {"postcode": pc},
             # PostgREST accepts GeoJSON for a geography column.
             "geom": {"type": "Point", "coordinates": [lng, lat]},
