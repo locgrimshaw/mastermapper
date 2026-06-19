@@ -15,6 +15,6 @@
 // are disabled, with a friendly note.
 
 window.MASTERMAPPER_CONFIG = {
-  SUPABASE_URL: "https://vwljbgyrsnnubrbjaxbc.supabase.co",       // e.g. "https://abcdefgh.supabase.co"
-  SUPABASE_ANON_KEY: "sb_publishable_j55jzkpiaVPeAYii1RoCxA_RX1bt956",  // e.g. "eyJhbGciOi..."
+  SUPABASE_URL: "",       // e.g. "https://abcdefgh.supabase.co"
+  SUPABASE_ANON_KEY: "",  // e.g. "eyJhbGciOi..."
 };

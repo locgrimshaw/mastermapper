@@ -20,12 +20,15 @@ Source data:
           elsewhere in this project); OR
       (b) the free postcodes.io bulk API as a fallback when no CSV is present.
 
-Environment (set as GitHub Action secrets, or export locally):
+Environment (provided automatically by the GitHub Action from repo Secrets —
+see docs/DEEP_DIVE_SETUP.md; you don't set these by hand):
   SUPABASE_URL              e.g. https://abcd.supabase.co
-  SUPABASE_SERVICE_KEY      the *service_role* key (writes bypass RLS) — keep secret
+  SUPABASE_SERVICE_KEY      the *service_role* key (writes bypass RLS) — secret
 
-Run:
-  python supabase/loaders/load_gps.py
+How to run it: you don't run it locally. In GitHub, go to the Actions tab,
+pick "Load amenities into Supabase", and click Run workflow. That executes this
+script on GitHub's servers with your secrets. (It can also be run from a command
+line with the two env vars set, if you ever want to.)
 """
 
 import csv
@@ -104,21 +107,35 @@ def load_postcode_lookup(postcodes_needed: set) -> dict:
     # Fallback: postcodes.io bulk endpoint (max 100 per request).
     print("No postcode CSV found — geocoding via postcodes.io (slower).")
     pcs = [p for p in postcodes_needed if p]
+    failed_chunks = 0
     for i in range(0, len(pcs), 100):
         chunk = pcs[i:i + 100]
         body = json.dumps({"postcodes": chunk}).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.postcodes.io/postcodes",
-            data=body,
-            headers={"Content-Type": "application/json",
-                     "User-Agent": "mastermapper-loader/1.0"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, urllib.error.HTTPError) as exc:
-            print(f"  postcodes.io chunk {i} failed: {exc}")
+
+        # Try each chunk a few times with a short backoff — the free API can
+        # briefly rate-limit or hiccup, and we'd rather wait than lose a chunk.
+        data = None
+        for attempt in range(4):
+            req = urllib.request.Request(
+                "https://api.postcodes.io/postcodes",
+                data=body,
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "mastermapper-loader/1.0"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                break
+            except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+                wait = 1.5 * (attempt + 1)
+                print(f"  postcodes.io chunk {i} attempt {attempt + 1} failed "
+                      f"({exc}); retrying in {wait:.0f}s")
+                time.sleep(wait)
+        if data is None:
+            failed_chunks += 1
+            print(f"  giving up on chunk {i} after retries")
             continue
+
         for item in data.get("result", []):
             r = item.get("result")
             if not r:
@@ -128,6 +145,9 @@ def load_postcode_lookup(postcodes_needed: set) -> dict:
                 lookup[pc] = (r["longitude"], r["latitude"])
         time.sleep(0.3)   # be polite to the free API
         print(f"  geocoded {len(lookup)} / {len(pcs)}...")
+    if failed_chunks:
+        print(f"  WARNING: {failed_chunks} postcode chunk(s) failed; some "
+              f"practices may be missing. Re-running the loader will retry.")
     return lookup
 
 
