@@ -1,24 +1,24 @@
 """
 build_imd_layer.py
 ------------------
-Turns raw English IMD 2019 data + LSOA boundaries into a single GeoJSON
+Turns raw English IMD 2025 data + LSOA 2021 boundaries into a single GeoJSON
 the map can consume directly.
 
 Inputs (you download these — see docs/DATASETS.md):
-  data/raw/imd2019_scores.csv      English IMD 2019, scores by LSOA
-  data/raw/lsoa_boundaries.geojson LSOA 2011 boundaries (generalised)
+  data/raw/imd2025_scores.csv      English IoD 2025, File 7 (all ranks/scores/
+                                   deciles) by LSOA — includes LSOA name AND
+                                   Local Authority District name in the file.
+  data/raw/lsoa_boundaries.geojson LSOA 2021 boundaries (generalised), fetched
+                                   by fetch_boundaries.py.
 
 Output:
-  data/processed/lsoa_imd.geojson  one feature per LSOA, with normalised
-                                   0-100 metrics + raw deciles
+  web/data/lsoa_imd.geojson        one feature per LSOA, with normalised
+                                   0-100 metrics + raw scores + names.
 
 Run:  python pipeline/build_imd_layer.py
 """
 
-import json
 import sys
-import urllib.request
-import urllib.parse
 from pathlib import Path
 
 import pandas as pd
@@ -28,17 +28,10 @@ ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 OUT = ROOT / "web" / "data"
 
-# ONS lookup giving each 2011 LSOA its name and its Local Authority District
-# (the "borough/district"). Field names: LSOA11CD, LSOA11NM, LAD22CD, LAD22NM.
-LSOA_LAD_BASE = (
-    "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/"
-    "LSOA_2011_to_LSOA_2021_to_Local_Authority_District_2022_Lookup_for_England__2022"
-    "/FeatureServer/0/query"
-)
-
 # The 7 IMD domains we expose as adjustable metrics, plus overall.
 # Keys are our internal names; values are the *score* column names as they
-# appear in the official IMD 2019 CSV (these are stable — verify on download).
+# appear in the official IoD 2025 File 7 CSV (verified against the published
+# file — these are unchanged from 2019).
 DOMAIN_SCORE_COLUMNS = {
     "overall":    "Index of Multiple Deprivation (IMD) Score",
     "income":     "Income Score (rate)",
@@ -50,66 +43,14 @@ DOMAIN_SCORE_COLUMNS = {
     "environment":"Living Environment Score",
 }
 
-# The LSOA code column name in the IMD CSV.
-IMD_LSOA_CODE = "LSOA code (2011)"
-# The LSOA code field in the boundary file (ONS calls it LSOA11CD).
-GEO_LSOA_CODE = "LSOA11CD"
-
-
-def fetch_lsoa_names() -> pd.DataFrame:
-    """Fetch {lsoa_code, lsoa_name, lad_name} from ONS, paging through results.
-    Returns an empty frame on failure so the build can continue without names.
-    Logs loudly on every outcome so build logs are diagnostic.
-    """
-    print("Fetching LSOA & district names from ONS...")
-    rows = []
-    offset, PAGE = 0, 4000
-    try:
-        while True:
-            params = {
-                "where": "1=1",
-                "outFields": "LSOA11CD,LSOA11NM,LAD22NM",
-                "returnGeometry": "false",
-                "f": "json",
-                "resultOffset": str(offset),
-                "resultRecordCount": str(PAGE),
-            }
-            url = LSOA_LAD_BASE + "?" + urllib.parse.urlencode(params)
-            req = urllib.request.Request(url, headers={"User-Agent": "welfare-mapper"})
-            with urllib.request.urlopen(req, timeout=180) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-
-            # ArcGIS reports problems as an "error" object, not an HTTP failure.
-            if "error" in data:
-                print(f"  ONS service returned an error: {data['error']}")
-                break
-
-            feats = data.get("features", [])
-            if not feats:
-                if offset == 0:
-                    print("  ONS service returned no features on the first page.")
-                    print(f"  (response keys: {list(data.keys())})")
-                break
-            for ft in feats:
-                a = ft.get("attributes", {})
-                code = a.get("LSOA11CD")
-                if code:
-                    rows.append({
-                        "lsoa_code": code,
-                        "lsoa_name": a.get("LSOA11NM"),
-                        "lad_name": a.get("LAD22NM"),
-                    })
-            print(f"  {len(rows)} names fetched...")
-            if len(feats) < PAGE:
-                break
-            offset += len(feats)
-    except Exception as e:
-        print(f"  WARNING: name lookup failed ({e}). Continuing without names.")
-
-    df = pd.DataFrame(rows).drop_duplicates("lsoa_code") if rows else \
-        pd.DataFrame(columns=["lsoa_code", "lsoa_name", "lad_name"])
-    print(f"  name lookup returned {len(df)} rows")
-    return df
+# 2025 File 7 column names. The geography moved from 2011 to 2021 LSOAs, and the
+# file now carries LSOA name AND Local Authority District name directly — so we
+# no longer need the fragile ONS name-lookup web service that 2019 required.
+IMD_LSOA_CODE = "LSOA code (2021)"
+IMD_LSOA_NAME = "LSOA name (2021)"
+IMD_LAD_NAME  = "Local Authority District name (2024)"
+# The LSOA code field in the 2021 boundary file (ONS calls it LSOA21CD).
+GEO_LSOA_CODE = "LSOA21CD"
 
 
 def district_from_lsoa_name(name):
@@ -133,7 +74,7 @@ def normalise_0_100(series: pd.Series) -> pd.Series:
 
 
 def main() -> int:
-    imd_path = RAW / "imd2019_scores.csv"
+    imd_path = RAW / "imd2025_scores.csv"
     geo_path = RAW / "lsoa_boundaries.geojson"
 
     if not imd_path.exists() or not geo_path.exists():
@@ -143,16 +84,17 @@ def main() -> int:
         print("See docs/DATASETS.md for download links.")
         return 1
 
-    print("Reading IMD scores...")
+    print("Reading IoD 2025 scores (File 7)...")
     imd = pd.read_csv(imd_path)
 
-    # Keep only the columns we need, renamed to our internal names.
+    # Keep only the columns we need, renamed to our internal names. The 2025
+    # File 7 carries LSOA name AND Local Authority District name in the file, so
+    # we take both straight from the CSV (no network lookup needed any more).
     keep = {IMD_LSOA_CODE: "lsoa_code"}
-    # The IMD File 7 CSV includes the LSOA name; keep it as a reliable source
-    # for names and the district fallback, independent of any network lookup.
-    IMD_LSOA_NAME = "LSOA name (2011)"
     if IMD_LSOA_NAME in imd.columns:
-        keep[IMD_LSOA_NAME] = "lsoa_name_csv"
+        keep[IMD_LSOA_NAME] = "lsoa_name"
+    if IMD_LAD_NAME in imd.columns:
+        keep[IMD_LAD_NAME] = "lad_name"
     for name, col in DOMAIN_SCORE_COLUMNS.items():
         if col not in imd.columns:
             print(f"  WARNING: column not found in CSV: '{col}'")
@@ -184,23 +126,21 @@ def main() -> int:
     merged = geo.merge(imd, on="lsoa_code", how="inner")
     print(f"  {len(merged)} LSOAs matched "
           f"({len(geo)} boundaries, {len(imd)} score rows)")
+    if len(merged) == 0:
+        print("  ERROR: no LSOAs matched. This usually means a geography "
+              "mismatch — check the boundaries are 2021 LSOAs (LSOA21CD) to "
+              "match the IoD 2025 codes.")
+        return 1
 
-    # Attach the LSOA name and Local Authority District (borough/district) name.
-    names = fetch_lsoa_names()
-    if not names.empty:
-        merged = merged.merge(names, on="lsoa_code", how="left")
-    else:
+    # Ensure the name columns exist even if the CSV layout surprised us.
+    if "lsoa_name" not in merged.columns:
         merged["lsoa_name"] = None
+    if "lad_name" not in merged.columns:
         merged["lad_name"] = None
 
-    # Reliable LSOA name from the CSV fills any gaps the lookup left.
-    if "lsoa_name_csv" in merged.columns:
-        merged["lsoa_name"] = merged["lsoa_name"].fillna(merged["lsoa_name_csv"])
-        merged = merged.drop(columns=["lsoa_name_csv"])
-
     # Fallback: derive the district from the LSOA name ("Camden 001A" -> "Camden")
-    # wherever the LAD lookup didn't supply one. Guarantees a usable label even
-    # if the ONS lookup returns nothing at all.
+    # wherever the CSV didn't supply a LAD name. Belt-and-braces; the 2025 file
+    # should populate lad_name for every row.
     missing = merged["lad_name"].isna()
     if missing.any():
         merged.loc[missing, "lad_name"] = merged.loc[missing, "lsoa_name"].apply(

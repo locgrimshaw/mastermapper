@@ -7,6 +7,10 @@ on:
         description: "Also add house prices (slower - downloads a year of Land Registry data)"
         type: boolean
         default: false
+      include_rail:
+        description: "Also add the rail overlay (passenger lines from OpenStreetMap + stations from CSV)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -26,24 +30,30 @@ jobs:
 
       - name: Build the data layer
         run: |
-          if [ -f data/raw/imd2019_scores.csv ]; then
+          if [ -f data/raw/imd2025_scores.csv ]; then
             echo "IMD data found - fetching boundaries, building real layer."
             python pipeline/fetch_boundaries.py
             python pipeline/build_imd_layer.py
           elif grep -qE '"lsoa_code" *: *"E[0-9]' web/data/lsoa_imd.geojson 2>/dev/null; then
             echo "No IMD CSV uploaded, but a real England layer already exists."
             echo "Refusing to overwrite it with synthetic sample data."
-            echo "To rebuild, upload data/raw/imd2019_scores.csv first."
+            echo "To rebuild, upload data/raw/imd2025_scores.csv first."
           else
             echo "No IMD data and no real layer - generating synthetic sample."
             python pipeline/make_sample_data.py
           fi
 
       - name: Add house prices (optional)
-        if: ${{ inputs.include_prices && hashFiles('data/raw/imd2019_scores.csv') != '' }}
+        if: ${{ inputs.include_prices && hashFiles('data/raw/imd2025_scores.csv') != '' }}
         run: |
           echo "Adding house-price overlay from Land Registry + ONS lookup..."
           python pipeline/build_price_layer.py
+
+      - name: Add rail overlay (optional)
+        if: ${{ inputs.include_rail }}
+        run: |
+          echo "Building rail overlay: passenger lines (OSM/Overpass) + stations (CSV)..."
+          python pipeline/build_rail_layer.py
 
       - name: Install tippecanoe (for vector tiles)
         run: pip install tippecanoe
@@ -57,6 +67,42 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+
+          echo "=== Files on disk after build ==="
+          ls -lh web/data/ || true
+
+          echo "=== Is anything in web/data ignored by git? ==="
+          git check-ignore -v web/data/* || echo "(nothing in web/data is ignored — good)"
+
+          echo "=== Staging outputs ==="
           git add -f web/data/lsoa_imd.geojson web/data/lsoa.pmtiles web/data/breaks.json
-          git commit -m "Build data layer + tiles [automated]" || echo "No changes to commit"
-          git push
+          if [ -f web/data/rail.geojson ]; then
+            git add -f web/data/rail.geojson
+            echo "Staged rail.geojson ($(du -h web/data/rail.geojson | cut -f1))"
+          else
+            echo "No rail.geojson on disk (rail step was off or failed)."
+          fi
+
+          echo "=== What is staged? ==="
+          git status --short
+          git diff --cached --stat
+
+          echo "=== Commit + push (no-op safe) ==="
+          if git diff --cached --quiet; then
+            echo "Outputs identical to what's already committed — nothing to push."
+          else
+            git commit -m "Build data layer + tiles [automated]"
+            git push
+          fi
+
+  # Always (re)publish the site after a build, even when the data commit was a
+  # no-op. The data and deploy workflows are separate: deploy normally fires on
+  # 'push', but a no-op build produces no push event, so the new tiles would
+  # never go live. Calling deploy here guarantees publication every build.
+  deploy:
+    needs: build
+    uses: ./.github/workflows/deploy-pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

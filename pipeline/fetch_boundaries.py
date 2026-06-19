@@ -1,9 +1,10 @@
 """
 fetch_boundaries.py
 -------------------
-Downloads the 2011 LSOA boundaries (Super Generalised, 200m, clipped) straight
+Downloads the 2021 LSOA boundaries (Super Generalised, 200m, clipped) straight
 from the ONS Open Geography Portal's ArcGIS API. This runs inside the GitHub
-Action, so YOU never download or upload a boundary file.
+Action, so YOU never download or upload a boundary file. 2021 geography matches
+the IoD 2025 LSOA codes (the 2019 indices used 2011 LSOAs).
 
 The API returns features in pages, so we loop until we have them all.
 
@@ -24,11 +25,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 
-# Super Generalised Clipped (200m) 2011 LSOA boundaries — small, web-friendly.
+# Super Generalised Clipped (200m) 2021 LSOA boundaries — small, web-friendly.
+# IMD 2025 uses 2021 LSOAs (33,755 of them; ~6% changed vs 2011), so we must
+# use 2021 boundaries or the codes won't join to the scores.
 # This is the ONS ArcGIS Feature Server query endpoint (layer 0).
 BASE = (
     "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/"
-    "LSOA_2011_Boundaries_Super_Generalised_Clipped_BSC_EW_V4/FeatureServer/0/query"
+    "Lower_layer_Super_Output_Areas_December_2021_Boundaries_EW_BSC_V4/FeatureServer/0/query"
 )
 
 PAGE = 2000   # features per request (the service caps this; we page through)
@@ -37,7 +40,7 @@ PAGE = 2000   # features per request (the service caps this; we page through)
 def fetch_page(offset: int) -> dict:
     params = {
         "where": "1=1",
-        "outFields": "LSOA11CD",     # we only need the code; scores come from IMD
+        "outFields": "LSOA21CD",     # we only need the code; scores come from IMD
         "outSR": "4326",             # WGS84 lon/lat for web maps
         "f": "geojson",
         "resultOffset": str(offset),

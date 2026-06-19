@@ -10,52 +10,59 @@ England only for v1, as agreed.
 
 ## TIER 1 — needed for the core map (do these first)
 
-### 1. English Indices of Deprivation 2019 — "File 7: all ranks, deciles and scores"
+### 1. English Indices of Deprivation 2025 — "File 7" (CSV)
 
 - **What it is:** the 7 deprivation domains + overall IMD, scored for all
-  32,844 English LSOAs. This is the backbone of the whole app.
-- **Where:** gov.uk → search "English indices of deprivation 2019".
-  Download **"File 7: all ranks, deciles and scores for the indices of
-  deprivation, and population denominators"** (an .xlsx).
-  Page: https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019
-- **What to do:** open the .xlsx, find the sheet **"IoD2019 Scores"**, and
-  save it as CSV to:
+  33,755 English LSOAs (2021 geography). This is the backbone of the whole app.
+- **Where:** the official release page —
+  https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025
+  Download **"File 7: All ranks, scores, deciles and population denominators
+  for the Indices of Deprivation"** — it's already a **CSV** (no Excel-to-CSV
+  step needed, unlike 2019). Direct link (stable):
+  https://assets.publishing.service.gov.uk/media/691ded56d140bbbaa59a2a7d/File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv
+- **What to do:** save it as:
 
-      data/raw/imd2019_scores.csv
+      data/raw/imd2025_scores.csv
 
+  Upload via GitHub **Add file → Upload files** (a normal CSV uploads fine).
 - **Licence:** OGL v3. Attribute MHCLG.
-- The pipeline expects these exact column names (they are stable):
-  `LSOA code (2011)`, `Index of Multiple Deprivation (IMD) Score`,
-  `Income Score (rate)`, `Employment Score (rate)`,
-  `Education, Skills and Training Score`,
+- The pipeline expects these exact column names (verified against the 2025 file):
+  `LSOA code (2021)`, `LSOA name (2021)`,
+  `Local Authority District name (2024)`,
+  `Index of Multiple Deprivation (IMD) Score`, `Income Score (rate)`,
+  `Employment Score (rate)`, `Education, Skills and Training Score`,
   `Health Deprivation and Disability Score`, `Crime Score`,
   `Barriers to Housing and Services Score`, `Living Environment Score`.
 
-### 2. LSOA (2011) boundaries — generalised, clipped to coastline
+### 2. LSOA (2021) boundaries — super generalised, clipped to coastline
 
 - **What it is:** the polygon shapes for each LSOA, so scores can be drawn
-  on a map.
-- **Where:** ONS Open Geography Portal (geoportal.statistics.gov.uk).
-  Search **"Lower layer Super Output Areas (December 2011) Boundaries
-  Generalised Clipped (BGC) EW"**. Download as **GeoJSON**.
-  - Use the *generalised* (BGC or BSC) version, NOT the full-resolution one —
-    full-res is huge and will choke the browser in the prototype.
-- **What to do:** save as:
+  on a map. **Must be 2021 LSOAs** to match IoD 2025 codes.
+- **Where:** fetched automatically by `fetch_boundaries.py` from the ONS Open
+  Geography Portal (the *Lower layer Super Output Areas (December 2021)
+  Boundaries EW BSC V4*, Super Generalised 200m). You normally don't download
+  this by hand — the build does it.
+- **What it produces:**
 
       data/raw/lsoa_boundaries.geojson
 
 - **Licence:** OGL v3. Contains OS data © Crown copyright.
-- The code column is usually `LSOA11CD`; the pipeline auto-detects it if not.
+- The code column is `LSOA21CD`; the pipeline auto-detects it if it differs.
 
-> **Borough/district names** are added automatically. The build fetches an ONS
-> lookup that maps each LSOA to its name and Local Authority District (e.g.
-> "Southwark"), so clicking an area on the map shows where it is. No extra
-> download needed.
+> **Borough/district names** come straight from File 7 now (it includes
+> `Local Authority District name (2024)`), so clicking an area shows where it
+> is. The old ONS name-lookup web call has been removed — one less thing to
+> break.
 
-> ⚠ IMD 2019 uses **2011** LSOA boundaries. Census 2021 introduced **2021**
-> LSOAs (some changed). For v1, stay on 2011 boundaries to match IMD. When you
-> add Census 2021 data later, you'll need the 2011↔2021 lookup (also on the
-> Open Geography Portal) to reconcile them.
+> ⚠ **Geography change.** IoD 2025 uses **2021** LSOAs (33,755; ~6% of
+> boundaries changed vs 2011, and LADs dropped from 317 to 296). The whole
+> pipeline is now on 2021 geography. The 2025 methodology also changed, so
+> 2025 scores are **not directly comparable** to 2019 — treat trend
+> comparisons with care.
+
+> ⚠ **House prices are on hold for 2025.** The price layer used a
+> postcode→2011-LSOA lookup; on 2021 geography that lookup must be refreshed
+> before prices can be re-enabled. Leave `include_prices` off until then.
 
 **After Tier 1:** run `python pipeline/build_imd_layer.py`, then open the web
 app. You'll have a real, national, reweightable deprivation map.
