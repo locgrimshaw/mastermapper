@@ -15,28 +15,48 @@
 
 const DOMAINS = [
   { key: "income",      name: "Income",
-    about: "Proportion of people on low income — those receiving income-related benefits and tax credits. Includes both out-of-work and in-work low earners." },
+    about: "Proportion of people on low income — those receiving income-related benefits and tax credits. Includes both out-of-work and in-work low earners.",
+    source: "English Indices of Deprivation 2019, Income domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
   { key: "employment",  name: "Employment",
-    about: "Involuntary exclusion from work among the working-age population: claimants of jobseeker's, incapacity, and carer's benefits." },
+    about: "Involuntary exclusion from work among the working-age population: claimants of jobseeker's, incapacity, and carer's benefits.",
+    source: "English Indices of Deprivation 2019, Employment domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
   { key: "education",   name: "Education & skills",
-    about: "Lack of attainment and skills, combining children/young people's school results and the proportion of adults with low or no qualifications." },
+    about: "Lack of attainment and skills, combining children/young people's school results and the proportion of adults with low or no qualifications.",
+    source: "English Indices of Deprivation 2019, Education domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
   { key: "health",      name: "Health & disability",
-    about: "Risk of premature death and impairment to quality of life through poor physical or mental health. Measures morbidity and disability, not health-care access." },
+    about: "Risk of premature death and impairment to quality of life through poor physical or mental health. Measures morbidity and disability, not health-care access.",
+    source: "English Indices of Deprivation 2019, Health domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
   { key: "crime",       name: "Crime",
-    about: "Risk of personal and material victimisation, derived from recorded rates of violence, burglary, theft, and criminal damage." },
+    about: "Risk of personal and material victimisation, derived from recorded rates of violence, burglary, theft, and criminal damage.",
+    source: "English Indices of Deprivation 2019, Crime domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
   { key: "housing",     name: "Barriers to housing",
-    about: "Physical and financial accessibility of housing and key local services — distance to a GP, shop, school, plus overcrowding, homelessness, and affordability." },
+    about: "Physical and financial accessibility of housing and key local services — distance to a GP, shop, school, plus overcrowding, homelessness, and affordability.",
+    source: "English Indices of Deprivation 2019, Barriers to Housing & Services (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
   { key: "environment", name: "Living environment",
-    about: "Quality of the local environment: housing condition (indoor) and air quality plus road-traffic accident risk (outdoor)." },
+    about: "Quality of the local environment: housing condition (indoor) and air quality plus road-traffic accident risk (outdoor).",
+    source: "English Indices of Deprivation 2019, Living Environment domain (MHCLG)",
+    sourceUrl: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" },
 ];
 
-// Sequential ramp, light -> dark = less -> more deprived.
-// Slightly wider perceptual spread than before so adjacent classes read apart.
-const RAMP = ["#f3efe6", "#eccfa0", "#e0a063", "#cf6f3a", "#a84724", "#7a2d1c"];
-
-// A separate cool ramp for the house-price overlay so it reads as a different
-// dataset, not a re-colour of deprivation. Light -> dark = cheaper -> dearer.
+// ---- Colour ramps ----
+// "Single" = the original monochrome sequential ramps (light -> dark = worse).
+// "Spectrum" = a diverging blue(good) -> red(bad) scale that's more striking.
+// The user toggles between them from the legend.
+const RAMP_SINGLE = ["#f3efe6", "#eccfa0", "#e0a063", "#cf6f3a", "#a84724", "#7a2d1c"];
+const RAMP_SPECTRUM = ["#2c7bb6", "#71b2c9", "#c5e3d8", "#fdc980", "#ec6a43", "#d7191c"];
+// Price keeps its own cool sequential ramp regardless of mode.
 const PRICE_RAMP = ["#e8eef2", "#b9cfdc", "#89b0c6", "#5a8fb0", "#356f97", "#1c4f72"];
+
+// RAMP is resolved dynamically from the current colour mode.
+function RAMP() {
+  return state.colourMode === "spectrum" ? RAMP_SPECTRUM : RAMP_SINGLE;
+}
 
 const state = {
   weights: Object.fromEntries(DOMAINS.map(d => [d.key, 1])),
@@ -47,11 +67,14 @@ const state = {
   selectedCode: null,    // LSOA pinned by click-to-inspect
   layer: "deprivation",  // "deprivation" | "price"
   hasPrice: false,       // whether the loaded data includes price fields
+  colourMode: "single",  // "single" | "spectrum"
+  fillOpacity: 0.78,     // choropleth opacity (slider fades to basemap)
+  theme: "dark",         // "dark" | "light"
 };
 
 // The ramp currently driving the choropleth.
 function activeRamp() {
-  return state.layer === "price" ? PRICE_RAMP : RAMP;
+  return state.layer === "price" ? PRICE_RAMP : RAMP();
 }
 
 // ---- Scoring engine -------------------------------------------------------
@@ -183,7 +206,7 @@ async function loadData() {
     "source-layer": SOURCE_LAYER,
     paint: {
       "fill-color": fillColorExpression(),
-      "fill-opacity": 0.78,
+      "fill-opacity": state.fillOpacity,
     },
   });
 
@@ -268,7 +291,7 @@ function buildSliders() {
                  aria-label="Include ${d.name} in combined score" checked />
           ${d.name}<button class="info" type="button"
               aria-label="What ${d.name} covers" tabindex="0">i<span
-              class="tip" role="tooltip">${d.about}</span></button></span>
+              class="tip" role="tooltip">${d.about}<span class="tip-source">Source: <a href="${d.sourceUrl}" target="_blank" rel="noopener">${d.source}</a></span></span></button></span>
         <span class="row-controls">
           <button class="solo" id="solo-${d.key}" type="button"
                   aria-label="Show only ${d.name} on the map" title="Show only this on the map">solo</button>
@@ -447,12 +470,13 @@ function rampColor(v) {
   // Colour a 0-100 value by the current breaks (matches the map). Uses the
   // combined-score breaks regardless of solo, since the report bars are always
   // per-domain percentiles on the same 0-100 scale.
+  const ramp = RAMP();
   const breaks = state.breaksData?.combined_equal || [];
-  if (!breaks.length) return RAMP[0];
+  if (!breaks.length) return ramp[0];
   for (let i = 0; i < breaks.length; i++) {
-    if (v < breaks[i]) return RAMP[i];
+    if (v < breaks[i]) return ramp[i];
   }
-  return RAMP[RAMP.length - 1];
+  return ramp[ramp.length - 1];
 }
 
 // ---- Click to inspect a single LSOA ---------------------------------------
@@ -587,12 +611,13 @@ function buildLegend() {
   const el = document.getElementById("legend");
   const ramp = activeRamp();
   const swatches = ramp.map(c => `<span style="background:${c}"></span>`).join("");
+  let header;
   if (state.layer === "price") {
     const band = state.breaksData?.price_band;
     const note = band
       ? `Land Registry 2024 · ${priceFmt(band[0])}–${priceFmt(band[1])} typical band`
       : `Land Registry 2024`;
-    el.innerHTML = `
+    header = `
       <div class="title">Median sale price</div>
       <div class="ramp">${swatches}</div>
       <div class="scale"><span>lower</span><span>higher</span></div>
@@ -605,15 +630,68 @@ function buildLegend() {
       ? DOMAINS.find(d => d.key === state.solo).name
       : null;
     const title = soloName ? `${soloName} only` : "Combined score";
-    const note = soloName
-      ? `Single domain · fixed classes`
-      : `Fixed classes · breaks ${lo}–${hi}`;
-    el.innerHTML = `
+    const note = soloName ? `Single domain · fixed classes`
+                          : `Fixed classes · breaks ${lo}–${hi}`;
+    header = `
       <div class="title">${title}</div>
       <div class="ramp">${swatches}</div>
       <div class="scale"><span>less deprived</span><span>more deprived</span></div>
       <div class="legend-note">${note}</div>`;
   }
+
+  // Controls: colour mode, fade-to-map opacity, light/dark theme.
+  const controls = `
+    <div class="legend-controls">
+      <div class="lc-row">
+        <span class="lc-label">Colour</span>
+        <div class="seg-mini">
+          <button class="${state.colourMode === "single" ? "on" : ""}" data-cmode="single">Single</button>
+          <button class="${state.colourMode === "spectrum" ? "on" : ""}" data-cmode="spectrum">Spectrum</button>
+        </div>
+      </div>
+      <div class="lc-row">
+        <span class="lc-label">Map fade</span>
+        <input type="range" id="opacity-slider" min="0.1" max="1" step="0.05"
+               value="${state.fillOpacity}" aria-label="Choropleth opacity" />
+      </div>
+      <div class="lc-row">
+        <span class="lc-label">Theme</span>
+        <div class="seg-mini">
+          <button class="${state.theme === "dark" ? "on" : ""}" data-theme="dark">Dark</button>
+          <button class="${state.theme === "light" ? "on" : ""}" data-theme="light">Light</button>
+        </div>
+      </div>
+    </div>`;
+
+  el.innerHTML = header + controls;
+
+  el.querySelectorAll("[data-cmode]").forEach(b =>
+    b.addEventListener("click", () => setColourMode(b.dataset.cmode)));
+  el.querySelectorAll("[data-theme]").forEach(b =>
+    b.addEventListener("click", () => setTheme(b.dataset.theme)));
+  el.querySelector("#opacity-slider").addEventListener("input", (e) => {
+    state.fillOpacity = parseFloat(e.target.value);
+    map.setPaintProperty("lsoa-fill", "fill-opacity", state.fillOpacity);
+  });
+}
+
+function setColourMode(mode) {
+  state.colourMode = mode;
+  map.setPaintProperty("lsoa-fill", "fill-color", fillColorExpression());
+  buildLegend();
+  if (state.selectedCode) inspectLSOA(state.selectedCode);
+  if (lastDrawnPolygon) buildReport(lastDrawnPolygon);
+}
+
+function setTheme(theme) {
+  state.theme = theme;
+  document.body.classList.toggle("light", theme === "light");
+  // Swap the basemap tiles to match the theme.
+  const url = theme === "light"
+    ? "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"
+    : "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png";
+  if (map.getSource("carto")) map.getSource("carto").setTiles([url]);
+  buildLegend();
 }
 
 function priceFmt(v) {

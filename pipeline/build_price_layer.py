@@ -104,6 +104,9 @@ def load_postcode_lsoa():
         req = urllib.request.Request(url, headers={"User-Agent": "welfare-mapper"})
         with urllib.request.urlopen(req, timeout=300) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        if "error" in data:
+            print(f"  postcode lookup service error: {data['error']}")
+            break
         feats = data.get("features", [])
         if not feats:
             break
@@ -129,8 +132,13 @@ def main() -> int:
         return 1
 
     pcd_lsoa = load_postcode_lsoa()
+    # Fast exit BEFORE the slow 900k-row download if we have no usable lookup.
     if len(pcd_lsoa) < 100000:
-        print("  WARNING: postcode lookup looks short; results may be partial.")
+        print("  Postcode->LSOA lookup unavailable or gated -- skipping prices.")
+        print("  (The map and all other features are unaffected.)")
+        print("  Fix later: commit a postcode->LSOA CSV into data/raw/ so the")
+        print("  build doesn't depend on the gated ONS API.")
+        return 0
 
     # Gather prices per LSOA.
     prices_by_lsoa = defaultdict(list)
