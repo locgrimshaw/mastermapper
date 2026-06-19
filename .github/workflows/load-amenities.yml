@@ -1,0 +1,52 @@
+name: Load amenities into Supabase
+
+# Runs the amenity loaders (GPs first) and writes the results into your Supabase
+# database. You trigger this with a button in the GitHub "Actions" tab — no
+# command line needed. It reads your Supabase keys from repository Secrets, so
+# they never appear in your code.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "Which amenity dataset to load"
+        type: choice
+        options:
+          - gp
+        default: gp
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Load the chosen dataset into Supabase
+        env:
+          # These come from your repository Secrets (Settings > Secrets and
+          # variables > Actions). The service key is write-access and secret.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing secrets. Add SUPABASE_URL and SUPABASE_SERVICE_KEY"
+            echo "::error::under Settings > Secrets and variables > Actions, then re-run."
+            exit 1
+          fi
+          case "${{ inputs.dataset }}" in
+            gp)
+              echo "Loading GP practices..."
+              python supabase/loaders/load_gps.py
+              ;;
+            *)
+              echo "Unknown dataset: ${{ inputs.dataset }}"
+              exit 1
+              ;;
+          esac
