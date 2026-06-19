@@ -457,7 +457,7 @@ function rampColor(v) {
 
 // ---- Click to inspect a single LSOA ---------------------------------------
 
-function inspectLSOA(propsOrCode) {
+function inspectLSOA(propsOrCode, point) {
   // Accept either a properties object (from a fresh click) or, on refresh,
   // the stored code -> reuse the cached properties.
   let p;
@@ -471,6 +471,7 @@ function inspectLSOA(propsOrCode) {
   const code = p.lsoa_code;
   state.selectedCode = code;
   state.selectedProps = p;
+  if (point) state.selectedPoint = point;   // remember where it was clicked
   map.setFilter("lsoa-selected", ["==", "lsoa_code", code]);
 
   const combined = combinedScore(p, state.weights);
@@ -513,11 +514,33 @@ function inspectLSOA(propsOrCode) {
     </p>`;
   panel.classList.add("open");
   panel.querySelector(".fd-close").addEventListener("click", closeDetail);
+
+  // Position the panel near where the user clicked, relative to the map area,
+  // clamped so it never spills off the visible map.
+  const pt = state.selectedPoint;
+  if (pt) {
+    const mapRect = document.getElementById("map").getBoundingClientRect();
+    const appRect = document.getElementById("app").getBoundingClientRect();
+    // Click point is in map-canvas pixels; convert to offset within #app
+    // (the panel's positioning ancestor) by adding the map's left offset.
+    const mapLeftInApp = mapRect.left - appRect.left;
+    let x = mapLeftInApp + pt.x + 16;        // a little right of the cursor
+    let y = pt.y - 20;                        // a little above
+    const pw = 290, ph = panel.offsetHeight || 360;
+    const maxX = appRect.width - pw - 12;
+    const maxY = appRect.height - ph - 12;
+    if (x > maxX) x = mapLeftInApp + pt.x - pw - 16;  // flip to left of cursor
+    x = Math.max(mapLeftInApp + 12, Math.min(x, maxX));
+    y = Math.max(12, Math.min(y, maxY));
+    panel.style.left = `${x}px`;
+    panel.style.top = `${y}px`;
+  }
 }
 
 function closeDetail() {
   state.selectedCode = null;
   state.selectedProps = null;
+  state.selectedPoint = null;
   map.setFilter("lsoa-selected", ["==", "lsoa_code", ""]);
   const panel = document.getElementById("floating-detail");
   panel.classList.remove("open");
@@ -546,7 +569,7 @@ function wireInteractions() {
 
   // Click a single area to pin its full breakdown.
   map.on("click", "lsoa-fill", (e) => {
-    inspectLSOA(e.features[0].properties);
+    inspectLSOA(e.features[0].properties, e.point);
   });
 
   map.on("draw.create", onDrawChange);
