@@ -306,6 +306,10 @@ async function loadData() {
   map.addSource("lsoa", {
     type: "vector",
     url: tilesUrl,
+    // Tiles are built to z14; telling MapLibre the source maxzoom lets it
+    // "overzoom" (reuse the z14 tile) smoothly when the user zooms in further
+    // for catchment work, instead of the choropleth disappearing past z14.
+    maxzoom: 14,
   });
 
   map.addLayer({
@@ -335,8 +339,8 @@ async function loadData() {
     "source-layer": SOURCE_LAYER,
     paint: {
       "line-color": LINE_COLOR(),
-      "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0, 11, 0.4, 14, 0.7],
-      "line-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0, 11, 0.5, 14, 0.8],
+      "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0, 11, 0.4, 14, 0.7, 17, 1.2],
+      "line-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0, 11, 0.5, 14, 0.8, 17, 0.9],
     },
   });
 

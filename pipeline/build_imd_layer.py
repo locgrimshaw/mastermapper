@@ -149,16 +149,17 @@ def main() -> int:
     n_named = merged["lad_name"].notna().sum()
     print(f"  district names present on {n_named}/{len(merged)} LSOAs")
 
-    # Simplify geometry and round coordinates to keep the file small enough to
-    # serve as plain GeoJSON. Two levers, both safe at LSOA-on-a-national-map
-    # scale where you never zoom in far enough to see the detail we're dropping:
+    # Keep close-up detail. Tiles (tippecanoe) already simplify per zoom level —
+    # they keep full detail at the deepest zoom and simplify only the zoomed-out
+    # tiles — so we must NOT heavily pre-simplify here or that detail is gone
+    # before tiling. We apply only a tiny 8m clean-up (removes near-duplicate
+    # vertices that bloat the file without visible benefit) and keep 5 decimal
+    # places (~1m) so streets-level zoom stays crisp.
     #   SIMPLIFY_M  — drop vertices closer together than this many metres
     #   COORD_DP    — decimal places kept in the output lon/lat
-    # 50m tolerance + 4dp (~11m) is invisible at the zoom levels planners use
-    # but typically shrinks the file several-fold versus 20m + 5dp.
-    SIMPLIFY_M = 50
-    COORD_DP = 4
-    print(f"Simplifying geometry (tolerance {SIMPLIFY_M}m, {COORD_DP}dp)...")
+    SIMPLIFY_M = 8
+    COORD_DP = 5
+    print(f"Light geometry clean-up (tolerance {SIMPLIFY_M}m, {COORD_DP}dp)...")
     merged = merged.to_crs(27700)
     merged["geometry"] = merged["geometry"].simplify(SIMPLIFY_M, preserve_topology=True)
     merged = merged.to_crs(4326)

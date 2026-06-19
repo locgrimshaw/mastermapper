@@ -178,16 +178,20 @@ def main() -> int:
         "-f",                       # overwrite if exists
         "-L", "lsoa:" + str(lsoa_trimmed),   # trimmed choropleth layer
         "-Z", "5",                  # min zoom (whole-of-England view)
-        "-z", "13",                 # max zoom (a touch deeper so stations read)
+        "-z", "14",                 # max zoom — deeper so close-up stays crisp
         # --- Border integrity (fixes the "fragmented / gappy" look) ----------
         # By default tippecanoe simplifies each polygon independently, so a
         # border shared by two LSOAs gets simplified twice and the two edges
         # drift apart, leaving hairline slivers that show the basemap through.
-        # These flags keep adjacent borders stitched together:
-        "--detect-shared-borders",        # simplify a shared edge identically
+        # The fix has three parts:
+        #   1. Don't simplify the deepest zoom at all, so at full zoom the
+        #      polygons are exactly the source geometry (no drift => no gaps).
+        #   2. Keep shared borders stitched at the zoom levels we do simplify.
+        #   3. A gentle simplification factor for the zoomed-out tiles only.
         "--no-simplification-of-shared-nodes",
-        "--simplification", "4",          # gentler simplification overall
-        "--buffer", "8",                  # wider tile buffer = fewer edge gaps
+        "--simplification", "2",          # gentler than before (was 4)
+        "--buffer", "16",                 # wider tile buffer = fewer edge gaps
+        "--full-detail", "12",            # higher per-tile coordinate resolution
         # ---------------------------------------------------------------------
         "--coalesce-densest-as-needed",  # keep tiles small where dense (cities)
         "--extend-zooms-if-still-dropping",

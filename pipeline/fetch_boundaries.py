@@ -25,13 +25,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 
-# Super Generalised Clipped (200m) 2021 LSOA boundaries — small, web-friendly.
-# IMD 2025 uses 2021 LSOAs (33,755 of them; ~6% changed vs 2011), so we must
-# use 2021 boundaries or the codes won't join to the scores.
-# This is the ONS ArcGIS Feature Server query endpoint (layer 0).
+# Generalised Clipped (20m) 2021 LSOA boundaries — 10x finer than the old
+# "Super Generalised" (200m) product, so zones stay crisp when you zoom in to
+# street level for catchment work. Still clipped to the coastline and small
+# enough to serve. IMD 2025 uses 2021 LSOAs, so these codes (LSOA21CD) join to
+# the scores. This is the ONS ArcGIS Feature Server query endpoint (layer 0).
 BASE = (
     "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/"
-    "Lower_layer_Super_Output_Areas_December_2021_Boundaries_EW_BSC_V4/FeatureServer/0/query"
+    "LSOA_Dec_2021_Boundaries_Generalised_Clipped_EW_BGC_V2/FeatureServer/0/query"
 )
 
 PAGE = 2000   # features per request (the service caps this; we page through)
@@ -45,7 +46,7 @@ def fetch_page(offset: int) -> dict:
         "f": "geojson",
         "resultOffset": str(offset),
         "resultRecordCount": str(PAGE),
-        "geometryPrecision": "5",    # trim coordinate decimals -> smaller file
+        "geometryPrecision": "6",    # ~0.1m; keep finer detail now we want close-up
     }
     url = BASE + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": "welfare-mapper"})
