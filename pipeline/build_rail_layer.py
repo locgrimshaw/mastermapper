@@ -1,35 +1,45 @@
 """
 build_rail_layer.py
 -------------------
-Builds the optional RAIL overlay: passenger railway LINES + STATIONS for
-England, as a single GeoJSON the tile step bakes into the map's PMTiles.
+Builds the optional RAIL overlay: passenger LINES + STOPS for England across
+four modes -- heavy rail, subway/metro, light rail, and tram -- as a single
+GeoJSON the tile step bakes into the map's PMTiles.
 
-This is a toggleable overlay that sits ON TOP of the deprivation choropleth —
+This is a toggleable overlay that sits ON TOP of the deprivation choropleth --
 it never touches the LSOA scores, so it's safe to (re)build independently.
 
-Two inputs, two different best sources (see docs/DATASETS.md):
+Every feature carries a `mode` property so the frontend can split them into
+separately-coloured, separately-toggleable layers:
+    mode = "rail" | "subway" | "light_rail" | "tram"
+and a `kind` of "line" or "stop".
 
-  LINES    OpenStreetMap, fetched live from the Overpass API. We ask only for
-           PASSENGER mainline/branch track in England and skip freight-only,
-           industrial, sidings/yards, and disused/abandoned/under-construction
-           lines. railway=rail covers BOTH passenger and freight, so the
-           usage=main|branch tag is what actually selects the passenger
-           network. Trams/subways/light-rail are separate railway=* values and
-           are excluded automatically.
+Sources (see docs/DATASETS.md):
 
-  STATIONS A small committed CSV at data/raw/uk_stations.csv (same trick as the
-           IMD CSV — drag-and-drop won't upload dotfiles, but a normal CSV is
-           fine). Expected header (davwheat/uk-railway-stations, ODbL):
-               stationName,lat,long,crsCode,iataAirportCode,constituentCountry
-           If the CSV is absent we still emit the lines and just skip stations,
-           so the overlay degrades gracefully (like prices do).
+  LINES   OpenStreetMap via the Overpass API, per mode:
+            rail        railway=rail with usage=main|branch (passenger network;
+                        railway=rail also covers freight, so usage selects it),
+                        excluding sidings/yards (service=*).
+            subway      railway=subway
+            light_rail  railway=light_rail
+            tram        railway=tram
+          Disused/abandoned/construction/proposed track carries lifecycle-
+          prefixed keys and is skipped automatically.
+
+  STOPS   Heavy-rail STOPS come from a committed CSV (authoritative, includes
+          CRS codes): data/raw/uk_stations.csv. Subway / light-rail / tram
+          stops come from OSM (the CSV is National-Rail only):
+            subway      railway=station + station=subway  (also railway=halt)
+            light_rail  railway=station|halt + station=light_rail
+            tram        railway=tram_stop
+          If the CSV is absent we still emit OSM stops + all lines, so the
+          overlay degrades gracefully (like house prices do).
 
 Output:
-  web/data/rail.geojson   ->  consumed by build_tiles.py (layers: rail_line, rail_station)
+  web/data/rail.geojson  ->  build_tiles.py emits per-mode tile layers.
 
-Licensing: OSM + Trainline data are BOTH ODbL (share-alike + attribution),
-which is stricter than the OGL data used elsewhere. The frontend footer must
-credit "© OpenStreetMap contributors" and Trainline. See updateDataSourceNote().
+Licensing: OSM + the Trainline-derived CSV are BOTH ODbL (share-alike +
+attribution), stricter than the OGL data used elsewhere. The footer credits
+"OpenStreetMap contributors & Trainline (ODbL)" when the overlay is present.
 
 Run (or let the Action run it):
   python pipeline/build_rail_layer.py
@@ -50,8 +60,8 @@ OUT = ROOT / "web" / "data" / "rail.geojson"
 STATIONS_CSV = RAW / "uk_stations.csv"
 
 # England bounding box (lon/lat). Overpass takes (south,west,north,east).
-# Generous box; the usage filter does the real work and a few border ways
-# spilling into Wales/Scotland are harmless on the map.
+# Generous box; mode filters do the real work and a few border ways spilling
+# into Wales/Scotland are harmless on the map.
 ENGLAND_BBOX = (49.8, -6.5, 55.9, 1.9)
 
 OVERPASS_ENDPOINTS = [
@@ -59,26 +69,53 @@ OVERPASS_ENDPOINTS = [
     "https://overpass.kumi.systems/api/interpreter",  # fallback mirror
 ]
 
-# Overpass QL. We pull railway=rail ways whose usage is main or branch (the
-# passenger network), explicitly NOT service ways (sidings/spurs/yards) and
-# NOT lifecycle-prefixed (disused:/abandoned:/construction:/proposed:) — those
-# carry their own keys, so a plain railway=rail + usage filter already skips
-# them. out geom gives us inline geometry (no second 'recurse' round-trip).
+
 def overpass_query() -> str:
+    """One combined query for all four modes' lines + the non-heavy-rail stops.
+    Heavy-rail stops come from the CSV, so we don't fetch railway=station for
+    plain rail here (avoids dragging in every mainline station unnamed)."""
     s, w, n, e = ENGLAND_BBOX
-    bbox = f"{s},{w},{n},{e}"
+    b = f"{s},{w},{n},{e}"
     return f"""
-[out:json][timeout:180];
+[out:json][timeout:240];
 (
-  way["railway"="rail"]["usage"="main"]["service"!~"."]({bbox});
-  way["railway"="rail"]["usage"="branch"]["service"!~"."]({bbox});
+  // ---- lines, per mode ----
+  way["railway"="rail"]["usage"="main"]["service"!~"."]({b});
+  way["railway"="rail"]["usage"="branch"]["service"!~"."]({b});
+  way["railway"="subway"]["service"!~"."]({b});
+  way["railway"="light_rail"]["service"!~"."]({b});
+  way["railway"="tram"]["service"!~"."]({b});
+  // ---- stops (non-heavy-rail; heavy rail comes from CSV) ----
+  node["railway"~"^(station|halt)$"]["station"="subway"]({b});
+  node["railway"~"^(station|halt)$"]["station"="light_rail"]({b});
+  node["railway"="tram_stop"]({b});
 );
 out geom;
 """.strip()
 
 
-def fetch_lines() -> list:
-    """Return a list of GeoJSON LineString features for passenger track."""
+def _mode_for_line(tags: dict) -> str:
+    rw = tags.get("railway", "")
+    if rw == "rail":
+        return "rail"
+    if rw in ("subway", "light_rail", "tram"):
+        return rw
+    return ""
+
+
+def _mode_for_stop(tags: dict) -> str:
+    if tags.get("railway") == "tram_stop":
+        return "tram"
+    st = tags.get("station", "")
+    if st == "subway":
+        return "subway"
+    if st == "light_rail":
+        return "light_rail"
+    return ""
+
+
+def fetch_osm() -> tuple:
+    """Return (lines, stops) GeoJSON features from OSM, or raise on failure."""
     query = overpass_query()
     data = None
     last_err = None
@@ -90,7 +127,7 @@ def fetch_lines() -> list:
                 endpoint, data=body,
                 headers={"User-Agent": "mastermapper-rail/1.0"},
             )
-            with urllib.request.urlopen(req, timeout=200) as resp:
+            with urllib.request.urlopen(req, timeout=260) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             break
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
@@ -100,49 +137,73 @@ def fetch_lines() -> list:
     if data is None:
         raise RuntimeError(f"All Overpass endpoints failed: {last_err}")
 
-    feats = []
+    lines, stops = [], []
     for el in data.get("elements", []):
-        if el.get("type") != "way":
-            continue
-        geom = el.get("geometry")
-        if not geom or len(geom) < 2:
-            continue
-        coords = [[round(p["lon"], 5), round(p["lat"], 5)] for p in geom]
         tags = el.get("tags", {})
-        feats.append({
-            "type": "Feature",
-            "geometry": {"type": "LineString", "coordinates": coords},
-            "properties": {
-                "kind": "line",
-                "name": tags.get("name", ""),
-                "usage": tags.get("usage", ""),
-                "operator": tags.get("operator", ""),
-                "electrified": tags.get("electrified", "no"),
-            },
-        })
-    print(f"  got {len(feats)} passenger line segments")
-    return feats
+        etype = el.get("type")
+        if etype == "way":
+            geom = el.get("geometry")
+            if not geom or len(geom) < 2:
+                continue
+            mode = _mode_for_line(tags)
+            if not mode:
+                continue
+            coords = [[round(p["lon"], 5), round(p["lat"], 5)] for p in geom]
+            lines.append({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": coords},
+                "properties": {
+                    "kind": "line",
+                    "mode": mode,
+                    "name": tags.get("name", ""),
+                    "operator": tags.get("operator", ""),
+                },
+            })
+        elif etype == "node":
+            mode = _mode_for_stop(tags)
+            if not mode:
+                continue
+            lon, lat = el.get("lon"), el.get("lat")
+            if lon is None or lat is None:
+                continue
+            stops.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [round(lon, 5), round(lat, 5)]},
+                "properties": {
+                    "kind": "stop",
+                    "mode": mode,
+                    "name": tags.get("name", ""),
+                    "operator": tags.get("operator", ""),
+                    "network": tags.get("network", ""),
+                },
+            })
+    by_mode = {}
+    for f in lines:
+        by_mode[f["properties"]["mode"]] = by_mode.get(f["properties"]["mode"], 0) + 1
+    print(f"  OSM lines: {len(lines)} {dict(by_mode)}")
+    print(f"  OSM non-rail stops: {len(stops)}")
+    return lines, stops
 
 
-def load_stations() -> list:
-    """Return GeoJSON Point features for England stations, or [] if no CSV."""
+def load_rail_stations() -> list:
+    """Heavy-rail STOPS from the committed CSV, tagged mode='rail'."""
     if not STATIONS_CSV.exists():
-        print(f"No {STATIONS_CSV.name} found — skipping stations "
-              "(overlay will show lines only). See docs/DATASETS.md.")
+        print(f"No {STATIONS_CSV.name} found -- heavy-rail stops skipped "
+              "(other modes still build). See docs/DATASETS.md.")
         return []
 
     feats = []
     with STATIONS_CSV.open(newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
-        # Be tolerant of column-name variants between station-CSV sources.
+
         def col(row, *names):
             for nm in names:
                 if nm in row and row[nm] not in (None, ""):
                     return row[nm]
             return None
+
         for row in reader:
             country = col(row, "constituentCountry", "country") or ""
-            # Keep England only when the column exists; if absent, keep all.
             if country and country.strip().lower() != "england":
                 continue
             lat = col(row, "lat", "latitude")
@@ -158,41 +219,56 @@ def load_stations() -> list:
             feats.append({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [round(lng_f, 5), round(lat_f, 5)]},
-                "properties": {"kind": "station", "name": name, "crs": crs},
+                "properties": {"kind": "stop", "mode": "rail", "name": name, "crs": crs},
             })
-    print(f"  loaded {len(feats)} England stations from {STATIONS_CSV.name}")
+    print(f"  loaded {len(feats)} England heavy-rail stations from {STATIONS_CSV.name}")
     return feats
 
 
 def main() -> int:
-    print("Building rail overlay (passenger lines + stations)...")
+    print("Building rail overlay (lines + stops across rail/subway/light_rail/tram)...")
     try:
-        lines = fetch_lines()
+        osm_lines, osm_stops = fetch_osm()
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
-        print("Rail lines unavailable right now. Skipping cleanly so the rest "
-              "of the build still succeeds (same policy as house prices).")
-        lines = []
+        print("OSM unavailable right now. Skipping cleanly so the rest of the "
+              "build still succeeds (same policy as house prices).")
+        osm_lines, osm_stops = [], []
 
-    stations = load_stations()
+    rail_stops = load_rail_stations()
+    stops = rail_stops + osm_stops
+    lines = osm_lines
 
-    if not lines and not stations:
-        print("Nothing to write (no lines AND no stations). Not creating rail.geojson.")
+    if not lines and not stops:
+        print("Nothing to write (no lines AND no stops). Not creating rail.geojson.")
         return 0
 
+    # Per-mode counts for the frontend (drives which toggles to show).
+    def counts(feats, kind):
+        out = {}
+        for f in feats:
+            if f["properties"]["kind"] != kind:
+                continue
+            m = f["properties"]["mode"]
+            out[m] = out.get(m, 0) + 1
+        return out
+
+    all_feats = lines + stops
     fc = {
         "type": "FeatureCollection",
         "metadata": {
-            "lines": len(lines),
-            "stations": len(stations),
-            "attribution": "© OpenStreetMap contributors (lines, ODbL); "
-                           "station locations © Trainline / contributors (ODbL)",
+            "line_counts": counts(all_feats, "line"),
+            "stop_counts": counts(all_feats, "stop"),
+            "attribution": "OpenStreetMap contributors (ODbL); heavy-rail "
+                           "station locations via Trainline (ODbL)",
         },
-        "features": lines + stations,
+        "features": all_feats,
     }
     OUT.write_text(json.dumps(fc))
     size_kb = OUT.stat().st_size / 1024
-    print(f"Wrote {OUT}  ({size_kb:.0f} KB · {len(lines)} lines, {len(stations)} stations)")
+    print(f"Wrote {OUT}  ({size_kb:.0f} KB)")
+    print(f"  lines by mode:  {counts(all_feats, 'line')}")
+    print(f"  stops by mode:  {counts(all_feats, 'stop')}")
     return 0
 
 

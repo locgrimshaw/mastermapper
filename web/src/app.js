@@ -68,18 +68,34 @@ function SELECT_COLOR() {
   return state.theme === "light" ? "#1c2533" : "#ffffff";
 }
 
-// --- Rail overlay colours (theme-aware) ------------------------------------
-// Lines use a desaturated near-neutral so they read over both the blue and
-// red ends of the choropleth without being mistaken for data. Stations are a
-// crisp contrasting dot.
-function RAIL_LINE_COLOR() {
-  return state.theme === "light" ? "#2b2f38" : "#f4f6fb";
+// --- Rail overlay: modes, colours, labels ----------------------------------
+// Four transit modes, each its own colour so they're distinguishable on the
+// map and in the toggle list. Colours are picked to read over both ends of the
+// choropleth (the blue/red spectrum) without being mistaken for data values.
+// Order here is the order shown in the toggle panel.
+const RAIL_MODES = [
+  { key: "rail",       label: "Heavy rail",  color: "#1b1b1b", glyph: "railway" },
+  { key: "subway",     label: "Subway / metro", color: "#0a5cd1", glyph: "subway" },
+  { key: "light_rail", label: "Light rail",  color: "#15897a", glyph: "light_rail" },
+  { key: "tram",       label: "Tram",        color: "#c44d12", glyph: "tram" },
+];
+
+function railMode(key) {
+  return RAIL_MODES.find(m => m.key === key);
 }
-function RAIL_STATION_FILL() {
-  return state.theme === "light" ? "#111418" : "#ffffff";
+
+// A MapLibre 'match' expression mapping the per-feature `mode` attribute to its
+// colour. Used for both line-colour and stop-fill so a mode reads consistently.
+function railColorExpression() {
+  const expr = ["match", ["get", "mode"]];
+  for (const m of RAIL_MODES) expr.push(m.key, m.color);
+  expr.push("#666");   // fallback for any unexpected mode
+  return expr;
 }
-function RAIL_STATION_STROKE() {
-  return state.theme === "light" ? "#ffffff" : "#111418";
+
+// Stop outline + label colours stay theme-aware (contrast against basemap).
+function RAIL_STOP_STROKE() {
+  return state.theme === "light" ? "#ffffff" : "#11141b";
 }
 function RAIL_LABEL_COLOR() {
   return state.theme === "light" ? "#1c2533" : "#f4f6fb";
@@ -99,10 +115,12 @@ const state = {
   hasPrice: false,       // whether the loaded data includes price fields
   colourMode: "single",  // "single" | "spectrum"
   fillOpacity: 0.85,     // choropleth opacity (slider fades to basemap)
-  theme: "dark",         // "dark" | "light"
+  theme: "light",        // "dark" | "light"
   hasRail: false,        // whether the tiles include the rail overlay
-  railLines: true,       // show passenger line routes
-  railStations: true,    // show station points
+  // Per-mode visibility for rail lines and stops. Defaults on for any mode
+  // present in the data (set during loadData from breaks.json counts).
+  railLineModes: {},     // e.g. { rail:true, subway:true, ... }
+  railStopModes: {},
 };
 
 // The ramp currently driving the choropleth.
@@ -186,7 +204,7 @@ const map = new maplibregl.Map({
     sources: {
       carto: {
         type: "raster",
-        tiles: ["https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png"],
+        tiles: ["https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"],
         tileSize: 256,
         attribution: "© OpenStreetMap, © CARTO",
       },
@@ -225,7 +243,16 @@ async function loadData() {
   state.usingSampleData = state.breaksData?.meta?.sample ?? true;
   state.hasPrice = (state.breaksData?.price?.length ?? 0) > 0;
   const railMeta = state.breaksData?.meta?.rail;
-  state.hasRail = !!railMeta && ((railMeta.lines || 0) + (railMeta.stations || 0) > 0);
+  const lineCounts = railMeta?.line_counts || {};
+  const stopCounts = railMeta?.stop_counts || {};
+  state.hasRail = Object.keys(lineCounts).length > 0 || Object.keys(stopCounts).length > 0;
+  // Default every present mode to visible.
+  state.railLineModes = {};
+  state.railStopModes = {};
+  for (const m of RAIL_MODES) {
+    if ((lineCounts[m.key] || 0) > 0) state.railLineModes[m.key] = true;
+    if ((stopCounts[m.key] || 0) > 0) state.railStopModes[m.key] = true;
+  }
 
   const tilesUrl = "pmtiles://" + new URL("data/lsoa.pmtiles", location.href).href;
 
@@ -277,50 +304,46 @@ async function loadData() {
   });
 
   // --- Rail overlay (optional) ---------------------------------------------
-  // Same vector source, different source-layers baked by build_tiles.py.
-  // These sit ABOVE the choropleth so routes/stations read over the colour.
+  // Two tile layers (rail_line, rail_stop); each feature carries a `mode`
+  // (rail/subway/light_rail/tram). We colour by mode with a match expression
+  // and show/hide modes with a filter, so a single layer covers all modes.
   if (state.hasRail) {
     map.addLayer({
       id: "rail-line",
       type: "line",
       source: "lsoa",
       "source-layer": "rail_line",
-      layout: {
-        "line-join": "round",
-        "line-cap": "round",
-        visibility: state.railLines ? "visible" : "none",
-      },
+      layout: { "line-join": "round", "line-cap": "round" },
+      filter: railModeFilter("line"),
       paint: {
-        "line-color": RAIL_LINE_COLOR(),
-        // Thicken with zoom so lines stay visible when zoomed out but don't
-        // smother the map up close.
-        "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.6, 10, 1.4, 14, 2.6],
-        "line-opacity": 0.9,
+        "line-color": railColorExpression(),
+        "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.6, 10, 1.6, 14, 2.8],
+        "line-opacity": 0.92,
       },
     });
 
-    // A subtle casing under stations so they pop on any colour underneath.
     map.addLayer({
-      id: "rail-station",
+      id: "rail-stop",
       type: "circle",
       source: "lsoa",
-      "source-layer": "rail_station",
-      layout: { visibility: state.railStations ? "visible" : "none" },
+      "source-layer": "rail_stop",
+      filter: railModeFilter("stop"),
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 7, 1.6, 11, 3.2, 14, 5],
-        "circle-color": RAIL_STATION_FILL(),
-        "circle-stroke-color": RAIL_STATION_STROKE(),
-        "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 11, 1, 14, 1.5],
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 7, 1.8, 11, 3.4, 14, 5.2],
+        "circle-color": railColorExpression(),
+        "circle-stroke-color": RAIL_STOP_STROKE(),
+        "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 7, 0.5, 11, 1.1, 14, 1.6],
       },
     });
 
-    // Station labels only when zoomed in enough to be legible.
+    // Stop labels, only when zoomed in enough to be legible.
     map.addLayer({
-      id: "rail-station-label",
+      id: "rail-stop-label",
       type: "symbol",
       source: "lsoa",
-      "source-layer": "rail_station",
+      "source-layer": "rail_stop",
       minzoom: 11,
+      filter: railModeFilter("stop"),
       layout: {
         "text-field": ["get", "name"],
         "text-font": ["Noto Sans Regular"],
@@ -328,7 +351,6 @@ async function loadData() {
         "text-offset": [0, 1.1],
         "text-anchor": "top",
         "text-optional": true,
-        visibility: state.railStations ? "visible" : "none",
       },
       paint: {
         "text-color": RAIL_LABEL_COLOR(),
@@ -339,6 +361,15 @@ async function loadData() {
   }
 
   updateDataSourceNote();
+}
+
+// Build a MapLibre filter that keeps only the rail modes currently toggled on
+// for the given kind ("line" or "stop"). If none are on, match nothing.
+function railModeFilter(kind) {
+  const flags = kind === "line" ? state.railLineModes : state.railStopModes;
+  const on = Object.keys(flags).filter(k => flags[k]);
+  if (!on.length) return ["==", ["get", "mode"], "__none__"];
+  return ["in", ["get", "mode"], ["literal", on]];
 }
 
 function updateDataSourceNote() {
@@ -399,8 +430,9 @@ function buildLayerToggle() {
     b.addEventListener("click", () => setLayer(b.dataset.mode)));
 }
 
-// Rail overlay toggle: two checkboxes (lines, stations). Only shown when the
-// tiles actually carry a rail layer (flagged in breaks.json).
+// Rail overlay toggle. One group per mode that has data; within each, a Lines
+// and/or Stops checkbox. Each row carries the mode's colour swatch so the map
+// colours are self-explanatory. Only shown when the tiles carry rail data.
 function buildRailToggle() {
   const block = document.getElementById("rail-block");
   const el = document.getElementById("rail-toggle");
@@ -409,31 +441,59 @@ function buildRailToggle() {
   block.hidden = false;
 
   const railMeta = state.breaksData?.meta?.rail || {};
-  const row = (key, label, count) => `
-    <label class="rail-row">
-      <input type="checkbox" class="enable" id="rail-${key}" ${state[key] ? "checked" : ""} />
-      <span class="rail-name">${label}</span>
-      ${count != null ? `<span class="rail-count">${count.toLocaleString()}</span>` : ""}
-    </label>`;
+  const lineCounts = railMeta.line_counts || {};
+  const stopCounts = railMeta.stop_counts || {};
 
-  el.innerHTML =
-    row("railLines", "Line routes", railMeta.lines) +
-    row("railStations", "Stations", railMeta.stations);
+  const checkbox = (kind, mode, count) => {
+    const id = `rail-${kind}-${mode}`;
+    const flags = kind === "line" ? state.railLineModes : state.railStopModes;
+    return `
+      <label class="rail-sub">
+        <input type="checkbox" class="enable" id="${id}" ${flags[mode] ? "checked" : ""} />
+        <span class="rail-sub-label">${kind === "line" ? "Lines" : "Stops"}</span>
+        <span class="rail-count">${(count || 0).toLocaleString()}</span>
+      </label>`;
+  };
 
-  el.querySelector("#rail-railLines").addEventListener("change", (e) =>
-    setRailVisibility("railLines", e.target.checked));
-  el.querySelector("#rail-railStations").addEventListener("change", (e) =>
-    setRailVisibility("railStations", e.target.checked));
+  let html = "";
+  for (const m of RAIL_MODES) {
+    const lc = lineCounts[m.key] || 0;
+    const sc = stopCounts[m.key] || 0;
+    if (!lc && !sc) continue;   // mode absent from data -> no group
+    html += `
+      <div class="rail-group">
+        <div class="rail-group-head">
+          <span class="rail-swatch" style="background:${m.color}"></span>
+          <span class="rail-mode-name">${m.label}</span>
+        </div>
+        <div class="rail-subs">
+          ${lc ? checkbox("line", m.key, lc) : ""}
+          ${sc ? checkbox("stop", m.key, sc) : ""}
+        </div>
+      </div>`;
+  }
+  el.innerHTML = html;
+
+  // Wire each checkbox to flip that mode's visibility for that kind.
+  for (const m of RAIL_MODES) {
+    const lineCb = el.querySelector(`#rail-line-${m.key}`);
+    if (lineCb) lineCb.addEventListener("change", (e) =>
+      setRailModeVisibility("line", m.key, e.target.checked));
+    const stopCb = el.querySelector(`#rail-stop-${m.key}`);
+    if (stopCb) stopCb.addEventListener("change", (e) =>
+      setRailModeVisibility("stop", m.key, e.target.checked));
+  }
 }
 
-function setRailVisibility(which, on) {
-  state[which] = on;
-  const vis = on ? "visible" : "none";
-  if (which === "railLines") {
-    if (map.getLayer("rail-line")) map.setLayoutProperty("rail-line", "visibility", vis);
+function setRailModeVisibility(kind, mode, on) {
+  const flags = kind === "line" ? state.railLineModes : state.railStopModes;
+  flags[mode] = on;
+  if (kind === "line") {
+    if (map.getLayer("rail-line"))
+      map.setFilter("rail-line", railModeFilter("line"));
   } else {
-    for (const id of ["rail-station", "rail-station-label"]) {
-      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+    for (const id of ["rail-stop", "rail-stop-label"]) {
+      if (map.getLayer(id)) map.setFilter(id, railModeFilter("stop"));
     }
   }
 }
@@ -701,26 +761,29 @@ function inspectLSOA(propsOrCode, point) {
   panel.classList.add("open");
   panel.querySelector(".fd-close").addEventListener("click", closeDetail);
 
-  // Position the panel near where the user clicked, relative to the map area,
-  // clamped so it never spills off the visible map.
-  const pt = state.selectedPoint;
-  if (pt) {
-    const mapRect = document.getElementById("map").getBoundingClientRect();
-    const appRect = document.getElementById("app").getBoundingClientRect();
-    // Click point is in map-canvas pixels; convert to offset within #app
-    // (the panel's positioning ancestor) by adding the map's left offset.
-    const mapLeftInApp = mapRect.left - appRect.left;
-    let x = mapLeftInApp + pt.x + 16;        // a little right of the cursor
-    let y = pt.y - 20;                        // a little above
-    const pw = 290, ph = panel.offsetHeight || 360;
-    const maxX = appRect.width - pw - 12;
-    const maxY = appRect.height - ph - 12;
-    if (x > maxX) x = mapLeftInApp + pt.x - pw - 16;  // flip to left of cursor
-    x = Math.max(mapLeftInApp + 12, Math.min(x, maxX));
-    y = Math.max(12, Math.min(y, maxY));
-    panel.style.left = `${x}px`;
-    panel.style.top = `${y}px`;
-  }
+  positionFloatingPanel(panel, state.selectedPoint);
+}
+
+// Position the floating panel near a clicked map point, relative to the map
+// area and clamped so it never spills off-screen. Shared by the LSOA panel and
+// the rail-stop panel.
+function positionFloatingPanel(panel, pt) {
+  if (!pt) return;
+  const mapRect = document.getElementById("map").getBoundingClientRect();
+  const appRect = document.getElementById("app").getBoundingClientRect();
+  // Click point is in map-canvas pixels; convert to offset within #app
+  // (the panel's positioning ancestor) by adding the map's left offset.
+  const mapLeftInApp = mapRect.left - appRect.left;
+  let x = mapLeftInApp + pt.x + 16;        // a little right of the cursor
+  let y = pt.y - 20;                        // a little above
+  const pw = 290, ph = panel.offsetHeight || 360;
+  const maxX = appRect.width - pw - 12;
+  const maxY = appRect.height - ph - 12;
+  if (x > maxX) x = mapLeftInApp + pt.x - pw - 16;  // flip to left of cursor
+  x = Math.max(mapLeftInApp + 12, Math.min(x, maxX));
+  y = Math.max(12, Math.min(y, maxY));
+  panel.style.left = `${x}px`;
+  panel.style.top = `${y}px`;
 }
 
 function closeDetail() {
@@ -766,29 +829,95 @@ function wireInteractions() {
       `<p class="empty">No site selected yet.</p>`;
   });
 
-  // Station hover: a compact popup with the station name + CRS code. Bound
-  // only when the rail layer exists. Stations sit above the choropleth, so
-  // this popup takes priority when hovering directly over a dot.
+  // Rail stops: hover shows a quick tooltip; click pins a full info panel.
+  // Bound only when the rail layer exists. Stops sit above the choropleth, so
+  // they take priority when the cursor is over a dot.
   if (state.hasRail) {
-    const stationPopup = new maplibregl.Popup({
+    const stopPopup = new maplibregl.Popup({
       closeButton: false, closeOnClick: false, offset: 10,
     });
-    map.on("mouseenter", "rail-station", (e) => {
+    map.on("mouseenter", "rail-stop", (e) => {
       const p = e.features[0].properties;
       map.getCanvas().style.cursor = "pointer";
-      const crs = p.crs ? ` · ${p.crs}` : "";
-      stationPopup.setLngLat(e.lngLat)
-        .setHTML(`<strong>${p.name || "Station"}</strong>${crs}`)
+      stopPopup.setLngLat(e.lngLat)
+        .setHTML(`<strong>${p.name || "Stop"}</strong> · ${railMode(p.mode)?.label || p.mode}`)
         .addTo(map);
     });
-    map.on("mousemove", "rail-station", (e) => {
-      stationPopup.setLngLat(e.lngLat);
-    });
-    map.on("mouseleave", "rail-station", () => {
+    map.on("mousemove", "rail-stop", (e) => stopPopup.setLngLat(e.lngLat));
+    map.on("mouseleave", "rail-stop", () => {
       map.getCanvas().style.cursor = "";
-      stationPopup.remove();
+      stopPopup.remove();
+    });
+
+    // Click a stop -> pin its details in the floating panel. We stop the event
+    // reaching the lsoa-fill click (which would otherwise also open the LSOA
+    // panel underneath) by handling rail-stop first; MapLibre fires layer
+    // handlers in add order, and we close the LSOA panel here to avoid both.
+    map.on("click", "rail-stop", (e) => {
+      e.originalEvent.stopPropagation();
+      inspectStop(e.features[0].properties, e.point);
     });
   }
+}
+
+// Build a small inline SVG glyph for a transit mode. Pure SVG so it needs no
+// font/icon CDN (the project can't rely on external icon fonts).
+function railGlyphSVG(mode) {
+  const color = railMode(mode)?.color || "#666";
+  const inner = {
+    rail: '<rect x="5" y="4" width="10" height="9" rx="2"/><circle cx="7.5" cy="15" r="1.5"/><circle cx="12.5" cy="15" r="1.5"/>',
+    subway: '<circle cx="10" cy="10" r="7" fill="none" stroke-width="2.4"/><path d="M6 10h8" stroke-width="2.4"/>',
+    light_rail: '<rect x="5" y="3" width="10" height="11" rx="3"/><path d="M6 17l2-3M14 17l-2-3" stroke-width="1.6"/>',
+    tram: '<rect x="5" y="4" width="10" height="10" rx="2"/><path d="M8 2h4M7 17l1.5-3M13 17l-1.5-3" stroke-width="1.6"/>',
+  }[mode] || '<circle cx="10" cy="10" r="6"/>';
+  // Two render styles: filled shapes (rail/light_rail/tram) and stroked (subway)
+  const strokeOnly = mode === "subway";
+  return `<svg viewBox="0 0 20 20" width="22" height="22" aria-hidden="true"
+            fill="${strokeOnly ? "none" : color}" stroke="${color}"
+            stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+}
+
+// Pin a rail stop's details in the floating panel (reuses #floating-detail).
+function inspectStop(p, point) {
+  closeDetail();   // clear any LSOA selection first
+  state.selectedStop = p;
+  state.selectedPoint = point;
+
+  const mode = railMode(p.mode);
+  const bits = [];
+  if (p.crs) bits.push(`CRS ${p.crs}`);
+  if (p.operator) bits.push(p.operator);
+  else if (p.network) bits.push(p.network);
+
+  const panel = document.getElementById("floating-detail");
+  panel.innerHTML = `
+    <button class="fd-close" aria-label="Close" title="Close">×</button>
+    <div class="fd-stop">
+      <div class="fd-stop-glyph" style="--mode-color:${mode?.color || "#666"}">
+        ${railGlyphSVG(p.mode)}
+      </div>
+      <div class="fd-stop-text">
+        <div class="fd-district">${p.name || "Unnamed stop"}</div>
+        <div class="fd-stop-class">
+          <span class="fd-mode-badge" style="background:${mode?.color || "#666"}">${mode?.label || p.mode}</span>
+        </div>
+      </div>
+    </div>
+    ${bits.length ? `<div class="fd-stop-meta">${bits.join(" · ")}</div>` : ""}
+    <p class="hint" style="margin-top:12px">
+      Transit stop from OpenStreetMap. More detail (lines served, interchange)
+      can be added later.
+    </p>`;
+  panel.classList.add("open");
+  panel.querySelector(".fd-close").addEventListener("click", closeStop);
+  positionFloatingPanel(panel, point);
+}
+
+function closeStop() {
+  state.selectedStop = null;
+  const panel = document.getElementById("floating-detail");
+  panel.classList.remove("open");
+  panel.innerHTML = "";
 }
 
 // ---- Legend ---------------------------------------------------------------
@@ -880,15 +1009,13 @@ function setTheme(theme) {
   // Boundary + selection lines are tuned per theme so areas stay cohesive.
   if (map.getLayer("lsoa-line")) map.setPaintProperty("lsoa-line", "line-color", LINE_COLOR());
   if (map.getLayer("lsoa-selected")) map.setPaintProperty("lsoa-selected", "line-color", SELECT_COLOR());
-  // Rail overlay also flips with the theme.
-  if (map.getLayer("rail-line")) map.setPaintProperty("rail-line", "line-color", RAIL_LINE_COLOR());
-  if (map.getLayer("rail-station")) {
-    map.setPaintProperty("rail-station", "circle-color", RAIL_STATION_FILL());
-    map.setPaintProperty("rail-station", "circle-stroke-color", RAIL_STATION_STROKE());
-  }
-  if (map.getLayer("rail-station-label")) {
-    map.setPaintProperty("rail-station-label", "text-color", RAIL_LABEL_COLOR());
-    map.setPaintProperty("rail-station-label", "text-halo-color", RAIL_LABEL_HALO());
+  // Rail line/stop fill colours are per-mode (theme-independent); only the
+  // stop outline and labels need to flip for contrast against the basemap.
+  if (map.getLayer("rail-stop"))
+    map.setPaintProperty("rail-stop", "circle-stroke-color", RAIL_STOP_STROKE());
+  if (map.getLayer("rail-stop-label")) {
+    map.setPaintProperty("rail-stop-label", "text-color", RAIL_LABEL_COLOR());
+    map.setPaintProperty("rail-stop-label", "text-halo-color", RAIL_LABEL_HALO());
   }
   buildLegend();
 }
@@ -900,6 +1027,11 @@ function priceFmt(v) {
 }
 
 // ---- Boot -----------------------------------------------------------------
+
+// Reflect the default theme onto <body> immediately so the UI starts in the
+// right palette (the CSS variables flip on body.light). The basemap source is
+// already created with the matching light tiles above.
+document.body.classList.toggle("light", state.theme === "light");
 
 buildSliders();
 buildLegend();

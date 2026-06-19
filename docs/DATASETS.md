@@ -146,39 +146,54 @@ There is **no free, complete national land-parcel dataset**. For v1:
 
 ---
 
-## Rail overlay (passenger lines + stations)
+## Transit overlay (rail / subway / light rail / tram)
 
-The rail overlay is an **optional layer** that draws on top of the choropleth.
-It never touches the deprivation scores, so it's safe to rebuild on its own.
-Tick **"include_rail"** when running the *Build data layer* workflow.
+The transit overlay is an **optional layer** that draws on top of the
+choropleth. It never touches the deprivation scores, so it's safe to rebuild on
+its own. Tick **"include_rail"** when running the *Build data layer* workflow.
 
-Two inputs, two sources:
+It covers **four modes**, each rendered in its own colour and toggleable
+independently (lines and stops separately, per mode):
 
-**Line routes — OpenStreetMap (no upload needed).**
-`build_rail_layer.py` queries the Overpass API for England and keeps only the
-**passenger network**: `railway=rail` with `usage=main` or `usage=branch`,
-excluding sidings/yards (`service=*`) and disused/abandoned/under-construction
-track (those carry lifecycle-prefixed tags and are skipped automatically).
-Trams, subways and light rail are different `railway=*` values, so they're
-excluded by definition. If Overpass is unavailable the step skips cleanly and
-the build still succeeds (same policy as house prices).
+| Mode        | Colour      | Lines (OSM)                                  | Stops |
+|-------------|-------------|----------------------------------------------|-------|
+| Heavy rail  | near-black  | `railway=rail` + `usage=main`/`branch`       | committed CSV (has CRS) |
+| Subway      | blue        | `railway=subway`                             | OSM `railway=station/halt` + `station=subway` |
+| Light rail  | teal        | `railway=light_rail`                         | OSM `railway=station/halt` + `station=light_rail` |
+| Tram        | orange      | `railway=tram`                               | OSM `railway=tram_stop` |
 
-**Stations — a small committed CSV.**
+**Lines — OpenStreetMap (no upload needed).** `build_rail_layer.py` queries the
+Overpass API for England. For heavy rail it keeps only the passenger network
+(`usage=main`/`branch`), excluding sidings/yards (`service=*`); other modes are
+selected by their own `railway=*` value. Disused/abandoned/construction track
+carries lifecycle-prefixed keys and is skipped automatically. If Overpass is
+unavailable the step skips cleanly and the build still succeeds (same policy as
+house prices).
+
+**Stops.** `railway=rail` also covers freight and the OSM mainline-station tag
+doesn't carry CRS codes, so heavy-rail stops come from a committed CSV instead
+(authoritative, includes CRS). Subway/light-rail/tram stops come from OSM,
+since the CSV is National-Rail only.
+
 Download a UK stations CSV and commit it as **`data/raw/uk_stations.csv`**.
-Recommended: the `davwheat/uk-railway-stations` dataset (CSV with header
+Recommended: the `davwheat/uk-railway-stations` dataset (header
 `stationName,lat,long,crsCode,iataAirportCode,constituentCountry`). The parser
-keeps England rows and is tolerant of column-name variants
-(`lat`/`latitude`, `long`/`lng`/`longitude`, `stationName`/`name`, etc).
-Upload it the same way as the IMD CSV: in GitHub, **Add file → Upload files**
-(a normal CSV uploads fine; only dotfiles get skipped by drag-and-drop).
-If the CSV is absent, the overlay shows lines only.
+keeps England rows and tolerates column-name variants (`lat`/`latitude`,
+`long`/`lng`/`longitude`, `stationName`/`name`, etc). Upload it like the IMD
+CSV: in GitHub, **Add file → Upload files** (a normal CSV uploads fine; only
+dotfiles get skipped by drag-and-drop). If the CSV is absent, heavy-rail stops
+are simply omitted; the other three modes and all lines still build.
 
-**Licensing — important.** Both OSM and the Trainline-derived station data are
-**ODbL** (attribution **and** share-alike), which is stricter than the OGL data
-used elsewhere. The footer credits "© OpenStreetMap contributors & Trainline
-(ODbL)" automatically whenever the rail layer is present.
+**Clicking a stop** opens an info panel with the stop name, a colour-coded mode
+badge, an inline SVG glyph (no icon CDN needed), and any operator/network/CRS
+detail present.
 
-**Frontend note.** Station labels use the `Noto Sans Regular` font stack served
-by the MapLibre demo glyph endpoint. If you switch glyph servers, update the
-`text-font` value in the `rail-station-label` layer in `app.js` to a stack that
+**Licensing — important.** OSM and the Trainline-derived CSV are both **ODbL**
+(attribution **and** share-alike), stricter than the OGL data used elsewhere.
+The footer credits OpenStreetMap contributors & Trainline (ODbL) whenever the
+overlay is present.
+
+**Frontend note.** Stop labels use the `Noto Sans Regular` font stack served by
+the MapLibre demo glyph endpoint. If you switch glyph servers, update the
+`text-font` value in the `rail-stop-label` layer in `app.js` to a stack that
 server provides, or labels will silently not render (the dots still will).

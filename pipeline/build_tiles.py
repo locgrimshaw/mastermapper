@@ -100,15 +100,16 @@ def write_breaks():
     if xs:
         out["bbox"] = [min(xs), min(ys), max(xs), max(ys)]
 
-    # Tell the frontend whether the rail overlay is present (and how much), so
-    # it only shows the Rail toggle when there's something to show.
+    # Tell the frontend what the rail overlay contains, per mode, so it shows
+    # only the toggles that have data. Counts come straight from the sidecar
+    # the rail builder already wrote.
     if RAIL_SRC.exists():
         try:
             rail = json.loads(RAIL_SRC.read_text())
-            rfeats = rail.get("features", [])
+            meta = rail.get("metadata", {})
             out["meta"]["rail"] = {
-                "lines": sum(1 for f in rfeats if f["properties"].get("kind") == "line"),
-                "stations": sum(1 for f in rfeats if f["properties"].get("kind") == "station"),
+                "line_counts": meta.get("line_counts", {}),
+                "stop_counts": meta.get("stop_counts", {}),
             }
         except (ValueError, KeyError):
             pass
@@ -130,10 +131,11 @@ def main() -> int:
     for a in KEEP_ATTRS:
         keep_flags += ["-y", a]
 
-    # Optional rail overlay. tippecanoe can take extra inputs as their OWN named
-    # layers via -L; we split rail.geojson into a line layer and a station layer
-    # so the frontend can style/toggle them independently. We don't pass -y here
-    # (no -y means "keep all attributes") so name/usage/crs survive into tiles.
+    # Optional rail overlay. tippecanoe takes extra inputs as their OWN named
+    # layers via -L. We split rail.geojson into a line layer and a stop layer;
+    # the per-feature `mode` attribute (rail/subway/light_rail/tram) is kept so
+    # the frontend can colour and filter each mode within these two layers.
+    # No -y here (keep all attrs) so mode/name/crs/operator survive into tiles.
     rail_layer_flags = []
     rail_tmp = []
     if RAIL_SRC.exists():
@@ -141,19 +143,18 @@ def main() -> int:
             rail = json.loads(RAIL_SRC.read_text())
             feats = rail.get("features", [])
             lines = [f for f in feats if f["properties"].get("kind") == "line"]
-            stations = [f for f in feats if f["properties"].get("kind") == "station"]
+            stops = [f for f in feats if f["properties"].get("kind") == "stop"]
             if lines:
                 p = ROOT / "web" / "data" / "_rail_line.geojson"
                 p.write_text(json.dumps({"type": "FeatureCollection", "features": lines}))
                 rail_tmp.append(p)
-                # -L NAME:FILE  — line layer rendered across the zoom range.
                 rail_layer_flags += ["-L", f"rail_line:{p}"]
-            if stations:
-                p = ROOT / "web" / "data" / "_rail_station.geojson"
-                p.write_text(json.dumps({"type": "FeatureCollection", "features": stations}))
+            if stops:
+                p = ROOT / "web" / "data" / "_rail_stop.geojson"
+                p.write_text(json.dumps({"type": "FeatureCollection", "features": stops}))
                 rail_tmp.append(p)
-                rail_layer_flags += ["-L", f"rail_station:{p}"]
-            print(f"Rail overlay: {len(lines)} lines, {len(stations)} stations "
+                rail_layer_flags += ["-L", f"rail_stop:{p}"]
+            print(f"Rail overlay: {len(lines)} lines, {len(stops)} stops "
                   "-> bundling into tiles.")
         except (ValueError, KeyError) as exc:
             print(f"Could not read {RAIL_SRC.name} ({exc}); building without rail.")
