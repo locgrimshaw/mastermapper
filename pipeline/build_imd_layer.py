@@ -168,27 +168,60 @@ def main() -> int:
     print("Reading IoD 2025 scores (File 7)...")
     imd = pd.read_csv(imd_path)
 
-    # File 7 carries a "Total population" denominator column. Capture it up front
-    # (before we trim to the score columns) so we don't need a separate download.
+    # File 7 carries population denominator columns. Their exact header wording
+    # varies by release vintage (e.g. "Total population: mid 2022 (excluding
+    # prisoners)"), so we match by PATTERN rather than an exact string, with a
+    # clear preference for the all-ages total over age-band denominators. We log
+    # exactly which column was chosen so a wrong pick is obvious in the build log.
     pop_from_imd = None
     _imd_lower = {c.lower().strip(): c for c in imd.columns}
     _imd_code = _imd_lower.get(IMD_LSOA_CODE.lower())
-    for cand in POP_COUNT_CANDIDATES:
-        col = _imd_lower.get(cand.lower())
-        if col and _imd_code:
-            pop_from_imd = imd[[_imd_code, col]].rename(
-                columns={_imd_code: "lsoa_code", col: "population"}
+
+    def _find_total_population_col(columns):
+        cols = list(columns)
+        low = [c.lower() for c in cols]
+        # 1) Exact-ish known spellings first.
+        for cand in POP_COUNT_CANDIDATES:
+            if cand.lower() in low:
+                return cols[low.index(cand.lower())]
+        # 2) A "total population" column (the all-ages denominator), preferring
+        #    one that does NOT mention an age band (children / older / working).
+        age_words = ("child", "older", "working age", "16", "59", "60", "0 to",
+                     "aged", "dependa", "depende")
+        totals = [c for c, l in zip(cols, low)
+                  if "population" in l and "total" in l]
+        plain = [c for c in totals
+                 if not any(w in c.lower() for w in age_words)]
+        if plain:
+            return plain[0]
+        if totals:
+            return totals[0]
+        # 3) Any column mentioning population as a last resort.
+        any_pop = [c for c, l in zip(cols, low) if "population" in l]
+        return any_pop[0] if any_pop else None
+
+    if _imd_code:
+        _pop_col = _find_total_population_col(imd.columns)
+        if _pop_col is not None:
+            pop_from_imd = imd[[_imd_code, _pop_col]].rename(
+                columns={_imd_code: "lsoa_code", _pop_col: "population"}
             )
             pop_from_imd["lsoa_code"] = pop_from_imd["lsoa_code"].astype(str).str.strip()
             pop_from_imd["population"] = pd.to_numeric(
                 pop_from_imd["population"].astype(str).str.replace(",", "", regex=False),
                 errors="coerce",
             )
+            n_before = len(pop_from_imd)
             pop_from_imd = pop_from_imd.dropna(subset=["population"])
             pop_from_imd["population"] = pop_from_imd["population"].round().astype(int)
-            print(f"  population taken from File 7 column '{col}' "
-                  f"({len(pop_from_imd)} LSOAs)")
-            break
+            sample = pop_from_imd["population"].head(3).tolist()
+            print(f"  population column matched in File 7: '{_pop_col}'")
+            print(f"  -> {len(pop_from_imd)}/{n_before} rows parsed, "
+                  f"e.g. {sample}, total {pop_from_imd['population'].sum():,}")
+        else:
+            print("  NOTE: no population column found in File 7 — will look for "
+                  f"a separate {POP_FILENAME} instead.")
+            print("  Columns available:\n   " + "\n   ".join(imd.columns))
 
     # Keep only the columns we need, renamed to our internal names. The 2025
     # File 7 carries LSOA name AND Local Authority District name in the file, so
