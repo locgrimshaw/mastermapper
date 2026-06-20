@@ -882,14 +882,17 @@ footer {
 .dd-access-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   font-size: 13px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--ink-line);
 }
 .dd-access-row:last-child { border-bottom: none; }
-.dd-access-label { color: var(--text); }
-.dd-access-val { font-family: var(--font-data); font-size: 13px; color: var(--accent); font-weight: 600; }
+.dd-access-swatch {
+  width: 12px; height: 4px; border-radius: 2px; flex: 0 0 auto;
+}
+.dd-access-label { color: var(--text); flex: 1; }
+.dd-access-val { font-family: var(--font-data); font-size: 12.5px; color: var(--accent); font-weight: 600; }
 
 .dd-load-btn {
   background: var(--accent);

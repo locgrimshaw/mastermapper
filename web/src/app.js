@@ -1326,16 +1326,18 @@ function catchmentOrigin() {
   } catch (_) { return null; }
 }
 
-// Distance (m) from origin to the nearest amenity of each "access" kind. Nearest
-// may sit OUTSIDE the catchment, so we search a generous radius around the
-// origin rather than only in-polygon. Supabase kinds use the radius RPC; food
-// stores use a separate Overpass radius query. Results fill the Access section.
+// Distance to the nearest amenity of each "access" kind — measured by REAL road
+// travel (Valhalla routing), not straight line. For each kind we take the few
+// closest candidates (crow-flies), route to each, and keep the shortest by road
+// (the nearest as the crow flies isn't always nearest by road). We draw that
+// route coloured to match the amenity and label it with distance + time.
 const NEAREST_KINDS = [
   { kind: "gp", label: "GP surgery", source: "supabase" },
   { kind: "nursery", label: "Nursery", source: "supabase" },
   { kind: "school", label: "School", source: "supabase" },
   { kind: "supermarket", label: "Food store", source: "osm" },
 ];
+const NEAREST_CANDIDATES = 4;   // how many closest to road-test per kind
 
 async function computeNearestDistances() {
   const origin = catchmentOrigin();
@@ -1343,21 +1345,20 @@ async function computeNearestDistances() {
   if (!origin || !listEl) return;
   const [lng, lat] = origin;
   const originPt = turf.point(origin);
+  // Route on foot by default to match the typical "walk to amenities" framing;
+  // fall back to the plot mode if the user picked cycle/drive.
+  const routeMode = plot.mode || "pedestrian";
 
   for (const nk of NEAREST_KINDS) {
     setAccessRow(nk.kind, nk.label, "…");
     try {
+      // 1) Gather candidate amenities near the origin.
       let pts = [];
       if (nk.source === "osm") {
-        const osm = await fetchOsmNearby(lng, lat, 2000);   // 2km around origin
-        pts = osm.map(p => ({
-          lng: p.lng, lat: p.lat,
-          distance_m: turf.distance(originPt, turf.point([p.lng, p.lat]), { units: "meters" }),
-        }));
+        pts = await fetchOsmNearby(lng, lat, 2500);
       } else {
         const sb = getSupabase();
         if (!sb) { setAccessRow(nk.kind, nk.label, "—"); continue; }
-        // Search outward in rings until we find at least one (handles rural).
         for (const radius of [1500, 4000, 10000, 30000]) {
           const { data, error } = await sb.rpc("amenities_in_radius", {
             centre_lng: lng, centre_lat: lat, radius_m: radius, kinds: [nk.kind],
@@ -1367,20 +1368,137 @@ async function computeNearestDistances() {
         }
       }
       if (!pts.length) { setAccessRow(nk.kind, nk.label, "none nearby"); continue; }
-      // Nearest: the RPC already returns distance_m sorted; otherwise min.
-      let best = Infinity;
-      for (const p of pts) {
-        const d = (p.distance_m != null)
-          ? p.distance_m
+
+      // 2) Take the N closest by crow-flies as routing candidates.
+      pts.forEach(p => {
+        p._crow = (p.distance_m != null) ? p.distance_m
           : turf.distance(originPt, turf.point([p.lng, p.lat]), { units: "meters" });
-        if (d < best) best = d;
+      });
+      pts.sort((a, b) => a._crow - b._crow);
+      const candidates = pts.slice(0, NEAREST_CANDIDATES);
+
+      // 3) Route to each candidate; keep the shortest by road distance.
+      let best = null;
+      for (const c of candidates) {
+        const route = await fetchRoute(lng, lat, c.lng, c.lat, routeMode);
+        if (route && (!best || route.distance < best.distance)) {
+          best = { ...route, target: c };
+        }
       }
-      setAccessRow(nk.kind, nk.label, fmtDistance(best));
+      if (!best) {
+        // Routing failed for all — fall back to crow-flies of the closest.
+        setAccessRow(nk.kind, nk.label, fmtDistance(candidates[0]._crow) + " (direct)");
+        continue;
+      }
+
+      // 4) Draw the route + label, and write the stat.
+      const meta = AMENITY_KINDS.find(a => a.kind === nk.kind) || { color: "#888" };
+      const labelTxt = `${nk.label} · ${fmtDistance(best.distance)}`;
+      drawAccessRoute(nk.kind, best.geometry, meta.color, labelTxt);
+      setAccessRow(nk.kind, nk.label, `${fmtDistance(best.distance)} · ${fmtMins(best.time)}`);
     } catch (e) {
       console.error("nearest", nk.kind, e);
       setAccessRow(nk.kind, nk.label, "—");
     }
   }
+}
+
+// Valhalla point-to-point route. Returns {distance(m), time(s), geometry} or
+// null. Decodes Valhalla's encoded polyline (precision 6).
+async function fetchRoute(lng1, lat1, lng2, lat2, mode) {
+  const body = {
+    locations: [{ lat: lat1, lon: lng1 }, { lat: lat2, lon: lng2 }],
+    costing: mode,
+    directions_options: { units: "kilometers" },
+  };
+  try {
+    const url = "https://valhalla1.openstreetmap.de/route?json=" + encodeURIComponent(JSON.stringify(body));
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const j = await r.json();
+    const leg = j.trip && j.trip.legs && j.trip.legs[0];
+    if (!leg) return null;
+    return {
+      distance: (j.trip.summary.length || 0) * 1000,   // km -> m
+      time: j.trip.summary.time || 0,                  // seconds
+      geometry: decodePolyline6(leg.shape),
+    };
+  } catch (_) { return null; }
+}
+
+// Valhalla encodes route shapes as a polyline with 6 digits of precision.
+function decodePolyline6(str) {
+  let index = 0, lat = 0, lng = 0;
+  const coords = [];
+  while (index < str.length) {
+    let b, shift = 0, result = 0;
+    do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+    shift = 0; result = 0;
+    do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+    coords.push([lng / 1e6, lat / 1e6]);
+  }
+  return { type: "LineString", coordinates: coords };
+}
+
+// Draw one access route, coloured to match its amenity, with a midpoint label.
+function drawAccessRoute(kind, geometry, color, labelTxt) {
+  const lineSrc = `access-route-${kind}`;
+  const lineData = { type: "FeatureCollection", features: [{ type: "Feature", geometry, properties: { label: labelTxt || "" } }] };
+  if (map.getSource(lineSrc)) {
+    map.getSource(lineSrc).setData(lineData);
+  } else {
+    map.addSource(lineSrc, { type: "geojson", data: lineData });
+    // Casing (white underlay) then the coloured route, so it reads over any base.
+    map.addLayer({
+      id: `${lineSrc}-case`, type: "line", source: lineSrc,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#fff", "line-width": 6, "line-opacity": 0.9 },
+    });
+    map.addLayer({
+      id: `${lineSrc}-line`, type: "line", source: lineSrc,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": color, "line-width": 3.2 },
+    });
+    // Subtle label following the route line, coloured to match with a white halo.
+    map.addLayer({
+      id: `${lineSrc}-label`, type: "symbol", source: lineSrc,
+      layout: {
+        "symbol-placement": "line-center",
+        "text-field": ["get", "label"],
+        "text-size": 11,
+        "text-font": ["Noto Sans Regular"],
+        "text-letter-spacing": 0.02,
+      },
+      paint: {
+        "text-color": color,
+        "text-halo-color": "#fff",
+        "text-halo-width": 2,
+      },
+    });
+  }
+  deep.accessRouteKinds = deep.accessRouteKinds || new Set();
+  deep.accessRouteKinds.add(kind);
+}
+
+function removeAccessRoutes() {
+  if (!deep.accessRouteKinds) return;
+  for (const kind of deep.accessRouteKinds) {
+    for (const suf of ["-case", "-line", "-label"]) {
+      const id = `access-route-${kind}${suf}`;
+      if (map.getLayer(id)) map.removeLayer(id);
+    }
+    const src = `access-route-${kind}`;
+    if (map.getSource(src)) map.removeSource(src);
+  }
+  deep.accessRouteKinds = new Set();
+}
+
+function fmtMins(seconds) {
+  if (seconds == null || !isFinite(seconds)) return "—";
+  const m = Math.round(seconds / 60);
+  return m < 1 ? "<1 min" : `${m} min`;
 }
 
 // Overpass: nearby food stores within `radius` m of a point (for nearest calc).
@@ -1409,12 +1527,15 @@ function fmtDistance(m) {
 function setAccessRow(kind, label, value) {
   const listEl = document.getElementById("dd-access-list");
   if (!listEl) return;
+  const meta = AMENITY_KINDS.find(a => a.kind === kind) || { color: "#888" };
   let row = document.getElementById(`dd-access-${kind}`);
   if (!row) {
     row = document.createElement("div");
     row.className = "dd-access-row";
     row.id = `dd-access-${kind}`;
-    row.innerHTML = `<span class="dd-access-label"></span><span class="dd-access-val"></span>`;
+    row.innerHTML =
+      `<span class="dd-access-swatch" style="background:${meta.color}"></span>` +
+      `<span class="dd-access-label"></span><span class="dd-access-val"></span>`;
     listEl.appendChild(row);
   }
   row.querySelector(".dd-access-label").textContent = label;
@@ -1425,6 +1546,7 @@ function exitDeepDive() {
   deep.active = false;
   for (const a of AMENITY_KINDS) removeAmenityLayer(a.kind);
   removeCrimeLayer();
+  removeAccessRoutes();
   removeCatchmentOutline();
   if (map.getLayer("plot-point-dot")) map.removeLayer("plot-point-dot");
   if (map.getSource("plot-point-src")) map.removeSource("plot-point-src");
@@ -2115,7 +2237,7 @@ function buildDeepDivePanel(meta) {
         </button>
         <div class="dd-block-content">
           <div class="dd-access-list" id="dd-access-list"></div>
-          <p class="hint" style="margin-top:8px">Straight-line distance from the centre of this area to the closest of each.</p>
+          <p class="hint" style="margin-top:8px">Real travel distance &amp; time by road to the closest of each, shown as coloured routes on the map.</p>
         </div>
       </section>
 
