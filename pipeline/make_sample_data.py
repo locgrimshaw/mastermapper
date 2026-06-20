@@ -84,7 +84,81 @@ def main():
     out_path = OUT / "lsoa_imd.geojson"
     out_path.write_text(json.dumps(fc))
     print(f"Wrote {out_path}  ({len(features)} synthetic LSOAs)")
+
+    make_sample_stations()
     print("This is FAKE data for development only.")
+
+
+# Fake station names so the picker/profile have something readable in dev.
+SAMPLE_STATION_NAMES = [
+    "Camden Town", "Hackney Central", "Lambeth North", "Southwark Park",
+    "Islington Fields", "Westminster Bridge", "Bow Junction", "Peckham Rise",
+    "Clapton Vale", "Deptford Green",
+]
+
+
+def make_sample_stations():
+    """Emit a small synthetic stations.geojson (and a minimal rail.geojson with
+    mode='rail' stops) placed on the LSOA grid, with fake usage + a 4-year
+    trend. Mirrors the real build's output so the station-led frontend works in
+    dev without the ORR / rail downloads.
+    """
+    stations = []
+    rail_stops = []
+    n = len(SAMPLE_STATION_NAMES)
+    for i, name in enumerate(SAMPLE_STATION_NAMES):
+        # Scatter across the grid (deterministic from the seed for stability).
+        c = random.randint(2, COLS - 3)
+        r = random.randint(2, ROWS - 3)
+        lon = round(LON0 + (c + 0.5) * CELL, 5)
+        lat = round(LAT0 + (r + 0.5) * CELL, 5)
+        crs = f"S{i:02d}"
+        # Fake usage: a spread from quiet halts to busy hubs, with a plausible
+        # 4-year recovery trend (dip then rise, like post-2020 rail).
+        base = int(120000 + smooth_field(c, r, seed=500 + i) * 7_000_000)
+        trend = []
+        for yr, factor in zip(
+            ["2021-22", "2022-23", "2023-24", "2024-25"],
+            [0.62, 0.81, 0.93, 1.0],
+        ):
+            trend.append({"year": yr, "value": int(base * factor)})
+        usage = trend[-1]["value"]
+        operator = ["Govia Thameslink", "c2c", "Greater Anglia",
+                    "Southeastern"][i % 4]
+        stations.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {"name": name, "crs": crs, "usage": usage,
+                           "operator": operator, "trend": trend},
+        })
+        rail_stops.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {"kind": "stop", "mode": "rail", "name": name, "crs": crs},
+        })
+
+    stations_fc = {
+        "type": "FeatureCollection",
+        "metadata": {"latest_year": "2024-25", "count": n,
+                     "matched_crs": n, "matched_name": 0, "unmatched": 0,
+                     "attribution": "SAMPLE synthetic data - not real usage."},
+        "features": stations,
+    }
+    (OUT / "stations.geojson").write_text(json.dumps(stations_fc))
+    print(f"Wrote {OUT / 'stations.geojson'}  ({n} synthetic stations)")
+
+    # A minimal rail.geojson so the transit overlay + station layer have stops
+    # in dev. Only mode='rail' stops; no lines (the overlay degrades fine).
+    rail_fc = {
+        "type": "FeatureCollection",
+        "metadata": {
+            "line_counts": {}, "stop_counts": {"rail": n},
+            "attribution": "SAMPLE synthetic data - not real rail locations.",
+        },
+        "features": rail_stops,
+    }
+    (OUT / "rail.geojson").write_text(json.dumps(rail_fc))
+    print(f"Wrote {OUT / 'rail.geojson'}  ({n} synthetic rail stops)")
 
 
 if __name__ == "__main__":

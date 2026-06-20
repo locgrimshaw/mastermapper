@@ -73,6 +73,20 @@
         <p class="hint" id="plot-status" style="margin-top:8px"></p>
       </section>
 
+      <section class="block" id="station-block" hidden>
+        <h2>Stations</h2>
+        <p class="hint">Search a heavy-rail station, then profile its walk-time catchment for a socio-economic deep dive.</p>
+        <div class="station-search">
+          <input type="text" id="station-search-input" placeholder="Search a station…" autocomplete="off" />
+          <div id="station-search-results" class="station-results" hidden></div>
+        </div>
+        <label class="dd-row" style="margin-top:8px">
+          <input type="checkbox" id="station-show" checked />
+          <span class="dd-label">Show stations on map</span>
+          <span class="dd-stat" id="station-count-stat"></span>
+        </label>
+      </section>
+
       <section class="block" id="rail-block" hidden>
         <h2>Transit overlay</h2>
         <p class="hint">Rail, subway, light rail and tram lines and stops, each in its own colour. Toggle any layer independently; click a stop for its details. Drawn over the deprivation colours.</p>

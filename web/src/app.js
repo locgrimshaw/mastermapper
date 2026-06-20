@@ -133,7 +133,17 @@ const state = {
   // present in the data (set during loadData from breaks.json counts).
   railLineModes: {},     // e.g. { rail:true, subway:true, ... }
   railStopModes: {},
+  hasStations: false,    // whether stations.geojson loaded (heavy-rail usage layer)
+  stationsVisible: true, // whether the station layer is shown
+  stationsMeta: null,    // { latest_year, count, ... } from stations.geojson
+  selectedStation: null, // station props pinned in the floating card
 };
+
+// Heavy-rail station layer styling. Distinct from the transit-overlay rail
+// stops: these are the analysis objects (clickable, usage-bearing). We size
+// them by usage so the busy hubs read at a glance.
+const STATION_COLOR = "#7a3ea8";        // a deliberate, non-deprivation hue
+const STATION_COLOR_DIM = "#9a6fc0";
 
 // The ramp currently driving the choropleth.
 function activeRamp() {
@@ -297,6 +307,18 @@ async function loadData() {
     if ((stopCounts[m.key] || 0) > 0) state.railStopModes[m.key] = true;
   }
 
+  // Station-usage layer (heavy rail). A small standalone GeoJSON (not in the
+  // tiles), loaded like crime/amenities. Optional: absent file → no station
+  // mode, everything else works.
+  try {
+    const sr = await fetch("data/stations.geojson", { cache: "no-store" });
+    if (sr.ok) {
+      state.stationsData = await sr.json();
+      state.hasStations = (state.stationsData.features || []).length > 0;
+      state.stationsMeta = state.stationsData.metadata || null;
+    }
+  } catch { state.stationsData = null; state.hasStations = false; }
+
   // Append the per-build stamp so a rebuilt lsoa.pmtiles (same filename) is
   // fetched fresh rather than served from a stale browser/CDN cache. PMTiles
   // uses HTTP range requests; the query string makes each build a new URL.
@@ -435,7 +457,108 @@ async function loadData() {
     });
   }
 
+  // --- Station-usage layer (heavy rail, the analysis objects) --------------
+  if (state.hasStations) {
+    addStationLayer();
+  }
+
   updateDataSourceNote();
+}
+
+// Add the heavy-rail station layer from the standalone GeoJSON: circles scaled
+// by annual usage, with labels at closer zooms, plus hover + click. These are
+// the objects the station-led workflow profiles, so they're clickable and sit
+// above the transit overlay.
+function addStationLayer() {
+  if (map.getSource("stations")) return;
+  map.addSource("stations", { type: "geojson", data: state.stationsData });
+
+  // Usage drives the radius. We interpolate on a sqrt-like set of stops so a
+  // 10M-entry hub doesn't dwarf a 100k station into invisibility. Stations with
+  // null usage get the minimum size. Radius = (usage curve) × (zoom factor):
+  // multiplying two interpolate expressions is valid in MapLibre, whereas
+  // nesting one interpolate inside another's stops is not.
+  const usageRadius = [
+    "interpolate", ["linear"], ["coalesce", ["get", "usage"], 0],
+    0, 3.4, 250000, 5, 1000000, 6.5, 5000000, 9, 20000000, 13,
+  ];
+  const zoomFactor = ["interpolate", ["linear"], ["zoom"], 5, 0.6, 11, 1, 14, 1.25];
+  map.addLayer({
+    id: "station-dot",
+    type: "circle",
+    source: "stations",
+    layout: { visibility: state.stationsVisible ? "visible" : "none" },
+    paint: {
+      "circle-radius": ["*", usageRadius, zoomFactor],
+      "circle-color": STATION_COLOR,
+      "circle-opacity": 0.9,
+      "circle-stroke-color": "#ffffff",
+      "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 5, 0.8, 11, 1.4, 14, 2],
+    },
+  });
+  // A subtle selected-ring layer, filtered to the pinned station's CRS.
+  map.addLayer({
+    id: "station-selected",
+    type: "circle",
+    source: "stations",
+    filter: ["==", "crs", "___none___"],
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 7, 11, 11, 14, 15],
+      "circle-color": "rgba(0,0,0,0)",
+      "circle-stroke-color": STATION_COLOR,
+      "circle-stroke-width": 2.5,
+    },
+  });
+  map.addLayer({
+    id: "station-label",
+    type: "symbol",
+    source: "stations",
+    minzoom: 10,
+    layout: {
+      visibility: state.stationsVisible ? "visible" : "none",
+      "text-field": ["get", "name"],
+      "text-font": ["Noto Sans Regular"],
+      "text-size": 11,
+      "text-offset": [0, 1.2],
+      "text-anchor": "top",
+      "text-optional": true,
+    },
+    paint: {
+      "text-color": RAIL_LABEL_COLOR(),
+      "text-halo-color": RAIL_LABEL_HALO(),
+      "text-halo-width": 1.4,
+    },
+  });
+
+  const stationPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10 });
+  map.on("mouseenter", "station-dot", (e) => {
+    const p = e.features[0].properties;
+    map.getCanvas().style.cursor = "pointer";
+    const u = p.usage != null && p.usage !== "" ? `${fmtCount(Number(p.usage))} entries/exits` : "usage n/a";
+    stationPopup.setLngLat(e.lngLat).setHTML(`<strong>${p.name || "Station"}</strong> · ${u}`).addTo(map);
+  });
+  map.on("mousemove", "station-dot", (e) => stationPopup.setLngLat(e.lngLat));
+  map.on("mouseleave", "station-dot", () => {
+    map.getCanvas().style.cursor = "";
+    stationPopup.remove();
+  });
+  map.on("click", "station-dot", (e) => {
+    window._stopClickGuard = true;   // same guard the rail-stop click uses
+    inspectStation(e.features[0].properties, e.point);
+    setDrawer(false);
+  });
+}
+
+// Show/hide the station layer (the "Stations" toggle).
+function setStationsVisible(on) {
+  state.stationsVisible = on;
+  const vis = on ? "visible" : "none";
+  for (const id of ["station-dot", "station-label"]) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+  }
+  if (!on && map.getLayer("station-selected")) {
+    map.setFilter("station-selected", ["==", "crs", "___none___"]);
+  }
 }
 
 // Build a MapLibre filter that keeps only the rail modes currently toggled on
@@ -466,6 +589,10 @@ function updateDataSourceNote() {
     if (state.hasRail) {
       el.textContent +=
         " Rail overlay © OpenStreetMap contributors & Trainline (ODbL).";
+    }
+    if (state.hasStations) {
+      el.textContent +=
+        " Station usage: Office of Rail and Road (OGL v3).";
     }
   }
 }
@@ -575,6 +702,107 @@ function setRailModeVisibility(kind, mode, on) {
       if (map.getLayer(id)) map.setFilter(id, railModeFilter("stop"));
     }
   }
+}
+
+// Station controls: a typeahead search over the loaded stations + a show/hide
+// toggle. Selecting a result flies to the station and opens its inspect card.
+function buildStationControls() {
+  const block = document.getElementById("station-block");
+  if (!block) return;
+  if (!state.hasStations) { block.hidden = true; return; }
+  block.hidden = false;
+
+  const feats = (state.stationsData && state.stationsData.features) || [];
+  const countStat = document.getElementById("station-count-stat");
+  if (countStat) {
+    const yr = state.stationsMeta?.latest_year;
+    countStat.textContent = `${feats.length.toLocaleString()}${yr ? ` · ${yr}` : ""}`;
+  }
+
+  const input = document.getElementById("station-search-input");
+  const results = document.getElementById("station-search-results");
+  const showCb = document.getElementById("station-show");
+
+  if (showCb) showCb.addEventListener("change", (e) => setStationsVisible(e.target.checked));
+
+  if (input && results) {
+    // Pre-index for quick search: lowercase name + crs.
+    const index = feats.map(f => ({
+      name: f.properties.name || "",
+      crs: (f.properties.crs || "").toUpperCase(),
+      usage: f.properties.usage,
+      coords: f.geometry.coordinates,
+      props: f.properties,
+      hay: ((f.properties.name || "") + " " + (f.properties.crs || "")).toLowerCase(),
+    }));
+
+    const render = (matches) => {
+      if (!matches.length) { results.hidden = true; results.innerHTML = ""; return; }
+      results.hidden = false;
+      results.innerHTML = matches.map((m, i) => `
+        <button type="button" class="station-result" data-i="${i}">
+          <span class="sr-name">${m.name}</span>
+          <span class="sr-meta">${m.crs ? m.crs + " · " : ""}${m.usage != null && m.usage !== "" ? fmtCount(Number(m.usage)) : "usage n/a"}</span>
+        </button>`).join("");
+      results.querySelectorAll(".station-result").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const m = matches[parseInt(btn.dataset.i, 10)];
+          selectStationFromSearch(m);
+          input.value = m.name;
+          results.hidden = true;
+        });
+      });
+    };
+
+    let lastMatches = [];
+    input.addEventListener("input", () => {
+      const q = input.value.trim().toLowerCase();
+      if (q.length < 2) { results.hidden = true; return; }
+      // Rank: prefix matches first, then substring; cap to 8, busiest first.
+      const scored = index
+        .filter(s => s.hay.includes(q))
+        .sort((a, b) => {
+          const ap = a.hay.startsWith(q) ? 0 : 1;
+          const bp = b.hay.startsWith(q) ? 0 : 1;
+          if (ap !== bp) return ap - bp;
+          return (Number(b.usage) || 0) - (Number(a.usage) || 0);
+        })
+        .slice(0, 8);
+      lastMatches = scored;
+      render(scored);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && lastMatches.length) {
+        e.preventDefault();
+        selectStationFromSearch(lastMatches[0]);
+        input.value = lastMatches[0].name;
+        results.hidden = true;
+      } else if (e.key === "Escape") {
+        results.hidden = true;
+      }
+    });
+    // Hide results on outside click.
+    document.addEventListener("click", (e) => {
+      if (!block.contains(e.target)) results.hidden = true;
+    });
+  }
+}
+
+// Fly to a station picked from search and open its inspect card. Ensures the
+// station layer is visible so the selected ring shows.
+function selectStationFromSearch(m) {
+  if (!state.stationsVisible) {
+    const cb = document.getElementById("station-show");
+    if (cb) cb.checked = true;
+    setStationsVisible(true);
+  }
+  map.flyTo({ center: m.coords, zoom: Math.max(map.getZoom(), 12.5), duration: 700 });
+  // Project to a screen point for the floating card placement once moved.
+  map.once("moveend", () => {
+    const pt = map.project(m.coords);
+    inspectStation(m.props, pt);
+  });
+  setDrawer(false);
 }
 
 // ---- Sliders UI -----------------------------------------------------------
@@ -1121,6 +1349,190 @@ function closeStop() {
   panel.innerHTML = "";
 }
 
+// ---- Stations: inspect card + profile launch ------------------------------
+
+// MapLibre serialises nested GeoJSON properties to JSON strings. `trend` comes
+// back as a string; parse it safely to an array of {year, value}.
+function parseTrend(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string" && raw.trim()) {
+    try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; }
+    catch (_) { return []; }
+  }
+  return [];
+}
+
+// Percent change across the trend series (first→last), or null if <2 points.
+function trendChangePct(trend) {
+  if (!trend || trend.length < 2) return null;
+  const first = trend[0].value, last = trend[trend.length - 1].value;
+  if (!first || first <= 0) return null;
+  return ((last - first) / first) * 100;
+}
+
+// A tiny inline SVG sparkline for the usage trend. Pure SVG, no library.
+function sparklineSVG(trend, color) {
+  if (!trend || trend.length < 2) return "";
+  const vals = trend.map(t => t.value);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const span = max - min || 1;
+  const W = 120, H = 30, pad = 2;
+  const pts = trend.map((t, i) => {
+    const x = pad + (i / (trend.length - 1)) * (W - 2 * pad);
+    const y = H - pad - ((t.value - min) / span) * (H - 2 * pad);
+    return [x, y];
+  });
+  const path = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  const last = pts[pts.length - 1];
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true" style="overflow:visible">
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.4" fill="${color}"/>
+  </svg>`;
+}
+
+// Pin a station's details in the floating panel (reuses #floating-detail),
+// with usage, operator and a trend sparkline, plus a button that builds the
+// station's walk-time catchment and runs the deep dive on it.
+function inspectStation(p, point) {
+  closeDetail();
+  closeStop();
+  state.selectedStation = p;
+  state.selectedPoint = point;
+  if (map.getLayer("station-selected")) {
+    map.setFilter("station-selected", ["==", "crs", p.crs || "___none___"]);
+  }
+
+  const usage = (p.usage != null && p.usage !== "") ? Number(p.usage) : null;
+  const trend = parseTrend(p.trend);
+  const changePct = trendChangePct(trend);
+  const year = state.stationsMeta?.latest_year || "";
+
+  const meta = [];
+  if (p.crs) meta.push(`CRS ${p.crs}`);
+  if (p.operator) meta.push(p.operator);
+
+  let trendBlock = "";
+  if (trend.length >= 2) {
+    const arrow = changePct == null ? "" : changePct > 1 ? "▲" : changePct < -1 ? "▼" : "▬";
+    const cls = changePct == null ? "" : changePct > 1 ? "up" : changePct < -1 ? "down" : "flat";
+    const pctTxt = changePct == null ? "" :
+      `<span class="st-trend-pct ${cls}">${arrow} ${Math.abs(changePct).toFixed(0)}%</span>`;
+    trendBlock = `
+      <div class="st-trend">
+        <div class="st-spark">${sparklineSVG(trend, STATION_COLOR)}</div>
+        <div class="st-trend-meta">
+          ${pctTxt}
+          <span class="dim">${trend[0].year}–${trend[trend.length - 1].year}</span>
+        </div>
+      </div>`;
+  }
+
+  const panel = document.getElementById("floating-detail");
+  panel.innerHTML = `
+    <button class="fd-close" aria-label="Close" title="Close">×</button>
+    <div class="fd-stop">
+      <div class="fd-stop-glyph" style="--mode-color:${STATION_COLOR}">
+        ${railGlyphSVG("rail")}
+      </div>
+      <div class="fd-stop-text">
+        <div class="fd-district">${p.name || "Station"}</div>
+        <div class="fd-stop-class">
+          <span class="fd-mode-badge" style="background:${STATION_COLOR}">Heavy rail</span>
+        </div>
+      </div>
+    </div>
+    ${meta.length ? `<div class="fd-stop-meta">${meta.join(" · ")}</div>` : ""}
+    <div class="report-headline" style="margin-top:10px">
+      <div class="big">${usage == null ? "—" : fmtCount(usage)}<span style="font-size:13px"> entries/exits</span></div>
+      <div class="cap">Annual passenger usage${year ? ` · ${year}` : ""}</div>
+    </div>
+    ${trendBlock}
+    <button class="deepdive-btn" id="station-profile-btn" type="button">
+      Profile this station →
+    </button>
+    <p class="hint" style="margin-top:8px">
+      Builds a walk-time catchment around the station and analyses its
+      deprivation, population and amenities.
+    </p>`;
+  panel.classList.add("open");
+  panel.querySelector(".fd-close").addEventListener("click", closeStation);
+  const btn = panel.querySelector("#station-profile-btn");
+  if (btn) btn.addEventListener("click", () => profileStation(p, point));
+  positionFloatingPanel(panel, point);
+}
+
+function closeStation() {
+  state.selectedStation = null;
+  if (map.getLayer("station-selected")) {
+    map.setFilter("station-selected", ["==", "crs", "___none___"]);
+  }
+  const panel = document.getElementById("floating-detail");
+  panel.classList.remove("open");
+  panel.innerHTML = "";
+}
+
+// Build the station's walk-time catchment (isochrone) and run the shared deep
+// dive on it, passing station-specific meta so the panel shows usage etc.
+async function profileStation(p, point) {
+  const station = state.selectedStation || p;
+  if (!station) return;
+  // Find the station's coordinates from the loaded GeoJSON (props from a tile
+  // click don't carry geometry).
+  let coords = null;
+  const feats = (state.stationsData && state.stationsData.features) || [];
+  const hit = feats.find(f => (f.properties.crs && f.properties.crs === station.crs) ||
+    f.properties.name === station.name);
+  if (hit) coords = hit.geometry.coordinates;
+  if (!coords) { alert("Couldn't locate that station's coordinates."); return; }
+
+  const minutes = STATION_WALK_MINUTES;
+  setStationProfileBtn("Building catchment…", true);
+  let catchment;
+  try {
+    catchment = await fetchIsochrone(coords[0], coords[1], "pedestrian", minutes);
+  } catch (e) {
+    setStationProfileBtn("Profile this station →", false);
+    alert(`Couldn't build the station catchment (${e.message}).`);
+    return;
+  }
+  if (!catchment) {
+    setStationProfileBtn("Profile this station →", false);
+    alert("No catchment returned for that station.");
+    return;
+  }
+
+  // Remember the origin so "nearest access" routes from the station itself.
+  plot.geometry = { type: "Point", coordinates: coords };
+  plot.mode = "pedestrian";
+  plot.minutes = minutes;
+
+  const usage = (station.usage != null && station.usage !== "") ? Number(station.usage) : null;
+  const trend = parseTrend(station.trend);
+  const { domains, parts } = areaWeightedScore(catchment);
+  closeStation();
+  runDeepDive(catchment, {
+    eyebrow: "Station profile",
+    title: station.name || "Station",
+    subtitle: `${minutes}-min walk catchment${parts ? ` · ${parts} LSOA${parts === 1 ? "" : "s"}` : ""}`,
+    domains,
+    scoreCaption: "Catchment deprivation · weighted",
+    station: {
+      name: station.name, crs: station.crs, operator: station.operator,
+      usage, trend, year: state.stationsMeta?.latest_year || "",
+    },
+  });
+}
+
+function setStationProfileBtn(text, disabled) {
+  const btn = document.getElementById("station-profile-btn");
+  if (btn) { btn.textContent = text; btn.disabled = !!disabled; }
+}
+
+// Default walk-time (minutes) for a station catchment. A 15-min walk is the
+// conventional station "ped-shed"; exposed as a constant so it's easy to lift
+// into a control later.
+const STATION_WALK_MINUTES = 15;
+
 // ---- Legend ---------------------------------------------------------------
 
 function buildLegend() {
@@ -1332,6 +1744,7 @@ function runDeepDive(catchment, meta) {
   deep.area_km2 = null;
   deep.popPartial = false;
   deep.counts = {};
+  deep.station = meta.station || null;   // station meta for the station section
 
   // The mask dims everything outside the catchment, so we keep the choropleth
   // reasonably visible (it shows through inside the catchment) rather than
@@ -2310,6 +2723,46 @@ function renderCrimeStats(crimes, body, monthCount) {
   if (showCb) showCb.checked = deep.crimeVisible;
 }
 
+// The station section for a station profile: the "usage" signal of the
+// need/supply/usage triad (need = deprivation block; supply = brownfield, added
+// in Workstream 2). Deliberately kept as its own visible signal rather than
+// folded into a single score.
+function stationSectionHTML(st) {
+  const usage = (st.usage != null) ? Number(st.usage) : null;
+  const trend = st.trend || [];
+  const changePct = trendChangePct(trend);
+  const arrow = changePct == null ? "" : changePct > 1 ? "▲" : changePct < -1 ? "▼" : "▬";
+  const cls = changePct == null ? "" : changePct > 1 ? "up" : changePct < -1 ? "down" : "flat";
+  const meta = [];
+  if (st.crs) meta.push(`CRS ${st.crs}`);
+  if (st.operator) meta.push(st.operator);
+
+  const trendBlock = trend.length >= 2 ? `
+    <div class="st-trend">
+      <div class="st-spark">${sparklineSVG(trend, STATION_COLOR)}</div>
+      <div class="st-trend-meta">
+        ${changePct == null ? "" : `<span class="st-trend-pct ${cls}">${arrow} ${Math.abs(changePct).toFixed(0)}%</span>`}
+        <span class="dim">${trend[0].year}–${trend[trend.length - 1].year}</span>
+      </div>
+    </div>` : "";
+
+  return `
+    <section class="dd-block" data-section="station">
+      <button class="dd-block-head" type="button" aria-expanded="true">
+        <span class="dd-h">Usage · this station</span><span class="dd-caret">▾</span>
+      </button>
+      <div class="dd-block-content">
+        <div class="dd-score">
+          <div class="dd-score-big">${usage == null ? "—" : fmtCount(usage)}<span> entries/exits</span></div>
+          <div class="dd-score-cap">Annual passenger usage${st.year ? ` · ${st.year}` : ""}</div>
+        </div>
+        ${trendBlock}
+        ${meta.length ? `<p class="hint" style="margin-top:8px">${meta.join(" · ")}</p>` : ""}
+        <p class="hint" style="margin-top:6px">Usage is the transit-asset signal — shown alongside need (deprivation) and, soon, developable supply, kept as separate measures rather than one blended score.</p>
+      </div>
+    </section>`;
+}
+
 function buildDeepDivePanel(meta) {
   const toggles = AMENITY_KINDS.map(a => `
     <label class="dd-row">
@@ -2335,9 +2788,11 @@ function buildDeepDivePanel(meta) {
     </div>
 
     <div class="dd-body">
+      ${meta.station ? stationSectionHTML(meta.station) : ""}
+
       <section class="dd-block" data-section="score">
         <button class="dd-block-head" type="button" aria-expanded="true">
-          <span class="dd-h">Deprivation</span><span class="dd-caret">▾</span>
+          <span class="dd-h">${meta.station ? "Need · deprivation" : "Deprivation"}</span><span class="dd-caret">▾</span>
         </button>
         <div class="dd-block-content">
           <div class="dd-score">
@@ -2868,6 +3323,7 @@ map.on("load", async () => {
     buildLegend();          // now that breaks.json is loaded
     buildLayerToggle();
     buildRailToggle();
+    buildStationControls();
     wireInteractions();
     // Intentionally NOT fitting to the national bbox — the map opens on London
     // (set in the map constructor: center [-0.11, 51.51], zoom 10.5). A city
