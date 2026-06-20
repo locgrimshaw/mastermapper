@@ -1306,7 +1306,9 @@ function removeCatchmentOutline() {
 }
 
 // Query Supabase for amenities of one kind inside the current catchment, cache
-// and render them. Returns the count (or null if the DB isn't configured).
+// and render them. Returns the count, or:
+//   null    = DB not configured (no Supabase client)
+//   "error" = the query ran but failed (returned via deep._lastAmenityError)
 async function loadAmenityKind(kind) {
   if (deep.cache[kind]) return deep.cache[kind].length;
 
@@ -1316,12 +1318,17 @@ async function loadAmenityKind(kind) {
   }
 
   const sb = getSupabase();
-  if (!sb) return null;
+  if (!sb) { deep._lastAmenityError = "not_configured"; return null; }
   const { data, error } = await sb.rpc("amenities_in_polygon", {
     catchment: deep.catchment.geometry,
     kinds: [kind],
   });
-  if (error) { console.error("amenities_in_polygon", error); return null; }
+  if (error) {
+    console.error("amenities_in_polygon failed for", kind, error);
+    deep._lastAmenityError = error.message || "query failed";
+    return null;
+  }
+  deep._lastAmenityError = null;
   deep.cache[kind] = data || [];
   return deep.cache[kind].length;
 }
@@ -1487,7 +1494,11 @@ async function toggleAmenityKind(kind, on) {
     const n = await loadAmenityKind(kind);
     if (n === null) {
       const meta = AMENITY_KINDS.find(a => a.kind === kind);
-      updateDeepStat(kind, meta && meta.source === "osm" ? "couldn't load" : "DB not configured");
+      let msg;
+      if (meta && meta.source === "osm") msg = "couldn't load";
+      else if (deep._lastAmenityError === "not_configured") msg = "DB not configured";
+      else msg = "query error — see console";
+      updateDeepStat(kind, msg);
       deep.enabledKinds.delete(kind);
       const cb = document.getElementById(`dd-${kind}`);
       if (cb) cb.checked = false;
