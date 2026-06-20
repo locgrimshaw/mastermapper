@@ -166,7 +166,20 @@ def main() -> int:
         return 1
 
     print("Reading IoD 2025 scores (File 7)...")
-    imd = pd.read_csv(imd_path)
+    # File 7 ships as comma-separated, but be tolerant of a tab-separated export
+    # (the extension is sometimes .csv either way). Sniff the first line: if it
+    # has tabs but no commas, read as TSV. Falls back to pandas' default comma.
+    try:
+        first_line = imd_path.open(encoding="utf-8", errors="replace").readline()
+    except Exception:
+        first_line = ""
+    sep = "\t" if ("\t" in first_line and "," not in first_line) else ","
+    imd = pd.read_csv(imd_path, sep=sep)
+    if imd.shape[1] == 1:
+        # Everything landed in one column — wrong delimiter. Retry with the other.
+        alt = "\t" if sep == "," else ","
+        print(f"  (only 1 column with '{sep}' delimiter — retrying with the other)")
+        imd = pd.read_csv(imd_path, sep=alt)
 
     # File 7 carries population denominator columns. Their exact header wording
     # varies by release vintage (e.g. "Total population: mid 2022 (excluding
