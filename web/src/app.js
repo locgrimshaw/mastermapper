@@ -1497,45 +1497,70 @@ async function loadCrime() {
   renderCrimeStats(all, body, months.length);
 }
 
+// The police anonymise locations to a master list of "snap points" — many
+// crimes collapse onto the same coordinate (e.g. a street centre covering 8+
+// addresses). So a dozen visible points can represent hundreds of crimes. We
+// therefore AGGREGATE by location and carry a `count` (and a category
+// breakdown) on each point, then size dots and weight the heatmap by it.
 function crimeFeatureCollection(crimes) {
-  return {
-    type: "FeatureCollection",
-    features: crimes
-      .filter(c => c.location && c.location.longitude && c.location.latitude)
-      .map(c => ({
-        type: "Feature",
-        geometry: {
-          type: "Point",
-          coordinates: [parseFloat(c.location.longitude), parseFloat(c.location.latitude)],
-        },
-        properties: {
-          category: (c.category || "other").replace(/-/g, " "),
-          street: c.location.street ? c.location.street.name : "",
-        },
-      })),
-  };
+  const byLoc = new Map();
+  for (const c of crimes) {
+    if (!c.location || !c.location.longitude || !c.location.latitude) continue;
+    const lng = parseFloat(c.location.longitude);
+    const lat = parseFloat(c.location.latitude);
+    const key = `${lng.toFixed(5)},${lat.toFixed(5)}`;
+    let e = byLoc.get(key);
+    if (!e) {
+      e = { lng, lat, count: 0, street: c.location.street ? c.location.street.name : "", cats: {} };
+      byLoc.set(key, e);
+    }
+    e.count++;
+    const cat = (c.category || "other").replace(/-/g, " ");
+    e.cats[cat] = (e.cats[cat] || 0) + 1;
+  }
+
+  const features = [];
+  for (const e of byLoc.values()) {
+    // Top category at this location, for the popup.
+    const top = Object.entries(e.cats).sort((a, b) => b[1] - a[1])[0];
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [e.lng, e.lat] },
+      properties: {
+        count: e.count,
+        street: e.street,
+        topCat: top ? top[0] : "",
+        // Compact breakdown string for the popup (e.g. "violent crime 12, ...").
+        breakdown: Object.entries(e.cats)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `${k} ${v}`).join(", "),
+      },
+    });
+  }
+  return { type: "FeatureCollection", features, _maxCount: Math.max(1, ...[...byLoc.values()].map(e => e.count)) };
 }
 
 function renderCrimeLayer(crimes) {
   const fc = crimeFeatureCollection(crimes);
+  const maxCount = fc._maxCount;
 
   if (map.getSource("crime")) {
     map.getSource("crime").setData(fc);
   } else {
     map.addSource("crime", { type: "geojson", data: fc });
 
-    // Heatmap layer — weights by point density. Hidden until the user toggles
-    // to heatmap mode. Sits below the dots in the layer order.
+    // Heatmap weighted by each point's crime count, so stacked snap points read
+    // as hot even though they're few in number.
     map.addLayer({
       id: "crime-heat", type: "heatmap", source: "crime",
       layout: { visibility: deep.crimeView === "heat" ? "visible" : "none" },
       paint: {
-        // More points nearby -> hotter. Intensity/radius grow with zoom so it
-        // reads at both the catchment overview and when zoomed right in.
-        "heatmap-weight": 1,
-        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 10, 1, 16, 3],
-        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 10, 12, 16, 30],
-        "heatmap-opacity": 0.75,
+        "heatmap-weight": ["interpolate", ["linear"], ["get", "count"], 0, 0, maxCount, 1],
+        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 16, 3.5],
+        // Wider radius so the relatively few snap points blend into a surface
+        // rather than reading as separate blobs (snap-point data is sparse).
+        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 10, 30, 14, 55, 16, 70],
+        "heatmap-opacity": 0.8,
         "heatmap-color": [
           "interpolate", ["linear"], ["heatmap-density"],
           0, "rgba(0,0,0,0)",
@@ -1548,23 +1573,50 @@ function renderCrimeLayer(crimes) {
       },
     });
 
-    // Dot layer — individual crimes, clickable for category + street.
+    // Dots sized by crime count at that location, so stacked snap points read
+    // as big dots. Radius scales sqrt-like (area ∝ count) between min and max.
+    const rMax = 26, rMin = 6;
     map.addLayer({
       id: "crime-dot", type: "circle", source: "crime",
       layout: { visibility: deep.crimeView === "heat" ? "none" : "visible" },
       paint: {
-        "circle-radius": 5,
+        "circle-radius": maxCount <= 1
+          ? rMin
+          : ["interpolate", ["linear"], ["get", "count"], 1, rMin, maxCount, rMax],
         "circle-color": CRIME_COLOR,
-        "circle-opacity": 0.75,
+        "circle-opacity": 0.55,
         "circle-stroke-color": "#fff",
-        "circle-stroke-width": 1,
+        "circle-stroke-width": 1.5,
       },
     });
+    // Count label on each dot.
+    map.addLayer({
+      id: "crime-count", type: "symbol", source: "crime",
+      layout: {
+        visibility: deep.crimeView === "heat" ? "none" : "visible",
+        "text-field": ["to-string", ["get", "count"]],
+        "text-size": maxCount <= 1
+          ? 10
+          : ["interpolate", ["linear"], ["get", "count"], 1, 10, maxCount, 15],
+        "text-font": ["Noto Sans Regular"],
+        "text-allow-overlap": true,
+      },
+      paint: {
+        "text-color": "#fff",
+        "text-halo-color": CRIME_COLOR,
+        "text-halo-width": 1.2,
+      },
+    });
+
     map.on("click", "crime-dot", (e) => {
       const pr = e.features[0].properties;
       new maplibregl.Popup({ offset: 8 })
         .setLngLat(e.lngLat)
-        .setHTML(`<strong style="text-transform:capitalize">${pr.category}</strong>${pr.street ? `<br>${pr.street}` : ""}`)
+        .setHTML(
+          `<strong>${pr.count} crime${pr.count == 1 ? "" : "s"}</strong>` +
+          (pr.street ? `<br>${pr.street}` : "") +
+          (pr.breakdown ? `<br><span style="font-size:11px;text-transform:capitalize">${pr.breakdown}</span>` : "")
+        )
         .addTo(map);
     });
   }
@@ -1573,18 +1625,20 @@ function renderCrimeLayer(crimes) {
 // Switch between "points" and "heat" views without refetching.
 function setCrimeView(view) {
   deep.crimeView = view;
-  if (map.getLayer("crime-dot"))
-    map.setLayoutProperty("crime-dot", "visibility", view === "heat" ? "none" : "visible");
+  const showDots = view !== "heat";
+  for (const id of ["crime-dot", "crime-count"]) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", showDots ? "visible" : "none");
+  }
   if (map.getLayer("crime-heat"))
     map.setLayoutProperty("crime-heat", "visibility", view === "heat" ? "visible" : "none");
-  // Reflect the active button in the panel.
   document.querySelectorAll(".dd-crime-toggle button").forEach(b =>
     b.classList.toggle("active", b.dataset.view === view));
 }
 
 function removeCrimeLayer() {
-  if (map.getLayer("crime-dot")) map.removeLayer("crime-dot");
-  if (map.getLayer("crime-heat")) map.removeLayer("crime-heat");
+  for (const id of ["crime-dot", "crime-count", "crime-heat"]) {
+    if (map.getLayer(id)) map.removeLayer(id);
+  }
   if (map.getSource("crime")) map.removeSource("crime");
 }
 
