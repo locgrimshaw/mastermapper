@@ -1197,7 +1197,7 @@ const AMENITY_KINDS = [
   { kind: "pharmacy",    label: "Pharmacies",     color: "#0ea5a4", source: "supabase" },
   { kind: "school",      label: "Schools",        color: "#7c3aed", source: "supabase" },
   { kind: "nursery",     label: "Nurseries",      color: "#db2777", source: "supabase" },
-  { kind: "bus_stop",    label: "Bus stops",      color: "#f59e0b", source: "supabase" },
+  { kind: "bus_stop",    label: "Bus stops",      color: "#f59e0b", source: "supabase", icon: "bus" },
   { kind: "supermarket", label: "Food stores",    color: "#16a34a", source: "osm" },
 ];
 
@@ -1377,7 +1377,7 @@ async function loadOsmAmenity(kind) {
   }
 }
 
-function renderAmenityLayer(kind) {
+async function renderAmenityLayer(kind) {
   const meta = AMENITY_KINDS.find(a => a.kind === kind);
   const rows = deep.cache[kind] || [];
   const fc = {
@@ -1393,12 +1393,31 @@ function renderAmenityLayer(kind) {
     })),
   };
   const srcId = `amenity-${kind}`;
+  const layerId = `${srcId}-dot`;
+
   if (map.getSource(srcId)) {
     map.getSource(srcId).setData(fc);
-  } else {
-    map.addSource(srcId, { type: "geojson", data: fc });
+    return;
+  }
+
+  map.addSource(srcId, { type: "geojson", data: fc });
+
+  if (meta.icon) {
+    // Icon marker (e.g. a little bus for stops).
+    const imgId = await registerIcon(meta.icon, meta.color);
     map.addLayer({
-      id: `${srcId}-dot`, type: "circle", source: srcId,
+      id: layerId, type: "symbol", source: srcId,
+      layout: {
+        "icon-image": imgId,
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 11, 0.42, 16, 0.62],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+      },
+    });
+  } else {
+    // Plain coloured dot.
+    map.addLayer({
+      id: layerId, type: "circle", source: srcId,
       paint: {
         "circle-radius": 6,
         "circle-color": meta.color,
@@ -1406,15 +1425,53 @@ function renderAmenityLayer(kind) {
         "circle-stroke-width": 1.5,
       },
     });
-    // Tap an amenity for its name + subtype.
-    map.on("click", `${srcId}-dot`, (e) => {
-      const pr = e.features[0].properties;
-      new maplibregl.Popup({ offset: 8 })
-        .setLngLat(e.lngLat)
-        .setHTML(`<strong>${pr.name}</strong><br>${pr.sub || meta.label}`)
-        .addTo(map);
-    });
   }
+
+  // Tap an amenity for its name + subtype.
+  map.on("click", layerId, (e) => {
+    const pr = e.features[0].properties;
+    new maplibregl.Popup({ offset: 8 })
+      .setLngLat(e.lngLat)
+      .setHTML(`<strong>${pr.name}</strong><br>${pr.sub || meta.label}`)
+      .addTo(map);
+  });
+}
+
+// SVG marker images for amenity symbol layers, keyed by icon name. We draw a
+// rounded pin with a white glyph and register it as a map image, so symbol
+// layers can use it (e.g. little bus markers for stops). Cached so we only
+// build each once per map.
+const ICON_SVGS = {
+  // A bus glyph on a coloured rounded square with a white border.
+  bus: (color) => `
+    <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+      <rect x="3" y="3" width="38" height="38" rx="10" fill="${color}" stroke="#fff" stroke-width="3"/>
+      <g fill="#fff">
+        <rect x="13" y="11" width="18" height="17" rx="3"/>
+        <rect x="15" y="14" width="14" height="6" rx="1.5" fill="${color}"/>
+        <circle cx="17" cy="29.5" r="2.6"/>
+        <circle cx="27" cy="29.5" r="2.6"/>
+      </g>
+    </svg>`,
+};
+
+const _iconsLoaded = new Set();
+async function registerIcon(name, color) {
+  const id = `icon-${name}`;
+  if (_iconsLoaded.has(id) || map.hasImage(id)) { _iconsLoaded.add(id); return id; }
+  const svg = ICON_SVGS[name](color);
+  const url = "data:image/svg+xml;base64," + btoa(svg);
+  await new Promise((resolve) => {
+    const img = new Image(44, 44);
+    img.onload = () => {
+      if (!map.hasImage(id)) map.addImage(id, img, { pixelRatio: 2 });
+      _iconsLoaded.add(id);
+      resolve();
+    };
+    img.onerror = () => resolve();   // fall back to a dot if the image fails
+    img.src = url;
+  });
+  return id;
 }
 
 function removeAmenityLayer(kind) {
@@ -1436,7 +1493,7 @@ async function toggleAmenityKind(kind, on) {
       if (cb) cb.checked = false;
       return;
     }
-    renderAmenityLayer(kind);
+    await renderAmenityLayer(kind);
     updateDeepStat(kind, `${n} in catchment`);
   } else {
     deep.enabledKinds.delete(kind);
