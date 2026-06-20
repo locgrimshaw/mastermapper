@@ -676,6 +676,145 @@ footer {
   color: var(--text-dim);
 }
 
+/* ---- Deep-dive right-side slide-out panel ---- */
+.deepdive-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 380px;
+  max-width: 92vw;
+  z-index: 35;
+  background: var(--surface-float);
+  border-left: 1px solid var(--ink-line);
+  box-shadow: var(--float-shadow);
+  color: var(--text);
+  font-family: var(--font-ui);
+  transform: translateX(100%);
+  transition: transform 0.28s ease;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.deepdive-panel.open { transform: translateX(0); }
+
+.dd-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--ink-line);
+}
+.dd-eyebrow {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  font-weight: 600;
+}
+.dd-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+}
+.dd-subtitle {
+  font-family: var(--font-data);
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+.dd-close {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.dd-close:hover { color: var(--text); background: var(--ink-line); }
+
+.dd-body {
+  overflow-y: auto;
+  padding: 4px 20px 24px;
+}
+.dd-block {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--ink-line);
+}
+.dd-block:last-child { border-bottom: none; }
+.dd-h {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  margin: 0 0 10px;
+}
+.dd-h-note { color: var(--text-dim); font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+.dd-score-big {
+  font-family: var(--font-data);
+  font-size: 38px;
+  font-weight: 600;
+  line-height: 1;
+}
+.dd-score-big span { font-size: 15px; color: var(--text-dim); }
+.dd-score-cap { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+.dd-load-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+.dd-load-btn:hover { filter: brightness(1.08); }
+
+/* Crime stats */
+.dd-crime-total { font-size: 14px; margin-bottom: 10px; }
+.dd-crime-total strong { font-family: var(--font-data); font-size: 18px; }
+.dd-crime-list { display: flex; flex-direction: column; gap: 6px; }
+.dd-crime-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 32px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.dd-crime-cat { text-transform: capitalize; color: var(--text); }
+.dd-crime-bar {
+  height: 6px;
+  background: var(--ink-line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.dd-crime-bar span {
+  display: block;
+  height: 100%;
+  background: #b5179e;
+  border-radius: 3px;
+}
+.dd-crime-n {
+  font-family: var(--font-data);
+  font-size: 11px;
+  text-align: right;
+  color: var(--text-dim);
+}
+
+/* On small screens the panel takes the full width. */
+@media (max-width: 720px) {
+  .deepdive-panel { width: 100vw; max-width: 100vw; }
+}
+
 /* ---- Rail stop info panel ---- */
 .fd-stop {
   display: flex;

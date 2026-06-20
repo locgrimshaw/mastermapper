@@ -1246,7 +1246,11 @@ async function enterDeepDive(p) {
   if (map.getLayer("lsoa-fill")) map.setPaintProperty("lsoa-fill", "fill-opacity", 0.35);
   closeDetail();
   const bbox = turf.bbox(deep.catchment);
-  map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 60, duration: 600 });
+  // Extra right padding so the area sits clear of the slide-out panel (which is
+  // 380px on desktop, full-width on mobile).
+  const rightPad = window.innerWidth <= 720 ? 40 : 420;
+  map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+    { padding: { top: 60, bottom: 60, left: 60, right: rightPad }, duration: 600 });
 
   // Draw the catchment outline so the user sees the area being analysed.
   setCatchmentOutline(deep.catchment);
@@ -1257,12 +1261,13 @@ async function enterDeepDive(p) {
 function exitDeepDive() {
   deep.active = false;
   for (const a of AMENITY_KINDS) removeAmenityLayer(a.kind);
+  removeCrimeLayer();
   removeCatchmentOutline();
   if (map.getLayer("lsoa-fill"))
     map.setPaintProperty("lsoa-fill", "fill-opacity", state.fillOpacity);
-  const panel = document.getElementById("floating-detail");
-  panel.classList.remove("open");
-  panel.innerHTML = "";
+  setDeepPanelOpen(false);
+  const panel = document.getElementById("deepdive-panel");
+  if (panel) panel.innerHTML = "";
   if (deep.prevView) {
     map.easeTo({ center: deep.prevView.center, zoom: deep.prevView.zoom, duration: 500 });
   }
@@ -1367,6 +1372,178 @@ function updateDeepStat(kind, text) {
   if (el) el.textContent = text;
 }
 
+// ---- Crime (data.police.uk) ----------------------------------------------
+// The police API takes our catchment polygon directly and returns street-level
+// crimes inside it for a given month — no API key, no storage needed. We plot
+// the points and summarise counts by category in the panel.
+const CRIME_COLOR = "#b5179e";
+
+// Turn the catchment polygon into the API's "lat,lng:lat,lng:..." poly format.
+// The API wants lat,lng pairs; our GeoJSON is [lng,lat]. We use the outer ring
+// and, if it's very detailed, thin it (the API rejects over-long polygons).
+function catchmentToPolyParam() {
+  let ring;
+  const g = deep.catchment.geometry;
+  if (g.type === "Polygon") ring = g.coordinates[0];
+  else if (g.type === "MultiPolygon") ring = g.coordinates[0][0];
+  else return null;
+
+  // The API limits URL length / vertex count; simplify to ~30 points if needed.
+  let pts = ring;
+  if (pts.length > 32 && window.turf) {
+    try {
+      const simp = turf.simplify(
+        { type: "Feature", geometry: { type: "Polygon", coordinates: [ring] } },
+        { tolerance: 0.0008, highQuality: false }
+      );
+      const sg = simp.geometry;
+      pts = sg.type === "Polygon" ? sg.coordinates[0] : pts;
+    } catch (_) { /* fall through with original ring */ }
+  }
+  // Still too many? Sample evenly.
+  if (pts.length > 60) {
+    const step = Math.ceil(pts.length / 60);
+    pts = pts.filter((_, i) => i % step === 0);
+  }
+  return pts.map(([lng, lat]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join(":");
+}
+
+// The police API publishes data a couple of months behind; find the most recent
+// month it actually has by asking the availability endpoint.
+async function latestCrimeMonth() {
+  try {
+    const r = await fetch("https://data.police.uk/api/crimes-street-dates");
+    if (!r.ok) return null;
+    const arr = await r.json();
+    return arr && arr.length ? arr[0].date : null;   // e.g. "2025-12"
+  } catch (_) { return null; }
+}
+
+async function loadCrime() {
+  const body = document.getElementById("dd-crime-body");
+  const periodEl = document.getElementById("dd-crime-period");
+  if (!body) return;
+  body.innerHTML = `<p class="hint">Loading crime data…</p>`;
+
+  const poly = catchmentToPolyParam();
+  if (!poly) { body.innerHTML = `<p class="hint">Couldn't read the catchment shape.</p>`; return; }
+
+  const month = await latestCrimeMonth();
+  // Use POST with the poly in the body: it sidesteps the API's 4094-char GET
+  // URL limit, which a detailed LSOA boundary can exceed.
+  const url = "https://data.police.uk/api/crimes-street/all-crime";
+  const form = new URLSearchParams();
+  form.set("poly", poly);
+  if (month) form.set("date", month);
+
+  let crimes;
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+    });
+    if (r.status === 503) {
+      body.innerHTML =
+        `<p class="hint">This area has too many crimes for the police API to
+         return at once (their limit is 10,000). That usually means a very
+         dense city-centre LSOA. Crime mapping still works for most areas.</p>`;
+      return;
+    }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    crimes = await r.json();
+  } catch (e) {
+    body.innerHTML =
+      `<p class="hint">Couldn't load crime data (${e.message}).</p>
+       <button class="dd-load-btn" id="dd-crime-load" type="button">Try again</button>`;
+    body.querySelector("#dd-crime-load")?.addEventListener("click", loadCrime);
+    return;
+  }
+
+  if (periodEl && month) {
+    const [y, m] = month.split("-");
+    const mn = new Date(`${y}-${m}-01`).toLocaleString("en-GB", { month: "short", year: "numeric" });
+    periodEl.textContent = `· ${mn}`;
+  }
+
+  renderCrimeLayer(crimes);
+  renderCrimeStats(crimes, body);
+}
+
+function renderCrimeLayer(crimes) {
+  const fc = {
+    type: "FeatureCollection",
+    features: crimes
+      .filter(c => c.location && c.location.longitude && c.location.latitude)
+      .map(c => ({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [parseFloat(c.location.longitude), parseFloat(c.location.latitude)],
+        },
+        properties: {
+          category: (c.category || "other").replace(/-/g, " "),
+          street: c.location.street ? c.location.street.name : "",
+        },
+      })),
+  };
+  if (map.getSource("crime")) {
+    map.getSource("crime").setData(fc);
+  } else {
+    map.addSource("crime", { type: "geojson", data: fc });
+    map.addLayer({
+      id: "crime-dot", type: "circle", source: "crime",
+      paint: {
+        "circle-radius": 5,
+        "circle-color": CRIME_COLOR,
+        "circle-opacity": 0.75,
+        "circle-stroke-color": "#fff",
+        "circle-stroke-width": 1,
+      },
+    });
+    map.on("click", "crime-dot", (e) => {
+      const pr = e.features[0].properties;
+      new maplibregl.Popup({ offset: 8 })
+        .setLngLat(e.lngLat)
+        .setHTML(`<strong style="text-transform:capitalize">${pr.category}</strong>${pr.street ? `<br>${pr.street}` : ""}`)
+        .addTo(map);
+    });
+  }
+}
+
+function removeCrimeLayer() {
+  if (map.getLayer("crime-dot")) map.removeLayer("crime-dot");
+  if (map.getSource("crime")) map.removeSource("crime");
+}
+
+function renderCrimeStats(crimes, body) {
+  const total = crimes.length;
+  if (!total) {
+    body.innerHTML = `<p class="hint">No recorded street-level crimes in this area for the latest month.</p>`;
+    return;
+  }
+  // Count by category, sort desc.
+  const counts = {};
+  for (const c of crimes) {
+    const cat = (c.category || "other").replace(/-/g, " ");
+    counts[cat] = (counts[cat] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const max = sorted[0][1];
+
+  const rows = sorted.map(([cat, n]) => `
+    <div class="dd-crime-row">
+      <span class="dd-crime-cat">${cat}</span>
+      <span class="dd-crime-bar"><span style="width:${(n / max * 100).toFixed(0)}%"></span></span>
+      <span class="dd-crime-n">${n}</span>
+    </div>`).join("");
+
+  body.innerHTML = `
+    <div class="dd-crime-total"><strong>${total}</strong> recorded crimes</div>
+    <div class="dd-crime-list">${rows}</div>
+    <p class="hint" style="margin-top:8px">Street-level crimes from data.police.uk, snapped to approximate locations. Toggling deep dive off clears these.</p>`;
+}
+
 function buildDeepDivePanel(p) {
   const district = p.lad_name || "Unknown district";
   const sub = p.lsoa_name ? `${p.lsoa_name} · ${p.lsoa_code}` : p.lsoa_code;
@@ -1384,29 +1561,55 @@ function buildDeepDivePanel(p) {
   const note = configured ? "" :
     `<p class="hint" style="margin-top:10px">Connect Supabase (see config.js) to load amenity layers.</p>`;
 
-  const panel = document.getElementById("floating-detail");
+  const panel = document.getElementById("deepdive-panel");
   panel.innerHTML = `
-    <button class="fd-close" aria-label="Close deep dive" title="Close">×</button>
-    <div class="fd-location">
-      <div class="fd-district">Deep dive · ${district}</div>
-      <div class="fd-sub">${sub}</div>
+    <div class="dd-head">
+      <div>
+        <div class="dd-eyebrow">Deep dive</div>
+        <div class="dd-title">${district}</div>
+        <div class="dd-subtitle">${sub}</div>
+      </div>
+      <button class="dd-close" aria-label="Close deep dive" title="Close">×</button>
     </div>
-    <div class="report-headline">
-      <div class="big">${combined.toFixed(0)}<span style="font-size:14px">/100</span></div>
-      <div class="cap">Combined deprivation · weighted</div>
-    </div>
-    <div class="dd-section-title">Amenities in this area</div>
-    <div class="dd-toggles">${toggles}</div>
-    ${note}
-    <p class="hint" style="margin-top:8px">Toggle a layer to load and map it within the catchment.</p>`;
-  panel.classList.add("open");
-  panel.querySelector(".fd-close").addEventListener("click", exitDeepDive);
+
+    <div class="dd-body">
+      <section class="dd-block">
+        <div class="dd-score">
+          <div class="dd-score-big">${combined.toFixed(0)}<span>/100</span></div>
+          <div class="dd-score-cap">Combined deprivation · weighted</div>
+        </div>
+      </section>
+
+      <section class="dd-block">
+        <h3 class="dd-h">Amenities in this area</h3>
+        <div class="dd-toggles">${toggles}</div>
+        ${note}
+        <p class="hint" style="margin-top:8px">Toggle a layer to map it within the catchment.</p>
+      </section>
+
+      <section class="dd-block" id="dd-crime-block">
+        <h3 class="dd-h">Crime <span class="dd-h-note" id="dd-crime-period"></span></h3>
+        <div id="dd-crime-body">
+          <button class="dd-load-btn" id="dd-crime-load" type="button">Load crime data</button>
+        </div>
+      </section>
+    </div>`;
+
+  setDeepPanelOpen(true);
+  panel.querySelector(".dd-close").addEventListener("click", exitDeepDive);
   for (const a of AMENITY_KINDS) {
     const cb = panel.querySelector(`#dd-${a.kind}`);
     if (cb) cb.addEventListener("change", (e) => toggleAmenityKind(a.kind, e.target.checked));
   }
-  // Anchor the deep-dive panel where the LSOA panel was.
-  positionFloatingPanel(panel, state.selectedPoint);
+  const crimeBtn = panel.querySelector("#dd-crime-load");
+  if (crimeBtn) crimeBtn.addEventListener("click", loadCrime);
+}
+
+function setDeepPanelOpen(open) {
+  const panel = document.getElementById("deepdive-panel");
+  if (!panel) return;
+  panel.classList.toggle("open", open);
+  panel.setAttribute("aria-hidden", open ? "false" : "true");
 }
 
 // ---- Boot -----------------------------------------------------------------
