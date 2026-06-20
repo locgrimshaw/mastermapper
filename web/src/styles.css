@@ -854,6 +854,35 @@ footer {
 .dd-score-big span { font-size: 15px; color: var(--text-dim); }
 .dd-score-cap { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
 
+/* Catchment stat grid (population / area / density) */
+.dd-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.dd-stat-cell {
+  background: var(--accent-dim);
+  border: 1px solid var(--ink-line);
+  border-radius: 8px;
+  padding: 10px 8px;
+  text-align: center;
+  min-width: 0;
+}
+.dd-stat-num {
+  font-family: var(--font-data);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.dd-stat-cap {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
+
 /* Plain-English summary under the headline score */
 .dd-score-summary {
   font-size: 12.5px;

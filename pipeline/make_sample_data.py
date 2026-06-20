@@ -68,6 +68,11 @@ def main():
             props["price_norm"] = pnorm
             props["price_median"] = int(180000 + pnorm / 100 * 720000)
             props["price_count"] = int(8 + smooth_field(c, r, seed=300) * 40)
+            # Synthetic resident population. Real LSOAs hold ~1,000-3,000 people
+            # by design; vary it smoothly so density figures look plausible in
+            # dev (the choropleth cells here are equal-area, so population alone
+            # drives the per-km² and per-1,000 figures).
+            props["population"] = int(1100 + smooth_field(c, r, seed=400) * 2200)
             features.append({
                 "type": "Feature",
                 "properties": props,

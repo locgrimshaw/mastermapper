@@ -769,7 +769,9 @@ function buildReport(plot) {
     } catch { inter = null; }
     if (!inter) continue;
     const area = turf.area(inter);
-    if (area > 0) overlaps.push({ props: f.properties, area });
+    let fullArea = 0;
+    try { fullArea = turf.area(f); } catch (_) { fullArea = 0; }
+    if (area > 0) overlaps.push({ props: f.properties, area, fullArea });
   }
 
   if (!overlaps.length) {
@@ -790,6 +792,30 @@ function buildReport(plot) {
     Object.fromEntries(DOMAINS.map(d => [`${d.key}_norm`, agg[d.key]])),
     state.weights
   );
+
+  // Estimated population across the plot: sum each overlapping LSOA's
+  // population scaled by the share of that LSOA's area inside the plot (areal
+  // interpolation — same approach as the deep dive). `o.area` is the
+  // intersection area; we divide by the LSOA's full area for the share.
+  let popLine = "";
+  {
+    let popSum = 0, haveAny = false, missing = false;
+    for (const o of overlaps) {
+      const pop = o.props.population;
+      if (pop == null || isNaN(pop)) { missing = true; continue; }
+      const full = o.fullArea;
+      const share = full > 0 ? Math.min(1, o.area / full) : 0;
+      popSum += Number(pop) * share;
+      haveAny = true;
+    }
+    if (haveAny) {
+      const km2 = totalArea / 1e6;
+      const dens = km2 > 0 ? Math.round(popSum / km2).toLocaleString() : "—";
+      popLine = `<div class="price-line"><span>Est. population</span>
+           <strong>${Math.round(popSum).toLocaleString()}${missing ? "+" : ""}</strong>
+           <span class="dim">${dens} / km²</span></div>`;
+    }
+  }
 
   // House-price summary across the plot: weight each area's median by its
   // sale count (more sales = more reliable), so one thin LSOA with a single
@@ -824,6 +850,7 @@ function buildReport(plot) {
       <div class="big">${combined.toFixed(0)}<span style="font-size:14px">/100</span></div>
       <div class="cap">Combined deprivation · ${overlaps.length} area(s) · weighted</div>
     </div>
+    ${popLine}
     ${priceLine}
     <table class="metric-table">${rows}</table>
     <p class="hint" style="margin-top:14px">
@@ -871,6 +898,16 @@ function inspectLSOA(propsOrCode, point) {
          <span class="dim">${p.price_count} sales · 2024</span></div>`
     : (state.hasPrice ? `<div class="price-line dim">No 2024 sales recorded</div>` : "");
 
+  // Population for the single LSOA (exact — straight from the zone's own
+  // figure). Density is omitted here since the floating card is compact; the
+  // deep dive shows area + density for catchments.
+  let popLine = "";
+  if (p.population != null && !isNaN(p.population)) {
+    popLine = `<div class="price-line"><span>Population</span>
+         <strong>${Number(p.population).toLocaleString()}</strong>
+         <span class="dim">residents</span></div>`;
+  }
+
   const rows = DOMAINS.map(d => {
     const v = p[`${d.key}_norm`] ?? 0;
     return `<tr>
@@ -898,6 +935,7 @@ function inspectLSOA(propsOrCode, point) {
       <div class="cap">Combined deprivation · weighted</div>
     </div>
     ${priceLine}
+    ${popLine}
     <table class="metric-table">${rows}</table>
     <p class="hint" style="margin-top:12px">
       Values are national percentiles (100 = most deprived in England).
@@ -1237,6 +1275,10 @@ const deep = {
   crimeView: "points",   // "points" | "heat"
   crimeVisible: true,    // whether crime layers are shown
   crimeData: null,       // cached 12-month crime array
+  population: null,      // estimated resident population of the catchment
+  area_km2: null,        // catchment area in km²
+  popPartial: false,    // true if some overlapping LSOAs lacked population
+  counts: {},           // kind -> latest count in catchment (for density)
 };
 
 async function enterDeepDive(p) {
@@ -1286,6 +1328,10 @@ function runDeepDive(catchment, meta) {
   deep.crimeView = "points";
   deep.crimeVisible = true;
   deep.crimeData = null;
+  deep.population = null;
+  deep.area_km2 = null;
+  deep.popPartial = false;
+  deep.counts = {};
 
   // The mask dims everything outside the catchment, so we keep the choropleth
   // reasonably visible (it shows through inside the catchment) rather than
@@ -1300,10 +1346,71 @@ function runDeepDive(catchment, meta) {
   setCatchmentOutline(deep.catchment);
   buildDeepDivePanel(meta);
 
+  // Estimate the catchment's resident population + area, then fill the stat row.
+  computeCatchmentPopulation();
+
   // Auto-activate every amenity layer so the user immediately sees what's in the
   // catchment, and compute nearest-distance stats. Done after the panel exists.
   autoEnableAmenities();
   computeNearestDistances();
+}
+
+// Compute the catchment's area, estimated resident population and density, store
+// them on `deep`, and render the catchment stat row. Also refreshes amenity
+// density figures (which depend on population). Safe to call once per deep dive.
+function computeCatchmentPopulation() {
+  const res = areaWeightedPopulation(deep.catchment);
+  deep.population = res.population;
+  deep.area_km2 = res.area_km2;
+  deep.popPartial = res.partial;
+  renderCatchmentStats();
+  // Any amenity counts already loaded now get a per-1,000 figure.
+  refreshAmenityDensities();
+}
+
+// Compact number formatting for stat cells: 1,234 / 12.3k / 1.2M.
+function fmtCount(n) {
+  if (n == null || isNaN(n)) return "—";
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+  if (n >= 10000) return (n / 1000).toFixed(0) + "k";
+  return Math.round(n).toLocaleString();
+}
+
+// Area, formatted: m² under a km², else km² with sensible precision.
+function fmtArea(km2) {
+  if (km2 == null || isNaN(km2)) return "—";
+  if (km2 < 0.1) return `${Math.round(km2 * 1e6).toLocaleString()} m²`;
+  if (km2 < 10) return `${km2.toFixed(2)} km²`;
+  if (km2 < 100) return `${km2.toFixed(1)} km²`;
+  return `${Math.round(km2).toLocaleString()} km²`;
+}
+
+// Fill the catchment stat cells (population / area / density) from `deep`.
+function renderCatchmentStats() {
+  const popEl = document.getElementById("dd-pop-value");
+  const areaEl = document.getElementById("dd-area-value");
+  const densEl = document.getElementById("dd-density-value");
+  const noteEl = document.getElementById("dd-pop-note");
+  if (!popEl) return;
+
+  popEl.textContent = deep.population == null ? "—" : fmtCount(deep.population);
+  popEl.title = deep.population == null ? "" : deep.population.toLocaleString() + " residents (est.)";
+  if (areaEl) areaEl.textContent = fmtArea(deep.area_km2);
+  const dens = densityPerKm2(deep.population, deep.area_km2);
+  if (densEl) densEl.textContent = dens == null ? "—" : fmtCount(dens);
+
+  if (noteEl) {
+    if (deep.population == null) {
+      noteEl.textContent =
+        "Population estimate unavailable — load LSOA population data (see DATASETS.md) to enable this.";
+    } else if (deep.popPartial) {
+      noteEl.textContent =
+        "Area-weighted estimate; some overlapping LSOAs lacked a population figure, so this is a lower bound.";
+    } else {
+      noteEl.textContent =
+        "Area-weighted estimate from overlapping LSOAs, assuming people are spread evenly within each.";
+    }
+  }
 }
 
 // Switch on all amenity layers (ticking their boxes and loading them).
@@ -1837,11 +1944,34 @@ async function toggleAmenityKind(kind, on) {
       return;
     }
     await renderAmenityLayer(kind);
-    updateDeepStat(kind, `${n} in catchment`);
+    deep.counts[kind] = n;
+    updateDeepStat(kind, formatAmenityStat(kind, n));
   } else {
     deep.enabledKinds.delete(kind);
     removeAmenityLayer(kind);
+    delete deep.counts[kind];
     updateDeepStat(kind, "");
+  }
+}
+
+// Build the per-amenity stat string: raw count plus, when population is known,
+// a density per 1,000 residents (the more comparable figure across catchments
+// of different sizes). Bus stops use a coarser denominator implicitly via the
+// same formula; the per-1,000 figure is still meaningful.
+function formatAmenityStat(kind, n) {
+  if (n == null) return "";
+  const d = per1000(n, deep.population);
+  if (d == null) return `${n} in catchment`;
+  // Show more precision for small rates so "0.4 / 1k" doesn't round to 0.
+  const dStr = d >= 10 ? d.toFixed(0) : d >= 1 ? d.toFixed(1) : d.toFixed(2);
+  return `${n} · ${dStr} / 1k`;
+}
+
+// Re-render every loaded amenity's stat (used once population becomes known, so
+// counts that loaded before the population estimate gain their density figure).
+function refreshAmenityDensities() {
+  for (const kind of Object.keys(deep.counts)) {
+    updateDeepStat(kind, formatAmenityStat(kind, deep.counts[kind]));
   }
 }
 
@@ -2220,6 +2350,29 @@ function buildDeepDivePanel(meta) {
         </div>
       </section>
 
+      <section class="dd-block" data-section="catchment">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Catchment</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <div class="dd-stats-grid" id="dd-catchment-stats">
+            <div class="dd-stat-cell">
+              <div class="dd-stat-num" id="dd-pop-value">—</div>
+              <div class="dd-stat-cap">Est. population</div>
+            </div>
+            <div class="dd-stat-cell">
+              <div class="dd-stat-num" id="dd-area-value">—</div>
+              <div class="dd-stat-cap">Area</div>
+            </div>
+            <div class="dd-stat-cell">
+              <div class="dd-stat-num" id="dd-density-value">—</div>
+              <div class="dd-stat-cap">Density / km²</div>
+            </div>
+          </div>
+          <p class="hint" id="dd-pop-note" style="margin-top:8px">Population is area-weighted from the LSOAs the catchment overlaps, assuming people are spread evenly within each.</p>
+        </div>
+      </section>
+
       <section class="dd-block" data-section="amenities">
         <button class="dd-block-head" type="button" aria-expanded="true">
           <span class="dd-h">Amenities in this area</span><span class="dd-caret">▾</span>
@@ -2227,7 +2380,7 @@ function buildDeepDivePanel(meta) {
         <div class="dd-block-content">
           <div class="dd-toggles">${toggles}</div>
           ${note}
-          <p class="hint" style="margin-top:8px">Toggle a layer to map it within the catchment.</p>
+          <p class="hint" style="margin-top:8px">Each shows the count in the catchment and, where population is known, the rate per 1,000 residents. Toggle a layer to map it.</p>
         </div>
       </section>
 
@@ -2426,6 +2579,75 @@ function areaWeightedScore(catchment) {
     domains[k] = wsum > 0 ? acc / wsum : null;
   }
   return { domains, parts: contribs.length };
+}
+
+// Area-weighted resident population for an arbitrary catchment polygon. Unlike
+// the deprivation score (an AVERAGE of percentiles), population is a COUNT, so
+// we SUM each overlapping LSOA's population scaled by the share of that LSOA's
+// area falling inside the catchment. This assumes population is spread evenly
+// within an LSOA — the standard areal-interpolation approximation — which is
+// reasonable at LSOA scale and clearly the right call for isochrone catchments
+// where we have no finer breakdown. Returns { population, area_km2, parts,
+// partial } where `partial` flags that some overlapping LSOAs lacked a
+// population value (so the figure is a floor, not exact).
+function areaWeightedPopulation(catchment) {
+  const out = { population: null, area_km2: null, parts: 0, partial: false };
+  if (!window.turf) return out;
+
+  let area_m2 = 0;
+  try { area_m2 = turf.area(catchment); } catch (_) { area_m2 = 0; }
+  out.area_km2 = area_m2 > 0 ? area_m2 / 1e6 : null;
+
+  const feats = map.querySourceFeatures("lsoa", { sourceLayer: SOURCE_LAYER });
+  if (!feats.length) return out;
+
+  const seen = new Set();
+  let pop = 0;
+  let counted = 0;
+  let missing = 0;
+  for (const f of feats) {
+    const props = f.properties || {};
+    const code = props.lsoa_code;
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+
+    let inter;
+    try {
+      inter = turf.intersect(turf.featureCollection([catchment, f]));
+    } catch (_) { inter = null; }
+    if (!inter) continue;
+
+    let interArea, lsoaArea;
+    try { interArea = turf.area(inter); } catch (_) { interArea = 0; }
+    if (interArea <= 0) continue;
+    try { lsoaArea = turf.area(f); } catch (_) { lsoaArea = 0; }
+    if (lsoaArea <= 0) continue;
+
+    const share = Math.min(1, interArea / lsoaArea);
+    const lsoaPop = props.population;
+    if (lsoaPop == null || isNaN(lsoaPop)) { missing++; continue; }
+    pop += Number(lsoaPop) * share;
+    counted++;
+  }
+
+  out.parts = counted + missing;
+  if (counted > 0) {
+    out.population = Math.round(pop);
+    out.partial = missing > 0;
+  }
+  return out;
+}
+
+// People per km² from a population + area, or null if either is missing.
+function densityPerKm2(population, area_km2) {
+  if (population == null || area_km2 == null || area_km2 <= 0) return null;
+  return population / area_km2;
+}
+
+// Amenities per 1,000 residents, or null if population is unknown/zero.
+function per1000(count, population) {
+  if (population == null || population <= 0 || count == null) return null;
+  return (count / population) * 1000;
 }
 
 // Combined score from stored per-domain averages, using the CURRENT weights and

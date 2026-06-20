@@ -41,6 +41,7 @@ KEEP_ATTRS = [
     "income_norm", "employment_norm", "education_norm", "health_norm",
     "crime_norm", "housing_norm", "environment_norm",
     "price_norm", "price_median", "price_count",
+    "population",   # resident population — drives catchment population + density
 ]
 
 

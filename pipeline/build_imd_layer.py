@@ -52,6 +52,27 @@ IMD_LAD_NAME  = "Local Authority District name (2024)"
 # The LSOA code field in the 2021 boundary file (ONS calls it LSOA21CD).
 GEO_LSOA_CODE = "LSOA21CD"
 
+# Resident population per LSOA. Source: ONS mid-year population estimates by
+# 2021 LSOA (download separately — see docs/DATASETS.md). Optional: if the file
+# is absent the build still runs, just without a population field (the app then
+# hides population/density stats gracefully). We accept a few common column
+# spellings for the code and the count so a fresh ONS download "just works".
+POP_FILENAME = "lsoa_population.csv"
+POP_CODE_CANDIDATES = [
+    "LSOA 2021 Code", "LSOA code (2021)", "LSOA21CD", "lsoa_code", "Area code",
+]
+POP_COUNT_CANDIDATES = [
+    # IMD 2025 File 7 carries population denominators directly — preferred, as
+    # it needs no extra download. Its column is the "Total population" field.
+    "Total population: mid 2022 (excluding prisoners)",
+    "Total population: mid 2021 (excluding prisoners)",
+    "Total population: mid 2020 (excluding prisoners)",
+    "Total population",
+    # Generic / standalone ONS mid-year estimate spellings.
+    "Total", "All Ages", "All ages", "Population", "population",
+    "Mid-2022 population", "Mid-year population", "Observation",
+]
+
 
 def district_from_lsoa_name(name):
     """LSOA names look like 'Camden 001A' — the district is everything before
@@ -73,6 +94,66 @@ def normalise_0_100(series: pd.Series) -> pd.Series:
     return (series.rank(pct=True) * 100).round(1)
 
 
+def load_population(raw_dir: Path) -> pd.DataFrame | None:
+    """Load resident population by LSOA, if the file is present.
+
+    Returns a DataFrame with columns ['lsoa_code', 'population'] or None when
+    the file is absent. ONS publishes these tables with varying headers (and
+    sometimes a few preamble rows), so we sniff the header row and accept any of
+    the common code/count column spellings.
+    """
+    pop_path = raw_dir / POP_FILENAME
+    if not pop_path.exists():
+        print(f"  (no {POP_FILENAME} — building without population)")
+        return None
+
+    print(f"Reading population estimates ({POP_FILENAME})...")
+    # ONS files sometimes carry title rows before the header. Try a direct read
+    # first; if neither a code nor a count column is found, hunt for the header.
+    def _pick(cols, candidates):
+        lower = {c.lower().strip(): c for c in cols}
+        for cand in candidates:
+            if cand.lower() in lower:
+                return lower[cand.lower()]
+        return None
+
+    df = pd.read_csv(pop_path, dtype=str)
+    code_col = _pick(df.columns, POP_CODE_CANDIDATES)
+    count_col = _pick(df.columns, POP_COUNT_CANDIDATES)
+    if code_col is None or count_col is None:
+        for skip in range(1, 12):
+            try:
+                trial = pd.read_csv(pop_path, dtype=str, skiprows=skip)
+            except Exception:
+                continue
+            code_col = _pick(trial.columns, POP_CODE_CANDIDATES)
+            count_col = _pick(trial.columns, POP_COUNT_CANDIDATES)
+            if code_col and count_col:
+                df = trial
+                break
+
+    if code_col is None or count_col is None:
+        print("  WARNING: couldn't find LSOA-code / population columns in "
+              f"{POP_FILENAME}. Columns seen:\n   " + "\n   ".join(df.columns))
+        print("  Building without population.")
+        return None
+
+    out = df[[code_col, count_col]].rename(
+        columns={code_col: "lsoa_code", count_col: "population"}
+    )
+    out["lsoa_code"] = out["lsoa_code"].str.strip()
+    # Counts may carry thousands separators; coerce to a clean integer.
+    out["population"] = (
+        out["population"].astype(str).str.replace(",", "", regex=False)
+    )
+    out["population"] = pd.to_numeric(out["population"], errors="coerce")
+    out = out.dropna(subset=["lsoa_code", "population"])
+    out["population"] = out["population"].round().astype(int)
+    print(f"  population for {len(out)} LSOAs "
+          f"(total {out['population'].sum():,})")
+    return out
+
+
 def main() -> int:
     imd_path = RAW / "imd2025_scores.csv"
     geo_path = RAW / "lsoa_boundaries.geojson"
@@ -86,6 +167,28 @@ def main() -> int:
 
     print("Reading IoD 2025 scores (File 7)...")
     imd = pd.read_csv(imd_path)
+
+    # File 7 carries a "Total population" denominator column. Capture it up front
+    # (before we trim to the score columns) so we don't need a separate download.
+    pop_from_imd = None
+    _imd_lower = {c.lower().strip(): c for c in imd.columns}
+    _imd_code = _imd_lower.get(IMD_LSOA_CODE.lower())
+    for cand in POP_COUNT_CANDIDATES:
+        col = _imd_lower.get(cand.lower())
+        if col and _imd_code:
+            pop_from_imd = imd[[_imd_code, col]].rename(
+                columns={_imd_code: "lsoa_code", col: "population"}
+            )
+            pop_from_imd["lsoa_code"] = pop_from_imd["lsoa_code"].astype(str).str.strip()
+            pop_from_imd["population"] = pd.to_numeric(
+                pop_from_imd["population"].astype(str).str.replace(",", "", regex=False),
+                errors="coerce",
+            )
+            pop_from_imd = pop_from_imd.dropna(subset=["population"])
+            pop_from_imd["population"] = pop_from_imd["population"].round().astype(int)
+            print(f"  population taken from File 7 column '{col}' "
+                  f"({len(pop_from_imd)} LSOAs)")
+            break
 
     # Keep only the columns we need, renamed to our internal names. The 2025
     # File 7 carries LSOA name AND Local Authority District name in the file, so
@@ -148,6 +251,18 @@ def main() -> int:
         )
     n_named = merged["lad_name"].notna().sum()
     print(f"  district names present on {n_named}/{len(merged)} LSOAs")
+
+    # Resident population (optional layer). Prefer File 7's own denominator
+    # column; otherwise fall back to a separately-downloaded lsoa_population.csv.
+    # Left-join either way so LSOAs without a match carry a null population,
+    # which the frontend handles gracefully.
+    pop = pop_from_imd if pop_from_imd is not None else load_population(RAW)
+    if pop is not None:
+        merged = merged.merge(pop, on="lsoa_code", how="left")
+        n_pop = merged["population"].notna().sum()
+        print(f"  population present on {n_pop}/{len(merged)} LSOAs")
+        # GeoJSON/JS prefer a real number or null over NaN.
+        merged["population"] = merged["population"].astype("Int64")
 
     # Keep close-up detail. Tiles (tippecanoe) already simplify per zoom level —
     # they keep full detail at the deepest zoom and simplify only the zoomed-out
