@@ -148,9 +148,24 @@ def load_usage():
               "(layer still builds). See docs/DATASETS.md.")
         return {}, {}, {}
 
-    with USAGE_CSV.open(newline="", encoding="utf-8-sig") as fh:
-        reader = csv.reader(fh)
-        rows = list(reader)
+    # ORR/government CSVs are frequently NOT UTF-8 (often Windows-1252 / Latin-1,
+    # e.g. an accented station name). Try UTF-8 first, then fall back through the
+    # common encodings; latin-1 maps every byte so it never raises, guaranteeing
+    # we can always read the file even if a stray byte is unusual.
+    rows = None
+    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            with USAGE_CSV.open(newline="", encoding=enc) as fh:
+                rows = list(csv.reader(fh))
+            if enc != "utf-8-sig":
+                print(f"  ({USAGE_CSV.name} read as {enc}, not UTF-8)")
+            break
+        except UnicodeDecodeError:
+            continue
+    if rows is None:
+        print(f"  WARNING: couldn't decode {USAGE_CSV.name} in any known "
+              "encoding. Building without usage.")
+        return {}, {}, {}
     if not rows:
         return {}, {}, {}
 
