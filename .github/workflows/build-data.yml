@@ -29,6 +29,20 @@ jobs:
         run: pip install -r pipeline/requirements.txt
 
       - name: Build the data layer
+        env:
+          # Boundary file source(s). The big LSOA file can exceed Supabase's
+          # 50MB per-file limit, so it may be split into parts — list each
+          # part's public URL as BOUNDARY_URL_1, _2, ... (or put a single URL,
+          # or a comma-separated list, in BOUNDARY_URL). Set these under
+          # Settings > Secrets and variables > Actions. If all are unset, the
+          # build uses a committed file or the ONS API instead.
+          BOUNDARY_URL: ${{ secrets.BOUNDARY_URL }}
+          BOUNDARY_URL_1: ${{ secrets.BOUNDARY_URL_1 }}
+          BOUNDARY_URL_2: ${{ secrets.BOUNDARY_URL_2 }}
+          BOUNDARY_URL_3: ${{ secrets.BOUNDARY_URL_3 }}
+          BOUNDARY_URL_4: ${{ secrets.BOUNDARY_URL_4 }}
+          BOUNDARY_URL_5: ${{ secrets.BOUNDARY_URL_5 }}
+          BOUNDARY_URL_6: ${{ secrets.BOUNDARY_URL_6 }}
         run: |
           if [ -f data/raw/imd2025_scores.csv ]; then
             echo "IMD data found - fetching boundaries, building real layer."

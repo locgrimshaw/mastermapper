@@ -16,6 +16,7 @@ Run (or let the Action run it):
 """
 
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -93,32 +94,10 @@ def fetch_all(base: str) -> list:
     return features
 
 
-def load_committed_file():
-    """If you've committed a boundary file (downloaded from the ONS portal in
-    your browser), use it directly — no API call, no flaky service names. We
-    look for a few likely names. The file can be raw ONS GeoJSON in EITHER
-    coordinate system: WGS84 lat/long (what the map needs) or British National
-    Grid eastings/northings (what ONS often serves). We auto-detect by the size
-    of the coordinates and reproject if needed.
-
-    Returns a feature list in WGS84, or None if no committed file is found.
-    """
-    candidates = [
-        RAW / "lsoa_2021_bgc.geojson",
-        RAW / "lsoa_boundaries_source.geojson",
-        RAW / "LSOA_2021_EW_BGC_V2.geojson",
-    ]
-    path = next((p for p in candidates if p.exists()), None)
-    if not path:
-        return None
-
-    print(f"Using committed boundary file: {path.name}")
-    try:
-        import geopandas as gpd
-        gdf = gpd.read_file(path)
-    except Exception as e:
-        print(f"  couldn't read {path.name}: {e}")
-        return None
+def _parse_boundary_gdf(gdf):
+    """Shared: take a GeoDataFrame of LSOA boundaries (any CRS, any LSOA*CD
+    column name) and return a normalised WGS84 feature list keyed LSOA21CD."""
+    import geopandas as gpd
 
     # Find the LSOA code column under whatever name the file uses.
     code_col = None
@@ -127,7 +106,6 @@ def load_committed_file():
             code_col = c
             break
     if code_col is None:
-        # Fall back to any LSOA*CD column.
         for c in gdf.columns:
             if c.upper().startswith("LSOA") and c.upper().endswith("CD"):
                 code_col = c
@@ -165,15 +143,114 @@ def load_committed_file():
             "properties": {"LSOA21CD": str(code)},
             "geometry": _json.loads(gpd.GeoSeries([geom]).to_json())["features"][0]["geometry"],
         })
-    print(f"  {len(out)} LSOAs read from committed file")
     return out if out else None
 
 
-def main() -> int:
-    # 1) Prefer a committed boundary file (most reliable — no live API).
-    features = load_committed_file()
+def _read_one_url(url):
+    """Download and parse a single boundary file URL → feature list (or None)."""
+    try:
+        import geopandas as gpd
+        try:
+            gdf = gpd.read_file(url)            # fast path: read straight from HTTPS
+        except Exception as e1:
+            print(f"    direct read failed ({e1}); downloading to a temp file...")
+            import tempfile
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 mastermapper"})
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                blob = resp.read()
+            tmp = Path(tempfile.gettempdir()) / "boundary_part.geojson"
+            tmp.write_bytes(blob)
+            gdf = gpd.read_file(tmp)
+    except Exception as e:
+        print(f"    download/read failed: {e}")
+        return None
+    return _parse_boundary_gdf(gdf)
 
-    # 2) Otherwise fall back to the ONS API candidates.
+
+def download_from_url():
+    """Download the boundary file(s) and merge them. Reads URLs from env vars:
+
+      BOUNDARY_URL          a single URL, OR a comma/space/newline-separated list
+      BOUNDARY_URL_1 .. _N  numbered parts (handy when the file is split to fit
+                            Supabase's 50MB per-file limit — upload each part,
+                            list each URL)
+
+    All parts are downloaded and combined into one set of LSOAs. Returns a
+    feature list (deduplicated by LSOA code) or None.
+    """
+    urls = []
+    single = os.environ.get("BOUNDARY_URL", "").strip()
+    if single:
+        # Allow several URLs in the one var, separated by comma/space/newline.
+        for part in single.replace(",", " ").split():
+            urls.append(part.strip())
+    # Numbered parts BOUNDARY_URL_1, _2, ... (stop at the first gap, max 50).
+    for i in range(1, 51):
+        v = os.environ.get(f"BOUNDARY_URL_{i}", "").strip()
+        if v:
+            urls.append(v)
+    # De-dup while preserving order.
+    seen = set()
+    urls = [u for u in urls if not (u in seen or seen.add(u))]
+    if not urls:
+        return None
+
+    print(f"Downloading {len(urls)} boundary file part(s) from BOUNDARY_URL(s)...")
+    combined, by_code = [], {}
+    for n, url in enumerate(urls, 1):
+        print(f"  part {n}/{len(urls)}...")
+        feats = _read_one_url(url)
+        if not feats:
+            print(f"    part {n} returned nothing — continuing with the rest")
+            continue
+        for ft in feats:
+            code = ft["properties"]["LSOA21CD"]
+            if code not in by_code:           # merge, ignoring any overlap
+                by_code[code] = ft
+        print(f"    running total: {len(by_code)} unique LSOAs")
+    combined = list(by_code.values())
+    if combined:
+        print(f"  {len(combined)} LSOAs read from {len(urls)} part(s)")
+    return combined or None
+
+
+def load_committed_file():
+    """If you've committed a boundary file (downloaded from the ONS portal in
+    your browser), use it directly. Handles either coordinate system. Returns a
+    feature list in WGS84, or None if no committed file is found.
+    """
+    candidates = [
+        RAW / "lsoa_2021_bgc.geojson",
+        RAW / "lsoa_boundaries_source.geojson",
+        RAW / "LSOA_2021_EW_BGC_V2.geojson",
+    ]
+    path = next((p for p in candidates if p.exists()), None)
+    if not path:
+        return None
+
+    print(f"Using committed boundary file: {path.name}")
+    try:
+        import geopandas as gpd
+        gdf = gpd.read_file(path)
+    except Exception as e:
+        print(f"  couldn't read {path.name}: {e}")
+        return None
+    feats = _parse_boundary_gdf(gdf)
+    if feats:
+        print(f"  {len(feats)} LSOAs read from committed file")
+    return feats
+
+
+def main() -> int:
+    # 1) Preferred for the big national file: download from BOUNDARY_URL (e.g. a
+    #    Supabase Storage public URL). Keeps the large file out of the repo.
+    features = download_from_url()
+
+    # 2) Otherwise use a committed boundary file if you uploaded one to the repo.
+    if not features:
+        features = load_committed_file()
+
+    # 3) Otherwise fall back to the ONS API candidates (coarser at best).
     if not features:
         print("Fetching LSOA boundaries from ONS (this takes a minute)...")
         for label, base in CANDIDATES:
