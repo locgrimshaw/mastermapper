@@ -122,6 +122,7 @@ const state = {
   breaksData: null,      // precomputed colour breaks loaded from breaks.json
   usingSampleData: true,
   selectedCode: null,    // LSOA pinned by click-to-inspect
+  plotPointMode: false,  // true while waiting for a map click to drop a plot point
   layer: "deprivation",  // "deprivation" | "price"
   hasPrice: false,       // whether the loaded data includes price fields
   colourMode: "single",  // "single" | "spectrum"
@@ -961,11 +962,20 @@ function wireInteractions() {
     popup.remove();
   });
 
-  // Click a single area to pin its full breakdown. If the same tap also hit a
-  // rail stop, the stop handler set _stopClickGuard — skip the zone panel so
-  // the stop panel wins (both layers' click handlers fire for one tap).
+  // Click a single area to pin its full breakdown. Several cases must NOT open
+  // the zone panel:
+  //   - a deep dive is open (you're working inside a catchment, not picking a zone)
+  //   - we're dropping a point or drawing a plot (clicks are for that)
+  //   - the draw tool is in any non-simple mode (mid-draw)
+  //   - the same tap also hit a rail stop (stop panel wins)
   map.on("click", "lsoa-fill", (e) => {
     if (window._stopClickGuard) { window._stopClickGuard = false; return; }
+    if (deep.active) return;
+    if (state.plotPointMode) return;
+    try {
+      const m = draw.getMode && draw.getMode();
+      if (m && m !== "simple_select" && m !== "static") return;
+    } catch (_) {}
     inspectLSOA(e.features[0].properties, e.point);
     setDrawer(false);   // on mobile, reveal the map result
   });
@@ -2170,29 +2180,41 @@ function setDrawer(open) {
   const goBtn = document.getElementById("plot-go");
   const modeSel = document.getElementById("plot-mode-select");
   const minutesInp = document.getElementById("plot-minutes");
+  const undoBtn = document.getElementById("plot-undo");
+  const clearBtn = document.getElementById("plot-clear");
   if (!goBtn) return;
-
-  let pointMode = false;
 
   function setActive(btn) {
     document.querySelectorAll(".plot-mode-btn").forEach(b => b.classList.remove("active"));
     if (btn) btn.classList.add("active");
   }
 
+  // Remove any drawn polygon, point marker, and reset state.
+  function clearPlot() {
+    plot.geometry = null;
+    state.plotPointMode = false;
+    map.getCanvas().style.cursor = "";
+    try { draw.deleteAll(); draw.changeMode("simple_select"); } catch (_) {}
+    if (map.getLayer("plot-point-dot")) map.removeLayer("plot-point-dot");
+    if (map.getSource("plot-point-src")) map.removeSource("plot-point-src");
+    setActive(null);
+    setPlotStatus("Cleared. Drop a point or draw a plot to start again.");
+  }
+
   // Drop a point: next map click sets the plot origin.
   pointBtn.addEventListener("click", () => {
-    pointMode = true;
+    clearPlot();
+    state.plotPointMode = true;
     setActive(pointBtn);
     setPlotStatus("Click the map to drop your point.");
     map.getCanvas().style.cursor = "crosshair";
   });
 
   map.on("click", (e) => {
-    if (!pointMode) return;
-    pointMode = false;
+    if (!state.plotPointMode) return;
+    state.plotPointMode = false;
     map.getCanvas().style.cursor = "";
     plot.geometry = { type: "Point", coordinates: [e.lngLat.lng, e.lngLat.lat] };
-    // Show a marker for the chosen point.
     const data = { type: "FeatureCollection", features: [{ type: "Feature", geometry: plot.geometry, properties: {} }] };
     if (map.getSource("plot-point-src")) map.getSource("plot-point-src").setData(data);
     else {
@@ -2205,10 +2227,11 @@ function setDrawer(open) {
     setPlotStatus("Point set. Choose mode/time, then build the catchment.");
   });
 
-  // Draw a plot: use the existing MapboxDraw polygon tool.
+  // Draw a plot: clear any existing, then start the polygon tool.
   drawBtn.addEventListener("click", () => {
+    clearPlot();
     setActive(drawBtn);
-    setPlotStatus("Draw a polygon on the map (click points, double-click to finish).");
+    setPlotStatus("Draw a polygon: click points, double-click to finish.");
     try { draw.changeMode("draw_polygon"); } catch (_) {}
   });
 
@@ -2220,6 +2243,25 @@ function setDrawer(open) {
       setPlotStatus("Plot drawn. Choose mode/time, then build the catchment.");
     }
   });
+
+  // Undo: while mid-draw, remove the last placed vertex; if a polygon is
+  // finished, removing it lets you redraw. Uses Draw's trash, which deletes the
+  // selected/last vertex in draw mode.
+  if (undoBtn) undoBtn.addEventListener("click", () => {
+    try {
+      const m = draw.getMode && draw.getMode();
+      if (m === "draw_polygon") {
+        draw.trash();   // removes the last vertex placed
+        setPlotStatus("Removed last point. Keep drawing or double-click to finish.");
+      } else {
+        // Nothing mid-draw: treat undo as clearing the finished plot/point.
+        clearPlot();
+      }
+    } catch (_) { clearPlot(); }
+  });
+
+  // Clear: wipe everything and start over.
+  if (clearBtn) clearBtn.addEventListener("click", clearPlot);
 
   modeSel.addEventListener("change", () => { plot.mode = modeSel.value; });
   minutesInp.addEventListener("change", () => {
