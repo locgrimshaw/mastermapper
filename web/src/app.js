@@ -1199,7 +1199,6 @@ const AMENITY_KINDS = [
   { kind: "nursery",     label: "Nurseries",      color: "#db2777", source: "supabase", icon: "nursery" },
   { kind: "bus_stop",    label: "Bus stops",      color: "#f59e0b", source: "supabase", icon: "bus" },
   { kind: "supermarket", label: "Food stores",    color: "#16a34a", source: "osm",      icon: "food" },
-  { kind: "supermarket", label: "Food stores",    color: "#16a34a", source: "osm" },
 ];
 
 // Lazily-created Supabase client. Null when no config is present (the map still
@@ -1228,8 +1227,7 @@ const deep = {
 };
 
 async function enterDeepDive(p) {
-  // Build the catchment from the selected LSOA's geometry. We query the vector
-  // tile for the feature so we have its polygon (the click only gave us props).
+  // LSOA deep dive: the catchment IS the clicked zone's polygon.
   const code = p.lsoa_code;
   const feats = map.querySourceFeatures("lsoa", {
     sourceLayer: SOURCE_LAYER,
@@ -1239,17 +1237,29 @@ async function enterDeepDive(p) {
     alert("Couldn't read this area's boundary — try zooming in slightly and clicking again.");
     return;
   }
-  // A LSOA can be split across tiles; merge into one polygon with Turf.
   let merged = feats[0];
   try {
     if (feats.length > 1 && window.turf) {
-      merged = feats.reduce((acc, f) => acc ? turf.union(acc, f) : f, null) || feats[0];
+      merged = turf.union(turf.featureCollection(feats)) || feats[0];
     }
   } catch (_) { merged = feats[0]; }
-  // Normalise to a GeoJSON Feature with a .geometry we can send to the RPC.
   const geom = merged.geometry || merged;
-  deep.catchment = { type: "Feature", properties: {}, geometry: geom };
+  const catchment = { type: "Feature", properties: {}, geometry: geom };
 
+  runDeepDive(catchment, {
+    eyebrow: "Deep dive",
+    title: p.lad_name || "Selected area",
+    subtitle: p.lsoa_name ? `${p.lsoa_name} · ${p.lsoa_code}` : p.lsoa_code,
+    score: combinedScore(p, state.weights),
+    scoreCaption: "Combined deprivation · weighted",
+  });
+}
+
+// The shared engine: run a deep dive on ANY catchment polygon (an LSOA, or an
+// isochrone, or a drawn plot's buffer). `meta` carries what the panel header
+// and score block should show.
+function runDeepDive(catchment, meta) {
+  deep.catchment = catchment;
   deep.active = true;
   deep.prevView = { center: map.getCenter(), zoom: map.getZoom() };
   deep.enabledKinds = new Set();
@@ -1258,20 +1268,15 @@ async function enterDeepDive(p) {
   deep.crimeVisible = true;
   deep.crimeData = null;
 
-  // Dim the choropleth so amenity points read clearly, and zoom to the area.
   if (map.getLayer("lsoa-fill")) map.setPaintProperty("lsoa-fill", "fill-opacity", 0.35);
   closeDetail();
   const bbox = turf.bbox(deep.catchment);
-  // Extra right padding so the area sits clear of the slide-out panel (which is
-  // 380px on desktop, full-width on mobile).
   const rightPad = window.innerWidth <= 720 ? 40 : 420;
   map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
     { padding: { top: 60, bottom: 60, left: 60, right: rightPad }, duration: 600 });
 
-  // Draw the catchment outline so the user sees the area being analysed.
   setCatchmentOutline(deep.catchment);
-
-  buildDeepDivePanel(p);
+  buildDeepDivePanel(meta);
 }
 
 function exitDeepDive() {
@@ -1279,6 +1284,8 @@ function exitDeepDive() {
   for (const a of AMENITY_KINDS) removeAmenityLayer(a.kind);
   removeCrimeLayer();
   removeCatchmentOutline();
+  if (map.getLayer("plot-point-dot")) map.removeLayer("plot-point-dot");
+  if (map.getSource("plot-point-src")) map.removeSource("plot-point-src");
   if (map.getLayer("lsoa-fill"))
     map.setPaintProperty("lsoa-fill", "fill-opacity", state.fillOpacity);
   setDeepPanelOpen(false);
@@ -1874,11 +1881,7 @@ function renderCrimeStats(crimes, body, monthCount) {
   if (showCb) showCb.checked = deep.crimeVisible;
 }
 
-function buildDeepDivePanel(p) {
-  const district = p.lad_name || "Unknown district";
-  const sub = p.lsoa_name ? `${p.lsoa_name} · ${p.lsoa_code}` : p.lsoa_code;
-  const combined = combinedScore(p, state.weights);
-
+function buildDeepDivePanel(meta) {
   const toggles = AMENITY_KINDS.map(a => `
     <label class="dd-row">
       <input type="checkbox" class="enable" id="dd-${a.kind}" />
@@ -1891,13 +1894,15 @@ function buildDeepDivePanel(p) {
   const note = configured ? "" :
     `<p class="hint" style="margin-top:10px">Connect Supabase (see config.js) to load amenity layers.</p>`;
 
+  const scoreStr = (meta.score == null || isNaN(meta.score)) ? "—" : meta.score.toFixed(0);
+
   const panel = document.getElementById("deepdive-panel");
   panel.innerHTML = `
     <div class="dd-head">
       <div>
-        <div class="dd-eyebrow">Deep dive</div>
-        <div class="dd-title">${district}</div>
-        <div class="dd-subtitle">${sub}</div>
+        <div class="dd-eyebrow">${meta.eyebrow || "Deep dive"}</div>
+        <div class="dd-title">${meta.title || "Selected area"}</div>
+        <div class="dd-subtitle">${meta.subtitle || ""}</div>
       </div>
       <button class="dd-close" aria-label="Close deep dive" title="Close">×</button>
     </div>
@@ -1909,8 +1914,8 @@ function buildDeepDivePanel(p) {
         </button>
         <div class="dd-block-content">
           <div class="dd-score">
-            <div class="dd-score-big">${combined.toFixed(0)}<span>/100</span></div>
-            <div class="dd-score-cap">Combined deprivation · weighted</div>
+            <div class="dd-score-big">${scoreStr}<span>/100</span></div>
+            <div class="dd-score-cap">${meta.scoreCaption || "Combined deprivation · weighted"}</div>
           </div>
         </div>
       </section>
@@ -1947,10 +1952,6 @@ function buildDeepDivePanel(p) {
 
   setDeepPanelOpen(true);
   panel.querySelector(".dd-close").addEventListener("click", exitDeepDive);
-
-  // Collapsible sections: clicking a header toggles its content. We ignore
-  // clicks that land on an interactive control inside the header (the Show
-  // toggle), so those don't also collapse the section.
   panel.querySelectorAll(".dd-block-head").forEach(head => {
     head.addEventListener("click", (e) => {
       if (e.target.closest(".dd-show-toggle")) return;
@@ -1959,15 +1960,12 @@ function buildDeepDivePanel(p) {
       head.setAttribute("aria-expanded", open ? "false" : "true");
     });
   });
-
   for (const a of AMENITY_KINDS) {
     const cb = panel.querySelector(`#dd-${a.kind}`);
     if (cb) cb.addEventListener("change", (e) => toggleAmenityKind(a.kind, e.target.checked));
   }
   const crimeBtn = panel.querySelector("#dd-crime-load");
   if (crimeBtn) crimeBtn.addEventListener("click", loadCrime);
-
-  // Crime show/hide toggle (appears once data is loaded).
   const crimeShow = panel.querySelector("#dd-crime-show");
   if (crimeShow) crimeShow.addEventListener("change", (e) => setCrimeVisible(e.target.checked));
 }
@@ -1977,6 +1975,128 @@ function setDeepPanelOpen(open) {
   if (!panel) return;
   panel.classList.toggle("open", open);
   panel.setAttribute("aria-hidden", open ? "false" : "true");
+}
+
+// ---- Plot / isochrone catchments ------------------------------------------
+// Three ways to define an area of interest: a point, a drawn plot, or (later)
+// an uploaded plot. From that geometry we build a catchment — by default a
+// 15-minute walking isochrone (street-network travel time) via the public
+// Valhalla server, with adjustable mode and time — and run the SAME deep dive
+// on it. The deprivation score for such a catchment is an AREA-WEIGHTED blend
+// of the LSOAs it overlaps (see areaWeightedScore).
+
+const ISO_MODES = [
+  { id: "pedestrian", label: "Walk" },
+  { id: "bicycle",    label: "Cycle" },
+  { id: "auto",       label: "Drive" },
+];
+
+const plot = {
+  geometry: null,   // the defining point or polygon (GeoJSON geometry)
+  mode: "pedestrian",
+  minutes: 15,
+};
+
+// Area-weighted deprivation score for an arbitrary catchment polygon. We take
+// every LSOA currently in the vector tiles that intersects the catchment,
+// compute the area of overlap, and weight each LSOA's combined score by its
+// share of the total overlapping area. This represents the deprivation of the
+// area someone can actually reach, blending part-covered zones proportionally.
+function areaWeightedScore(catchment) {
+  if (!window.turf) return { score: null, parts: 0 };
+  // All LSOA polygons currently rendered (covers the visible area; the user is
+  // zoomed to the catchment so these are the relevant ones).
+  const feats = map.querySourceFeatures("lsoa", { sourceLayer: SOURCE_LAYER });
+  if (!feats.length) return { score: null, parts: 0 };
+
+  // De-dupe by code (tiles can repeat a feature across tile edges).
+  const seen = new Set();
+  let totalArea = 0;
+  const contribs = [];
+  for (const f of feats) {
+    const code = f.properties && f.properties.lsoa_code;
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    let inter;
+    try {
+      inter = turf.intersect(turf.featureCollection([catchment, f]));
+    } catch (_) { inter = null; }
+    if (!inter) continue;
+    let a;
+    try { a = turf.area(inter); } catch (_) { a = 0; }
+    if (a <= 0) continue;
+    const s = combinedScore(f.properties, state.weights);
+    if (s == null || isNaN(s)) continue;
+    contribs.push({ a, s });
+    totalArea += a;
+  }
+  if (!totalArea) return { score: null, parts: 0 };
+  const score = contribs.reduce((sum, c) => sum + c.s * (c.a / totalArea), 0);
+  return { score, parts: contribs.length };
+}
+
+// Build an isochrone polygon from a point via the public Valhalla server.
+// Returns a GeoJSON Feature (Polygon) or null. No API key needed.
+async function fetchIsochrone(lng, lat, mode, minutes) {
+  const body = {
+    locations: [{ lat, lon: lng }],
+    costing: mode,
+    contours: [{ time: minutes }],
+    polygons: true,
+  };
+  const url = "https://valhalla1.openstreetmap.de/isochrone?json=" +
+    encodeURIComponent(JSON.stringify(body));
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Valhalla HTTP ${r.status}`);
+  const gj = r.json ? await r.json() : null;
+  // Valhalla returns a FeatureCollection of contour polygons/linestrings.
+  const feats = (gj && gj.features) || [];
+  const poly = feats.find(f => f.geometry &&
+    (f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon"));
+  return poly || null;
+}
+
+// Given the defining geometry (point or plot) and the iso settings, build the
+// catchment and launch the deep dive on it.
+async function runPlotDeepDive() {
+  if (!plot.geometry) { alert("Define a point or plot first."); return; }
+
+  // Use the geometry's centroid as the isochrone origin (works for both a point
+  // and a drawn plot).
+  let origin;
+  try {
+    origin = turf.centroid({ type: "Feature", geometry: plot.geometry }).geometry.coordinates;
+  } catch (_) {
+    alert("Couldn't read that geometry."); return;
+  }
+  const [lng, lat] = origin;
+
+  const modeLabel = (ISO_MODES.find(m => m.id === plot.mode) || {}).label || plot.mode;
+  setPlotStatus(`Building ${plot.minutes}-min ${modeLabel.toLowerCase()} isochrone…`);
+
+  let catchment;
+  try {
+    catchment = await fetchIsochrone(lng, lat, plot.mode, plot.minutes);
+  } catch (e) {
+    setPlotStatus(`Couldn't build isochrone (${e.message}). Try again or a different point.`);
+    return;
+  }
+  if (!catchment) { setPlotStatus("No isochrone returned for that point."); return; }
+  setPlotStatus("");
+
+  const { score, parts } = areaWeightedScore(catchment);
+  runDeepDive(catchment, {
+    eyebrow: "Isochrone deep dive",
+    title: `${plot.minutes}-min ${modeLabel.toLowerCase()}`,
+    subtitle: parts ? `Area-weighted across ${parts} LSOA${parts === 1 ? "" : "s"}` : "Catchment analysis",
+    score,
+    scoreCaption: "Area-weighted deprivation · weighted",
+  });
+}
+
+function setPlotStatus(msg) {
+  const el = document.getElementById("plot-status");
+  if (el) el.textContent = msg || "";
 }
 
 // ---- Boot -----------------------------------------------------------------
@@ -2003,6 +2123,77 @@ function setDrawer(open) {
   if (btn) btn.addEventListener("click", () =>
     setDrawer(!document.getElementById("app").classList.contains("panel-open")));
   if (scrim) scrim.addEventListener("click", () => setDrawer(false));
+})();
+
+// Define-area controls: point / draw plot, plus isochrone settings.
+(function wirePlotTools() {
+  const pointBtn = document.getElementById("plot-point");
+  const drawBtn = document.getElementById("plot-draw");
+  const goBtn = document.getElementById("plot-go");
+  const modeSel = document.getElementById("plot-mode-select");
+  const minutesInp = document.getElementById("plot-minutes");
+  if (!goBtn) return;
+
+  let pointMode = false;
+
+  function setActive(btn) {
+    document.querySelectorAll(".plot-mode-btn").forEach(b => b.classList.remove("active"));
+    if (btn) btn.classList.add("active");
+  }
+
+  // Drop a point: next map click sets the plot origin.
+  pointBtn.addEventListener("click", () => {
+    pointMode = true;
+    setActive(pointBtn);
+    setPlotStatus("Click the map to drop your point.");
+    map.getCanvas().style.cursor = "crosshair";
+  });
+
+  map.on("click", (e) => {
+    if (!pointMode) return;
+    pointMode = false;
+    map.getCanvas().style.cursor = "";
+    plot.geometry = { type: "Point", coordinates: [e.lngLat.lng, e.lngLat.lat] };
+    // Show a marker for the chosen point.
+    const data = { type: "FeatureCollection", features: [{ type: "Feature", geometry: plot.geometry, properties: {} }] };
+    if (map.getSource("plot-point-src")) map.getSource("plot-point-src").setData(data);
+    else {
+      map.addSource("plot-point-src", { type: "geojson", data });
+      map.addLayer({
+        id: "plot-point-dot", type: "circle", source: "plot-point-src",
+        paint: { "circle-radius": 7, "circle-color": "#111", "circle-stroke-color": "#fff", "circle-stroke-width": 2 },
+      });
+    }
+    setPlotStatus("Point set. Choose mode/time, then build the catchment.");
+  });
+
+  // Draw a plot: use the existing MapboxDraw polygon tool.
+  drawBtn.addEventListener("click", () => {
+    setActive(drawBtn);
+    setPlotStatus("Draw a polygon on the map (click points, double-click to finish).");
+    try { draw.changeMode("draw_polygon"); } catch (_) {}
+  });
+
+  // When a polygon is drawn, capture it as the plot geometry.
+  map.on("draw.create", (e) => {
+    const f = e.features && e.features[0];
+    if (f && f.geometry) {
+      plot.geometry = f.geometry;
+      setPlotStatus("Plot drawn. Choose mode/time, then build the catchment.");
+    }
+  });
+
+  modeSel.addEventListener("change", () => { plot.mode = modeSel.value; });
+  minutesInp.addEventListener("change", () => {
+    plot.minutes = Math.max(1, Math.min(60, parseInt(minutesInp.value, 10) || 15));
+    minutesInp.value = plot.minutes;
+  });
+
+  goBtn.addEventListener("click", () => {
+    plot.mode = modeSel.value;
+    plot.minutes = Math.max(1, Math.min(60, parseInt(minutesInp.value, 10) || 15));
+    runPlotDeepDive();
+  });
 })();
 
 buildSliders();

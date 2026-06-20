@@ -40,6 +40,34 @@
         <div id="report"><p class="empty">No site selected yet.</p></div>
       </section>
 
+      <section class="block" id="plot-block">
+        <h2>Define an area</h2>
+        <p class="hint">Drop a point or draw a plot, then build a travel-time catchment around it for a deep dive.</p>
+        <div class="plot-modes">
+          <button type="button" class="plot-mode-btn" id="plot-point">Drop a point</button>
+          <button type="button" class="plot-mode-btn" id="plot-draw">Draw a plot</button>
+          <button type="button" class="plot-mode-btn" id="plot-upload" disabled title="Coming soon">Upload (soon)</button>
+        </div>
+
+        <div class="plot-iso">
+          <label class="plot-field">
+            <span>Travel mode</span>
+            <select id="plot-mode-select">
+              <option value="pedestrian">Walk</option>
+              <option value="bicycle">Cycle</option>
+              <option value="auto">Drive</option>
+            </select>
+          </label>
+          <label class="plot-field">
+            <span>Minutes</span>
+            <input type="number" id="plot-minutes" min="1" max="60" value="15" />
+          </label>
+        </div>
+
+        <button type="button" class="dd-load-btn" id="plot-go" style="width:100%;margin-top:4px">Build catchment &amp; deep dive</button>
+        <p class="hint" id="plot-status" style="margin-top:8px"></p>
+      </section>
+
       <section class="block" id="rail-block" hidden>
         <h2>Transit overlay</h2>
         <p class="hint">Rail, subway, light rail and tram lines and stops, each in its own colour. Toggle any layer independently; click a stop for its details. Drawn over the deprivation colours.</p>
