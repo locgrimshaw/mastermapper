@@ -1268,7 +1268,10 @@ function runDeepDive(catchment, meta) {
   deep.crimeVisible = true;
   deep.crimeData = null;
 
-  if (map.getLayer("lsoa-fill")) map.setPaintProperty("lsoa-fill", "fill-opacity", 0.35);
+  // The mask dims everything outside the catchment, so we keep the choropleth
+  // reasonably visible (it shows through inside the catchment) rather than
+  // dimming it everywhere.
+  if (map.getLayer("lsoa-fill")) map.setPaintProperty("lsoa-fill", "fill-opacity", 0.6);
   closeDetail();
   const bbox = turf.bbox(deep.catchment);
   const rightPad = window.innerWidth <= 720 ? 40 : 420;
@@ -1298,19 +1301,54 @@ function exitDeepDive() {
 
 function setCatchmentOutline(feature) {
   const data = { type: "FeatureCollection", features: [feature] };
+
+  // Build a "mask": a world-covering polygon with the catchment punched out as a
+  // hole, so everything OUTSIDE the catchment is dimmed and the analysis area
+  // stands out. Turf's mask does exactly this (outer ring = world, inner = the
+  // catchment). Fallback: skip the mask if turf.mask isn't available.
+  let maskData = { type: "FeatureCollection", features: [] };
+  try {
+    if (window.turf && turf.mask) {
+      maskData = { type: "FeatureCollection", features: [turf.mask(feature)] };
+    }
+  } catch (_) { /* no mask, just the outline */ }
+
+  // Mask fill (under the outline).
+  if (map.getSource("catchment-mask")) {
+    map.getSource("catchment-mask").setData(maskData);
+  } else {
+    map.addSource("catchment-mask", { type: "geojson", data: maskData });
+    // Insert below the catchment line if it exists, else on top.
+    map.addLayer({
+      id: "catchment-mask-fill", type: "fill", source: "catchment-mask",
+      paint: {
+        "fill-color": body_is_light() ? "#ffffff" : "#0a0f1a",
+        "fill-opacity": 0.55,
+      },
+    });
+  }
+
+  // Catchment outline (on top of the mask).
   if (map.getSource("catchment")) {
     map.getSource("catchment").setData(data);
   } else {
     map.addSource("catchment", { type: "geojson", data });
     map.addLayer({
       id: "catchment-line", type: "line", source: "catchment",
-      paint: { "line-color": "#111", "line-width": 2, "line-dasharray": [2, 1] },
+      paint: { "line-color": body_is_light() ? "#111" : "#fff", "line-width": 2.5, "line-dasharray": [2, 1] },
     });
   }
+}
+
+// Small helper: is the UI in light theme right now?
+function body_is_light() {
+  return document.body.classList.contains("light");
 }
 function removeCatchmentOutline() {
   if (map.getLayer("catchment-line")) map.removeLayer("catchment-line");
   if (map.getSource("catchment")) map.removeSource("catchment");
+  if (map.getLayer("catchment-mask-fill")) map.removeLayer("catchment-mask-fill");
+  if (map.getSource("catchment-mask")) map.removeSource("catchment-mask");
 }
 
 // Query Supabase for amenities of one kind inside the current catchment, cache
