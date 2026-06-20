@@ -65,12 +65,38 @@ NAME_CANDIDATES = ["Station Name", "Station name", "station", "stationName",
 OPERATOR_CANDIDATES = ["Station Facility Owner", "Operator", "TOC",
                        "Train Operating Company", "Owning Operator",
                        "Station operator"]
-# Entries+exits for the latest year. ORR labels this column with the year, e.g.
-# "1415: Entries & Exits 2024-25" or "Entries and exits 2023-24". We match by
-# pattern: a column mentioning entries/exits (and not "interchange").
+# Keep at most this many recent years for the trend sparkline (the time-series
+# file can carry ~28). 6 gives a clear post-pandemic recovery shape.
+TREND_MAX_YEARS = 6
+# Entries+exits column detection. Two ORR layouts exist:
+#   - Table 1410 (single year): a column literally named "Entries & Exits …".
+#   - Table 1415 (time series): one column PER YEAR, named like
+#     "Apr 2024 to Mar 2025" — no "entries/exits" words, because the whole table
+#     IS entries-and-exits. So we detect YEAR-SPAN columns directly.
+# Footnote markers like "[b]" can be appended; we strip them.
 ENTRIES_EXITS_HINT = re.compile(r"entr.*exit|entries.*exits", re.I)
 INTERCHANGE_HINT = re.compile(r"interchang", re.I)
-YEAR_HINT = re.compile(r"(19|20)\d{2}\s*[-/]\s*\d{2,4}")
+# A financial-year span in either form: "2024-25" / "2024/25" or
+# "Apr 2024 to Mar 2025". Capturing the END year gives a clean sort key.
+YEAR_RANGE_DASH = re.compile(r"(19|20)(\d{2})\s*[-/]\s*(\d{2,4})")
+YEAR_RANGE_APR = re.compile(r"apr\w*\s*((?:19|20)\d{2})\s*to\s*mar\w*\s*((?:19|20)\d{2})", re.I)
+
+
+def _year_label(header_cell):
+    """Return a tidy financial-year label (e.g. '2024-25') for a header cell, or
+    None if it isn't a year-span column. Handles both ORR formats and strips
+    footnote markers."""
+    s = re.sub(r"\[[^\]]*\]", "", header_cell)  # drop "[b]" style footnotes
+    m = YEAR_RANGE_APR.search(s)
+    if m:
+        start, end = m.group(1), m.group(2)
+        return f"{start}-{end[-2:]}"
+    m = YEAR_RANGE_DASH.search(s)
+    if m:
+        start = m.group(1) + m.group(2)
+        end = m.group(3)
+        return f"{start}-{end[-2:]}"
+    return None
 
 
 def norm_name(s: str) -> str:
@@ -87,41 +113,52 @@ def norm_name(s: str) -> str:
 
 
 def _pick(header, candidates):
-    low = {h.lower().strip(): h for h in header}
+    """Match a header column to one of `candidates`, tolerating embedded
+    newlines and repeated spaces in the header cell (ORR headers wrap, e.g.
+    'Three Letter Code\\n(TLC)'). We compare on whitespace-collapsed lowercase,
+    and also try a contains-match so 'Three Letter Code (TLC)' matches a
+    candidate of 'TLC' or 'Three Letter Code'."""
+    def squash(s):
+        return re.sub(r"\s+", " ", s).strip().lower()
+    norm = {squash(h): h for h in header}
+    # 1) exact (whitespace-normalised) match
     for c in candidates:
-        if c.lower() in low:
-            return low[c.lower()]
+        cs = squash(c)
+        if cs in norm:
+            return norm[cs]
+    # 2) candidate appears as a token/substring within a header cell
+    for c in candidates:
+        cs = squash(c)
+        for hk, h in norm.items():
+            if cs in hk:
+                return h
     return None
 
 
 def _find_entries_exits_cols(header):
-    """Return (latest_col, [year-labelled cols...]) for entries+exits.
+    """Return (latest_col, [(col, year_label), ...]) for entries+exits usage.
 
-    Time-series files (Table 1415) carry several year columns; the single-year
-    Table 1410 carries one. We collect every entries-&-exits column (ignoring
-    interchange columns) and treat the right-most year as 'latest'.
+    Strategy: find every YEAR-SPAN column (these are the per-year entries-&-exits
+    columns in the time series, or the single year column in Table 1410),
+    excluding any explicitly marked as interchanges. The right-most year is the
+    'latest'. If no year-span column exists, fall back to a column literally
+    named with entries/exits words.
     """
     cols = []
     for h in header:
+        if INTERCHANGE_HINT.search(h):
+            continue
+        yr = _year_label(h)
+        if yr:
+            cols.append((h, yr))
+    if cols:
+        cols.sort(key=lambda c: c[1])   # sort by tidy year label, ascending
+        return cols[-1][0], cols
+    # Fallback: a single explicitly-named entries/exits column with no year.
+    for h in header:
         if ENTRIES_EXITS_HINT.search(h) and not INTERCHANGE_HINT.search(h):
-            ym = YEAR_HINT.search(h)
-            cols.append((h, ym.group(0) if ym else None))
-    if not cols:
-        # Some single-year files just call it "Entries and Exits" with the year
-        # only in the file name. Fall back to any non-interchange numeric-looking
-        # column whose header contains 'entries' or 'exits'.
-        for h in header:
-            if re.search(r"entr|exit", h, re.I) and not INTERCHANGE_HINT.search(h):
-                cols.append((h, None))
-    if not cols:
-        return None, []
-    # Order by the year string where present so the last is the most recent.
-    dated = [c for c in cols if c[1]]
-    if dated:
-        dated.sort(key=lambda c: c[1])
-        latest = dated[-1][0]
-        return latest, dated
-    return cols[-1][0], cols
+            return h, [(h, None)]
+    return None, []
 
 
 def _to_int(v):
@@ -190,10 +227,11 @@ def load_usage():
         return {}, {}, {}
 
     idx = {h: i for i, h in enumerate(header)}
-    latest_year = None
-    ym = YEAR_HINT.search(latest_col)
-    if ym:
-        latest_year = ym.group(0)
+    latest_year = _year_label(latest_col)
+    # The time series can carry ~28 years; a sparkline only needs the recent
+    # few to read well. Keep the most recent TREND_MAX_YEARS (dated_cols is
+    # sorted ascending, so take the tail).
+    trend_cols = dated_cols[-TREND_MAX_YEARS:] if dated_cols else []
 
     by_crs, by_name = {}, {}
     n = 0
@@ -207,7 +245,7 @@ def load_usage():
         operator = (r[idx[op_col]].strip() if op_col and idx[op_col] < len(r)
                     else "")
         trend = []
-        for col, yr in dated_cols:
+        for col, yr in trend_cols:
             v = _to_int(r[idx[col]]) if idx.get(col, 1e9) < len(r) else None
             if v is not None and yr:
                 trend.append({"year": yr, "value": v})
