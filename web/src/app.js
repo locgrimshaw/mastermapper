@@ -669,6 +669,7 @@ function buildSliders() {
       syncSliderUI();        // reflect the knock-on changes on every slider
       restyle();
       refreshReportIfActive();
+      if (deep.active) renderDeprivationScore();   // live deep-dive headline
     });
 
     // Checkbox: include/exclude this domain from the combined score.
@@ -681,6 +682,7 @@ function buildSliders() {
       syncSliderUI();
       restyle();
       refreshReportIfActive();
+      if (deep.active) renderDeprivationScore();
     });
 
     // Solo: show just this domain's choropleth (toggle).
@@ -700,6 +702,7 @@ function buildSliders() {
     syncSliderUI();
     restyle();
     refreshReportIfActive();
+    if (deep.active) renderDeprivationScore();
   });
 
   syncSliderUI();   // set the total readout on first build
@@ -1256,11 +1259,16 @@ async function enterDeepDive(p) {
   const geom = merged.geometry || merged;
   const catchment = { type: "Feature", properties: {}, geometry: geom };
 
+  // Per-domain normalised values for the breakdown + live re-weighting.
+  const domains = {};
+  for (const d of DOMAINS) domains[d.key] = p[`${d.key}_norm`];
+  domains.overall = p.overall_norm;
+
   runDeepDive(catchment, {
     eyebrow: "Deep dive",
     title: p.lad_name || "Selected area",
     subtitle: p.lsoa_name ? `${p.lsoa_name} · ${p.lsoa_code}` : p.lsoa_code,
-    score: combinedScore(p, state.weights),
+    domains,
     scoreCaption: "Combined deprivation · weighted",
   });
 }
@@ -1270,6 +1278,7 @@ async function enterDeepDive(p) {
 // and score block should show.
 function runDeepDive(catchment, meta) {
   deep.catchment = catchment;
+  deep.domains = meta.domains || null;   // per-domain averages for live scoring
   deep.active = true;
   deep.prevView = { center: map.getCenter(), zoom: map.getZoom() };
   deep.enabledKinds = new Set();
@@ -1290,6 +1299,126 @@ function runDeepDive(catchment, meta) {
 
   setCatchmentOutline(deep.catchment);
   buildDeepDivePanel(meta);
+
+  // Auto-activate every amenity layer so the user immediately sees what's in the
+  // catchment, and compute nearest-distance stats. Done after the panel exists.
+  autoEnableAmenities();
+  computeNearestDistances();
+}
+
+// Switch on all amenity layers (ticking their boxes and loading them).
+function autoEnableAmenities() {
+  for (const a of AMENITY_KINDS) {
+    const cb = document.getElementById(`dd-${a.kind}`);
+    if (cb && !cb.checked) {
+      cb.checked = true;
+      toggleAmenityKind(a.kind, true);
+    }
+  }
+}
+
+// Origin point for "nearest" measurements: the plot point if set, else the
+// catchment centroid.
+function catchmentOrigin() {
+  try {
+    if (plot.geometry && plot.geometry.type === "Point") return plot.geometry.coordinates;
+    return turf.centroid(deep.catchment).geometry.coordinates;
+  } catch (_) { return null; }
+}
+
+// Distance (m) from origin to the nearest amenity of each "access" kind. Nearest
+// may sit OUTSIDE the catchment, so we search a generous radius around the
+// origin rather than only in-polygon. Supabase kinds use the radius RPC; food
+// stores use a separate Overpass radius query. Results fill the Access section.
+const NEAREST_KINDS = [
+  { kind: "gp", label: "GP surgery", source: "supabase" },
+  { kind: "nursery", label: "Nursery", source: "supabase" },
+  { kind: "school", label: "School", source: "supabase" },
+  { kind: "supermarket", label: "Food store", source: "osm" },
+];
+
+async function computeNearestDistances() {
+  const origin = catchmentOrigin();
+  const listEl = document.getElementById("dd-access-list");
+  if (!origin || !listEl) return;
+  const [lng, lat] = origin;
+  const originPt = turf.point(origin);
+
+  for (const nk of NEAREST_KINDS) {
+    setAccessRow(nk.kind, nk.label, "…");
+    try {
+      let pts = [];
+      if (nk.source === "osm") {
+        const osm = await fetchOsmNearby(lng, lat, 2000);   // 2km around origin
+        pts = osm.map(p => ({
+          lng: p.lng, lat: p.lat,
+          distance_m: turf.distance(originPt, turf.point([p.lng, p.lat]), { units: "meters" }),
+        }));
+      } else {
+        const sb = getSupabase();
+        if (!sb) { setAccessRow(nk.kind, nk.label, "—"); continue; }
+        // Search outward in rings until we find at least one (handles rural).
+        for (const radius of [1500, 4000, 10000, 30000]) {
+          const { data, error } = await sb.rpc("amenities_in_radius", {
+            centre_lng: lng, centre_lat: lat, radius_m: radius, kinds: [nk.kind],
+          });
+          if (error) { console.error("radius", nk.kind, error); break; }
+          if (data && data.length) { pts = data; break; }
+        }
+      }
+      if (!pts.length) { setAccessRow(nk.kind, nk.label, "none nearby"); continue; }
+      // Nearest: the RPC already returns distance_m sorted; otherwise min.
+      let best = Infinity;
+      for (const p of pts) {
+        const d = (p.distance_m != null)
+          ? p.distance_m
+          : turf.distance(originPt, turf.point([p.lng, p.lat]), { units: "meters" });
+        if (d < best) best = d;
+      }
+      setAccessRow(nk.kind, nk.label, fmtDistance(best));
+    } catch (e) {
+      console.error("nearest", nk.kind, e);
+      setAccessRow(nk.kind, nk.label, "—");
+    }
+  }
+}
+
+// Overpass: nearby food stores within `radius` m of a point (for nearest calc).
+async function fetchOsmNearby(lng, lat, radius) {
+  const q = `[out:json][timeout:25];
+    (nwr["shop"~"supermarket|convenience|greengrocer|grocery"](around:${radius},${lat},${lng}););
+    out center;`;
+  const r = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "data=" + encodeURIComponent(q),
+  });
+  if (!r.ok) throw new Error(`Overpass HTTP ${r.status}`);
+  const json = await r.json();
+  return (json.elements || []).map(el => ({
+    lng: el.lon ?? el.center?.lon, lat: el.lat ?? el.center?.lat,
+  })).filter(p => p.lng != null && p.lat != null);
+}
+
+function fmtDistance(m) {
+  if (m == null || !isFinite(m)) return "—";
+  if (m < 1000) return `${Math.round(m / 10) * 10} m`;
+  return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
+}
+
+function setAccessRow(kind, label, value) {
+  const listEl = document.getElementById("dd-access-list");
+  if (!listEl) return;
+  let row = document.getElementById(`dd-access-${kind}`);
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "dd-access-row";
+    row.id = `dd-access-${kind}`;
+    row.innerHTML = `<span class="dd-access-label"></span><span class="dd-access-val"></span>`;
+    listEl.appendChild(row);
+  }
+  row.querySelector(".dd-access-label").textContent = label;
+  row.querySelector(".dd-access-val").textContent = value;
 }
 
 function exitDeepDive() {
@@ -1942,8 +2071,6 @@ function buildDeepDivePanel(meta) {
   const note = configured ? "" :
     `<p class="hint" style="margin-top:10px">Connect Supabase (see config.js) to load amenity layers.</p>`;
 
-  const scoreStr = (meta.score == null || isNaN(meta.score)) ? "—" : meta.score.toFixed(0);
-
   const panel = document.getElementById("deepdive-panel");
   panel.innerHTML = `
     <div class="dd-head">
@@ -1962,9 +2089,12 @@ function buildDeepDivePanel(meta) {
         </button>
         <div class="dd-block-content">
           <div class="dd-score">
-            <div class="dd-score-big">${scoreStr}<span>/100</span></div>
+            <div class="dd-score-big" id="dd-score-value">—<span>/100</span></div>
             <div class="dd-score-cap">${meta.scoreCaption || "Combined deprivation · weighted"}</div>
           </div>
+          <p class="dd-score-summary" id="dd-score-summary"></p>
+          <div class="dd-domain-list" id="dd-domain-list"></div>
+          <p class="hint" style="margin-top:8px">Higher = more deprived (national percentile). Adjust the weighting sliders on the left to see the headline change live.</p>
         </div>
       </section>
 
@@ -1976,6 +2106,16 @@ function buildDeepDivePanel(meta) {
           <div class="dd-toggles">${toggles}</div>
           ${note}
           <p class="hint" style="margin-top:8px">Toggle a layer to map it within the catchment.</p>
+        </div>
+      </section>
+
+      <section class="dd-block" data-section="access">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Nearest access</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <div class="dd-access-list" id="dd-access-list"></div>
+          <p class="hint" style="margin-top:8px">Straight-line distance from the centre of this area to the closest of each.</p>
         </div>
       </section>
 
@@ -2016,6 +2156,80 @@ function buildDeepDivePanel(meta) {
   if (crimeBtn) crimeBtn.addEventListener("click", loadCrime);
   const crimeShow = panel.querySelector("#dd-crime-show");
   if (crimeShow) crimeShow.addEventListener("change", (e) => setCrimeVisible(e.target.checked));
+
+  // Fill the deprivation headline, breakdown bars and plain-English summary.
+  renderDeprivationScore();
+}
+
+// DOMAINS labelled for the breakdown (shorter labels than the slider names).
+const DOMAIN_LABELS = {
+  income: "Income", employment: "Employment", education: "Education & skills",
+  health: "Health & disability", crime: "Crime",
+  housing: "Barriers to housing", environment: "Living environment",
+};
+
+// Turn a 0-100 deprivation percentile into plain English. Higher = more
+// deprived, so a high value means among the MOST deprived nationally.
+function depBand(v) {
+  if (v == null || isNaN(v)) return "no data";
+  if (v >= 90) return "among the 10% most deprived nationally";
+  if (v >= 75) return "among the 25% most deprived nationally";
+  if (v >= 50) return "more deprived than the national average";
+  if (v >= 25) return "less deprived than the national average";
+  if (v >= 10) return "among the 25% least deprived nationally";
+  return "among the 10% least deprived nationally";
+}
+
+// Recompute and render the deprivation headline, breakdown and summary from the
+// stored per-domain averages using the CURRENT weights. Called on panel build
+// and whenever the weighting changes (so the score is live).
+function renderDeprivationScore() {
+  const domains = deep.domains;
+  const valEl = document.getElementById("dd-score-value");
+  const sumEl = document.getElementById("dd-score-summary");
+  const listEl = document.getElementById("dd-domain-list");
+  if (!valEl) return;
+
+  const score = combinedScoreFromDomains(domains, state.weights);
+  valEl.innerHTML = (score == null || isNaN(score))
+    ? `—<span>/100</span>`
+    : `${score.toFixed(0)}<span>/100</span>`;
+
+  // Plain-English summary of the overall position + the standout domain.
+  if (sumEl) {
+    if (score == null) {
+      sumEl.textContent = "";
+    } else {
+      // Find the domain this area scores worst on (highest deprivation).
+      let worst = null;
+      for (const d of DOMAINS) {
+        const v = domains && domains[d.key];
+        if (v == null) continue;
+        if (!worst || v > worst.v) worst = { key: d.key, v };
+      }
+      let txt = `Overall, this area is ${depBand(score)}.`;
+      if (worst && worst.v >= 50) {
+        txt += ` It is ${depBand(worst.v)} for ${DOMAIN_LABELS[worst.key].toLowerCase()}.`;
+      }
+      sumEl.textContent = txt;
+    }
+  }
+
+  // Per-domain breakdown bars.
+  if (listEl) {
+    if (!domains) { listEl.innerHTML = ""; return; }
+    listEl.innerHTML = DOMAINS.map(d => {
+      const v = domains[d.key];
+      if (v == null || isNaN(v)) return "";
+      const off = !state.enabled[d.key];
+      return `
+        <div class="dd-domain-row ${off ? "dd-domain-off" : ""}" title="${depBand(v)}">
+          <span class="dd-domain-label">${DOMAIN_LABELS[d.key]}</span>
+          <span class="dd-domain-bar"><span style="width:${Math.max(0, Math.min(100, v)).toFixed(0)}%"></span></span>
+          <span class="dd-domain-val">${v.toFixed(0)}</span>
+        </div>`;
+    }).join("");
+  }
 }
 
 function setDeepPanelOpen(open) {
@@ -2045,22 +2259,20 @@ const plot = {
   minutes: 15,
 };
 
-// Area-weighted deprivation score for an arbitrary catchment polygon. We take
-// every LSOA currently in the vector tiles that intersects the catchment,
-// compute the area of overlap, and weight each LSOA's combined score by its
-// share of the total overlapping area. This represents the deprivation of the
-// area someone can actually reach, blending part-covered zones proportionally.
+// Area-weighted deprivation for an arbitrary catchment polygon. For each LSOA
+// the catchment overlaps, we weight that LSOA's per-domain normalised scores by
+// its share of the total overlap area. Returns per-domain averages (0-100) plus
+// the count of contributing LSOAs. Storing PER-DOMAIN values (not a single
+// number) is what lets the headline score and breakdown update live when the
+// user changes the weighting — exactly like the main map.
 function areaWeightedScore(catchment) {
-  if (!window.turf) return { score: null, parts: 0 };
-  // All LSOA polygons currently rendered (covers the visible area; the user is
-  // zoomed to the catchment so these are the relevant ones).
+  if (!window.turf) return { domains: null, parts: 0 };
   const feats = map.querySourceFeatures("lsoa", { sourceLayer: SOURCE_LAYER });
-  if (!feats.length) return { score: null, parts: 0 };
+  if (!feats.length) return { domains: null, parts: 0 };
 
-  // De-dupe by code (tiles can repeat a feature across tile edges).
   const seen = new Set();
   let totalArea = 0;
-  const contribs = [];
+  const contribs = [];   // { a, props }
   for (const f of feats) {
     const code = f.properties && f.properties.lsoa_code;
     if (!code || seen.has(code)) continue;
@@ -2073,14 +2285,41 @@ function areaWeightedScore(catchment) {
     let a;
     try { a = turf.area(inter); } catch (_) { a = 0; }
     if (a <= 0) continue;
-    const s = combinedScore(f.properties, state.weights);
-    if (s == null || isNaN(s)) continue;
-    contribs.push({ a, s });
+    contribs.push({ a, props: f.properties });
     totalArea += a;
   }
-  if (!totalArea) return { score: null, parts: 0 };
-  const score = contribs.reduce((sum, c) => sum + c.s * (c.a / totalArea), 0);
-  return { score, parts: contribs.length };
+  if (!totalArea) return { domains: null, parts: 0 };
+
+  // Area-weighted average of each domain's *_norm value, plus overall.
+  const domains = {};
+  const keys = DOMAINS.map(d => d.key).concat(["overall"]);
+  for (const k of keys) {
+    let acc = 0, wsum = 0;
+    for (const c of contribs) {
+      const v = c.props[`${k}_norm`];
+      if (v == null || isNaN(v)) continue;
+      acc += v * c.a;
+      wsum += c.a;
+    }
+    domains[k] = wsum > 0 ? acc / wsum : null;
+  }
+  return { domains, parts: contribs.length };
+}
+
+// Combined score from stored per-domain averages, using the CURRENT weights and
+// enable toggles. Mirrors combinedScore() but reads the catchment's domain
+// averages instead of a single LSOA's props.
+function combinedScoreFromDomains(domains, weights) {
+  if (!domains) return null;
+  let wsum = 0, acc = 0;
+  for (const d of DOMAINS) {
+    if (!state.enabled[d.key]) continue;
+    const v = domains[d.key];
+    if (v == null) continue;
+    acc += weights[d.key] * v;
+    wsum += weights[d.key];
+  }
+  return wsum > 0 ? acc / wsum : null;
 }
 
 // Build an isochrone polygon from a point via the public Valhalla server.
@@ -2132,12 +2371,12 @@ async function runPlotDeepDive() {
   if (!catchment) { setPlotStatus("No isochrone returned for that point."); return; }
   setPlotStatus("");
 
-  const { score, parts } = areaWeightedScore(catchment);
+  const { domains, parts } = areaWeightedScore(catchment);
   runDeepDive(catchment, {
     eyebrow: "Isochrone deep dive",
     title: `${plot.minutes}-min ${modeLabel.toLowerCase()}`,
     subtitle: parts ? `Area-weighted across ${parts} LSOA${parts === 1 ? "" : "s"}` : "Catchment analysis",
-    score,
+    domains,                      // per-domain averages → live re-weighting + breakdown
     scoreCaption: "Area-weighted deprivation · weighted",
   });
 }

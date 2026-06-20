@@ -854,6 +854,43 @@ footer {
 .dd-score-big span { font-size: 15px; color: var(--text-dim); }
 .dd-score-cap { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
 
+/* Plain-English summary under the headline score */
+.dd-score-summary {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+  margin: 10px 0 4px;
+}
+
+/* Per-domain deprivation breakdown bars */
+.dd-domain-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.dd-domain-row {
+  display: grid;
+  grid-template-columns: 1fr 80px 26px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.dd-domain-off { opacity: 0.4; }
+.dd-domain-label { color: var(--text); }
+.dd-domain-bar { height: 6px; background: var(--ink-line); border-radius: 3px; overflow: hidden; }
+.dd-domain-bar span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.dd-domain-val { font-family: var(--font-data); font-size: 11px; text-align: right; color: var(--text-dim); }
+
+/* Nearest access rows */
+.dd-access-list { display: flex; flex-direction: column; gap: 7px; }
+.dd-access-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--ink-line);
+}
+.dd-access-row:last-child { border-bottom: none; }
+.dd-access-label { color: var(--text); }
+.dd-access-val { font-family: var(--font-data); font-size: 13px; color: var(--accent); font-weight: 600; }
+
 .dd-load-btn {
   background: var(--accent);
   color: #fff;
