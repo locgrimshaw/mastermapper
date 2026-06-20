@@ -15,6 +15,11 @@ data/raw/*
 # use it instead of downloading. Small, so safe to keep in the repo.
 !data/raw/epraccur.csv
 
+# LSOA 2021 boundary file downloaded from the ONS Open Geography portal (BGC,
+# 20m). Committing it lets the build use it directly instead of the flaky ONS
+# API. It's larger (~tens of MB) but git handles it and the deploy strips it.
+!data/raw/lsoa_2021_bgc.geojson
+
 # Python
 __pycache__/
 *.pyc

@@ -306,10 +306,15 @@ async function loadData() {
   map.addSource("lsoa", {
     type: "vector",
     url: tilesUrl,
-    // Tiles are built to z14; telling MapLibre the source maxzoom lets it
-    // "overzoom" (reuse the z14 tile) smoothly when the user zooms in further
-    // for catchment work, instead of the choropleth disappearing past z14.
-    maxzoom: 14,
+    // The choropleth must never vanish when zooming in. A vector source only
+    // serves tiles up to its maxzoom and then "overzooms" (reuses the deepest
+    // tile, scaled) beyond that. If maxzoom is set HIGHER than the tiles
+    // actually contain, MapLibre requests tiles that don't exist and the layer
+    // disappears past that zoom — which is the "everything goes to basemap when
+    // I zoom in" bug. Setting maxzoom to 13 (which every build of our tileset
+    // contains) guarantees clean overzoom to any depth. Detail past 13 comes
+    // from overzooming the high-detail z13 tile, which still looks crisp.
+    maxzoom: 13,
   });
 
   map.addLayer({

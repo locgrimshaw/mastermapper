@@ -93,32 +93,113 @@ def fetch_all(base: str) -> list:
     return features
 
 
-def main() -> int:
-    print("Fetching LSOA boundaries from ONS (this takes a minute)...")
-    features = []
-    for label, base in CANDIDATES:
-        print(f"  trying {label}...")
-        try:
-            features = fetch_all(base)
-        except Exception as e:
-            print(f"    failed: {e}")
-            features = []
-        if len(features) >= 30000:
-            print(f"  using {label}: {len(features)} LSOAs")
-            break
-        elif features:
-            print(f"    only {len(features)} features — trying next source")
+def load_committed_file():
+    """If you've committed a boundary file (downloaded from the ONS portal in
+    your browser), use it directly — no API call, no flaky service names. We
+    look for a few likely names. The file can be raw ONS GeoJSON in EITHER
+    coordinate system: WGS84 lat/long (what the map needs) or British National
+    Grid eastings/northings (what ONS often serves). We auto-detect by the size
+    of the coordinates and reproject if needed.
 
-    fc = {"type": "FeatureCollection", "features": features}
+    Returns a feature list in WGS84, or None if no committed file is found.
+    """
+    candidates = [
+        RAW / "lsoa_2021_bgc.geojson",
+        RAW / "lsoa_boundaries_source.geojson",
+        RAW / "LSOA_2021_EW_BGC_V2.geojson",
+    ]
+    path = next((p for p in candidates if p.exists()), None)
+    if not path:
+        return None
+
+    print(f"Using committed boundary file: {path.name}")
+    try:
+        import geopandas as gpd
+        gdf = gpd.read_file(path)
+    except Exception as e:
+        print(f"  couldn't read {path.name}: {e}")
+        return None
+
+    # Find the LSOA code column under whatever name the file uses.
+    code_col = None
+    for c in gdf.columns:
+        if c.upper() == "LSOA21CD":
+            code_col = c
+            break
+    if code_col is None:
+        # Fall back to any LSOA*CD column.
+        for c in gdf.columns:
+            if c.upper().startswith("LSOA") and c.upper().endswith("CD"):
+                code_col = c
+                break
+    if code_col is None:
+        print(f"  no LSOA code column found. Columns: {list(gdf.columns)}")
+        return None
+
+    # Detect coordinate system. ONS GeoJSON is often British National Grid
+    # (EPSG:27700), where coordinates are large (eastings ~ 100k–700k). The map
+    # needs WGS84 (EPSG:4326), where longitudes are small (~ -8 to 2). If the
+    # CRS is declared we trust it; otherwise we sniff the coordinate magnitude.
+    try:
+        if gdf.crs is None:
+            xmin, ymin, xmax, ymax = gdf.total_bounds
+            if abs(xmax) > 1000 or abs(ymax) > 1000:
+                print("  no CRS set; coordinates look like British National Grid"
+                      " — assuming EPSG:27700.")
+                gdf = gdf.set_crs(27700)
+            else:
+                gdf = gdf.set_crs(4326)
+        if gdf.crs.to_epsg() != 4326:
+            print(f"  reprojecting from EPSG:{gdf.crs.to_epsg()} to WGS84 (4326)...")
+            gdf = gdf.to_crs(4326)
+    except Exception as e:
+        print(f"  CRS handling note: {e}; assuming already WGS84.")
+
+    import json as _json
+    out = []
+    for code, geom in zip(gdf[code_col], gdf.geometry):
+        if code is None or geom is None or geom.is_empty:
+            continue
+        out.append({
+            "type": "Feature",
+            "properties": {"LSOA21CD": str(code)},
+            "geometry": _json.loads(gpd.GeoSeries([geom]).to_json())["features"][0]["geometry"],
+        })
+    print(f"  {len(out)} LSOAs read from committed file")
+    return out if out else None
+
+
+def main() -> int:
+    # 1) Prefer a committed boundary file (most reliable — no live API).
+    features = load_committed_file()
+
+    # 2) Otherwise fall back to the ONS API candidates.
+    if not features:
+        print("Fetching LSOA boundaries from ONS (this takes a minute)...")
+        for label, base in CANDIDATES:
+            print(f"  trying {label}...")
+            try:
+                features = fetch_all(base)
+            except Exception as e:
+                print(f"    failed: {e}")
+                features = []
+            if len(features) >= 30000:
+                print(f"  using {label}: {len(features)} LSOAs")
+                break
+            elif features:
+                print(f"    only {len(features)} features — trying next source")
+
+    fc = {"type": "FeatureCollection", "features": features or []}
     RAW.mkdir(parents=True, exist_ok=True)
     out = RAW / "lsoa_boundaries.geojson"
     out.write_text(json.dumps(fc))
     size_mb = out.stat().st_size / 1e6
-    print(f"Wrote {out}  ({len(features)} LSOAs, {size_mb:.1f} MB)")
-    if len(features) < 30000:
+    print(f"Wrote {out}  ({len(fc['features'])} LSOAs, {size_mb:.1f} MB)")
+    if len(fc["features"]) < 30000:
         print("  ERROR: expected ~34,700 England+Wales LSOAs but got far fewer.")
-        print("  All candidate ONS endpoints failed. The services may have been")
-        print("  renamed again — check https://geoportal.statistics.gov.uk")
+        print("  Easiest fix: download the boundary file in your browser and")
+        print("  commit it as data/raw/lsoa_2021_bgc.geojson — see")
+        print("  docs/BOUNDARIES_DOWNLOAD.md. The build will then use it directly.")
         return 1
     return 0
 
