@@ -747,6 +747,46 @@ footer {
   border-bottom: 1px solid var(--ink-line);
 }
 .dd-block:last-child { border-bottom: none; }
+
+/* Collapsible section header */
+.dd-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0 0 10px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  text-align: left;
+}
+.dd-block-head .dd-h { margin: 0; }
+.dd-head-right { display: inline-flex; align-items: center; gap: 12px; }
+.dd-caret {
+  color: var(--text-dim);
+  font-size: 11px;
+  transition: transform 0.18s ease;
+}
+.dd-block.collapsed .dd-caret { transform: rotate(-90deg); }
+.dd-block.collapsed .dd-block-content { display: none; }
+.dd-block.collapsed { padding-bottom: 16px; }
+
+/* Show/hide toggle in a section header */
+.dd-show-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.dd-show-toggle input { cursor: pointer; }
+
 .dd-h {
   font-size: 12px;
   font-weight: 600;

@@ -1213,6 +1213,7 @@ const deep = {
   enabledKinds: new Set(),  // which amenity layers are toggled on
   cache: {},             // kind -> array of features {lng,lat,name,props}
   crimeView: "points",   // "points" | "heat"
+  crimeVisible: true,    // whether crime layers are shown
   crimeData: null,       // cached 12-month crime array
 };
 
@@ -1244,6 +1245,7 @@ async function enterDeepDive(p) {
   deep.enabledKinds = new Set();
   deep.cache = {};
   deep.crimeView = "points";
+  deep.crimeVisible = true;
   deep.crimeData = null;
 
   // Dim the choropleth so amenity points read clearly, and zoom to the area.
@@ -1627,12 +1629,22 @@ function setCrimeView(view) {
   deep.crimeView = view;
   const showDots = view !== "heat";
   for (const id of ["crime-dot", "crime-count"]) {
-    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", showDots ? "visible" : "none");
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility",
+      (showDots && deep.crimeVisible) ? "visible" : "none");
   }
   if (map.getLayer("crime-heat"))
-    map.setLayoutProperty("crime-heat", "visibility", view === "heat" ? "visible" : "none");
+    map.setLayoutProperty("crime-heat", "visibility",
+      (view === "heat" && deep.crimeVisible) ? "visible" : "none");
   document.querySelectorAll(".dd-crime-toggle button").forEach(b =>
     b.classList.toggle("active", b.dataset.view === view));
+}
+
+// Show/hide all crime layers (the on/off toggle in the section header). Keeps
+// the data loaded so flipping it back is instant.
+function setCrimeVisible(visible) {
+  deep.crimeVisible = visible;
+  // Re-apply view, which respects deep.crimeVisible for each layer.
+  setCrimeView(deep.crimeView);
 }
 
 function removeCrimeLayer() {
@@ -1680,6 +1692,12 @@ function renderCrimeStats(crimes, body, monthCount) {
 
   body.querySelectorAll(".dd-crime-toggle button").forEach(b =>
     b.addEventListener("click", () => setCrimeView(b.dataset.view)));
+
+  // Reveal the show/hide toggle in the section header now data exists.
+  const showWrap = document.getElementById("dd-crime-show-wrap");
+  if (showWrap) showWrap.hidden = false;
+  const showCb = document.getElementById("dd-crime-show");
+  if (showCb) showCb.checked = deep.crimeVisible;
 }
 
 function buildDeepDivePanel(p) {
@@ -1711,36 +1729,73 @@ function buildDeepDivePanel(p) {
     </div>
 
     <div class="dd-body">
-      <section class="dd-block">
-        <div class="dd-score">
-          <div class="dd-score-big">${combined.toFixed(0)}<span>/100</span></div>
-          <div class="dd-score-cap">Combined deprivation · weighted</div>
+      <section class="dd-block" data-section="score">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Deprivation</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <div class="dd-score">
+            <div class="dd-score-big">${combined.toFixed(0)}<span>/100</span></div>
+            <div class="dd-score-cap">Combined deprivation · weighted</div>
+          </div>
         </div>
       </section>
 
-      <section class="dd-block">
-        <h3 class="dd-h">Amenities in this area</h3>
-        <div class="dd-toggles">${toggles}</div>
-        ${note}
-        <p class="hint" style="margin-top:8px">Toggle a layer to map it within the catchment.</p>
+      <section class="dd-block" data-section="amenities">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Amenities in this area</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <div class="dd-toggles">${toggles}</div>
+          ${note}
+          <p class="hint" style="margin-top:8px">Toggle a layer to map it within the catchment.</p>
+        </div>
       </section>
 
-      <section class="dd-block" id="dd-crime-block">
-        <h3 class="dd-h">Crime <span class="dd-h-note" id="dd-crime-period"></span></h3>
-        <div id="dd-crime-body">
-          <button class="dd-load-btn" id="dd-crime-load" type="button">Load 12 months of crime</button>
+      <section class="dd-block" data-section="crime" id="dd-crime-block">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Crime <span class="dd-h-note" id="dd-crime-period"></span></span>
+          <span class="dd-head-right">
+            <label class="dd-show-toggle" id="dd-crime-show-wrap" hidden>
+              <input type="checkbox" id="dd-crime-show" checked />
+              <span>Show</span>
+            </label>
+            <span class="dd-caret">▾</span>
+          </span>
+        </button>
+        <div class="dd-block-content">
+          <div id="dd-crime-body">
+            <button class="dd-load-btn" id="dd-crime-load" type="button">Load 12 months of crime</button>
+          </div>
         </div>
       </section>
     </div>`;
 
   setDeepPanelOpen(true);
   panel.querySelector(".dd-close").addEventListener("click", exitDeepDive);
+
+  // Collapsible sections: clicking a header toggles its content. We ignore
+  // clicks that land on an interactive control inside the header (the Show
+  // toggle), so those don't also collapse the section.
+  panel.querySelectorAll(".dd-block-head").forEach(head => {
+    head.addEventListener("click", (e) => {
+      if (e.target.closest(".dd-show-toggle")) return;
+      const block = head.closest(".dd-block");
+      const open = block.classList.toggle("collapsed");
+      head.setAttribute("aria-expanded", open ? "false" : "true");
+    });
+  });
+
   for (const a of AMENITY_KINDS) {
     const cb = panel.querySelector(`#dd-${a.kind}`);
     if (cb) cb.addEventListener("change", (e) => toggleAmenityKind(a.kind, e.target.checked));
   }
   const crimeBtn = panel.querySelector("#dd-crime-load");
   if (crimeBtn) crimeBtn.addEventListener("click", loadCrime);
+
+  // Crime show/hide toggle (appears once data is loaded).
+  const crimeShow = panel.querySelector("#dd-crime-show");
+  if (crimeShow) crimeShow.addEventListener("change", (e) => setCrimeVisible(e.target.checked));
 }
 
 function setDeepPanelOpen(open) {
