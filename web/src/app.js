@@ -1193,11 +1193,12 @@ function priceFmt(v) {
 // (source:"osm") so they need no storage, like crime. `color` sets the map dot
 // and the legend swatch.
 const AMENITY_KINDS = [
-  { kind: "gp",          label: "GP surgeries",   color: "#2563eb", source: "supabase" },
-  { kind: "pharmacy",    label: "Pharmacies",     color: "#0ea5a4", source: "supabase" },
-  { kind: "school",      label: "Schools",        color: "#7c3aed", source: "supabase" },
-  { kind: "nursery",     label: "Nurseries",      color: "#db2777", source: "supabase" },
+  { kind: "gp",          label: "GP surgeries",   color: "#2563eb", source: "supabase", icon: "gp" },
+  { kind: "pharmacy",    label: "Pharmacies",     color: "#0ea5a4", source: "supabase", icon: "pharmacy" },
+  { kind: "school",      label: "Schools",        color: "#7c3aed", source: "supabase", icon: "school" },
+  { kind: "nursery",     label: "Nurseries",      color: "#db2777", source: "supabase", icon: "nursery" },
   { kind: "bus_stop",    label: "Bus stops",      color: "#f59e0b", source: "supabase", icon: "bus" },
+  { kind: "supermarket", label: "Food stores",    color: "#16a34a", source: "osm",      icon: "food" },
   { kind: "supermarket", label: "Food stores",    color: "#16a34a", source: "osm" },
 ];
 
@@ -1416,7 +1417,7 @@ async function renderAmenityLayer(kind) {
       id: layerId, type: "symbol", source: srcId,
       layout: {
         "icon-image": imgId,
-        "icon-size": ["interpolate", ["linear"], ["zoom"], 11, 0.42, 16, 0.62],
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 11, 0.59, 16, 0.87],
         "icon-allow-overlap": true,
         "icon-ignore-placement": true,
       },
@@ -1444,22 +1445,47 @@ async function renderAmenityLayer(kind) {
   });
 }
 
-// SVG marker images for amenity symbol layers, keyed by icon name. We draw a
-// rounded pin with a white glyph and register it as a map image, so symbol
-// layers can use it (e.g. little bus markers for stops). Cached so we only
-// build each once per map.
+// SVG marker images for amenity symbol layers, keyed by icon name. Each is a
+// coloured rounded square (the layer's colour) with a white border and a white
+// glyph, registered as a map image so symbol layers can use it. Cached so each
+// builds once per map. All share a 44x44 frame; only the glyph differs.
+const _frame = (color, glyph) => `
+  <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+    <rect x="3" y="3" width="38" height="38" rx="10" fill="${color}" stroke="#fff" stroke-width="3"/>
+    <g fill="#fff">${glyph}</g>
+  </svg>`;
+
 const ICON_SVGS = {
-  // A bus glyph on a coloured rounded square with a white border.
-  bus: (color) => `
-    <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
-      <rect x="3" y="3" width="38" height="38" rx="10" fill="${color}" stroke="#fff" stroke-width="3"/>
-      <g fill="#fff">
-        <rect x="13" y="11" width="18" height="17" rx="3"/>
-        <rect x="15" y="14" width="14" height="6" rx="1.5" fill="${color}"/>
-        <circle cx="17" cy="29.5" r="2.6"/>
-        <circle cx="27" cy="29.5" r="2.6"/>
-      </g>
-    </svg>`,
+  // Bus — body with windows and two wheels.
+  bus: (c) => _frame(c, `
+    <rect x="13" y="11" width="18" height="17" rx="3"/>
+    <rect x="15" y="14" width="14" height="6" rx="1.5" fill="${c}"/>
+    <circle cx="17" cy="29.5" r="2.6"/><circle cx="27" cy="29.5" r="2.6"/>`),
+  // GP — medical cross.
+  gp: (c) => _frame(c, `
+    <rect x="19" y="11" width="6" height="22" rx="1.5"/>
+    <rect x="11" y="19" width="22" height="6" rx="1.5"/>`),
+  // Pharmacy — mortar & pestle (bowl + pestle).
+  pharmacy: (c) => _frame(c, `
+    <path d="M13 21 h18 a9 9 0 0 1 -18 0 z"/>
+    <rect x="20.5" y="11" width="3" height="11" rx="1.5" transform="rotate(28 22 16)"/>
+    <rect x="12" y="30" width="20" height="3.5" rx="1.75"/>`),
+  // School — graduation cap (mortarboard).
+  school: (c) => _frame(c, `
+    <path d="M22 12 L34 18 L22 24 L10 18 Z"/>
+    <path d="M16 21 v5 a6 3 0 0 0 12 0 v-5" fill="none" stroke="#fff" stroke-width="2.4"/>
+    <rect x="32.5" y="18" width="1.8" height="8" rx="0.9"/>`),
+  // Nursery — building blocks (two stacked squares with letters feel).
+  nursery: (c) => _frame(c, `
+    <rect x="12" y="22" width="9" height="9" rx="1.5"/>
+    <rect x="23" y="22" width="9" height="9" rx="1.5"/>
+    <rect x="17.5" y="12" width="9" height="9" rx="1.5"/>`),
+  // Food store — shopping basket.
+  food: (c) => _frame(c, `
+    <path d="M13 19 h18 l-2 13 h-14 z"/>
+    <path d="M17 19 l3 -7 M27 19 l-3 -7" stroke="#fff" stroke-width="2.2" fill="none"/>
+    <rect x="18" y="23" width="2.4" height="6" rx="1.2" fill="${c}"/>
+    <rect x="23.6" y="23" width="2.4" height="6" rx="1.2" fill="${c}"/>`),
 };
 
 const _iconsLoaded = new Set();
