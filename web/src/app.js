@@ -1188,8 +1188,17 @@ function priceFmt(v) {
 // The amenity datasets we can show in a deep dive. Start with GPs; pharmacies,
 // schools, bus stops, etc. slot in here as each loader lands. `kind` matches
 // the `amenities.kind` column in Supabase.
+// Amenity layers shown in a deep dive. Most come from Supabase (loaded via the
+// dashboard CSV import); supermarkets are fetched live from OpenStreetMap
+// (source:"osm") so they need no storage, like crime. `color` sets the map dot
+// and the legend swatch.
 const AMENITY_KINDS = [
-  { kind: "gp", label: "GP surgeries", color: "#2563eb", glyph: "✚" },
+  { kind: "gp",          label: "GP surgeries",   color: "#2563eb", source: "supabase" },
+  { kind: "pharmacy",    label: "Pharmacies",     color: "#0ea5a4", source: "supabase" },
+  { kind: "school",      label: "Schools",        color: "#7c3aed", source: "supabase" },
+  { kind: "nursery",     label: "Nurseries",      color: "#db2777", source: "supabase" },
+  { kind: "bus_stop",    label: "Bus stops",      color: "#f59e0b", source: "supabase" },
+  { kind: "supermarket", label: "Food stores",    color: "#16a34a", source: "osm" },
 ];
 
 // Lazily-created Supabase client. Null when no config is present (the map still
@@ -1299,9 +1308,15 @@ function removeCatchmentOutline() {
 // Query Supabase for amenities of one kind inside the current catchment, cache
 // and render them. Returns the count (or null if the DB isn't configured).
 async function loadAmenityKind(kind) {
+  if (deep.cache[kind]) return deep.cache[kind].length;
+
+  const meta = AMENITY_KINDS.find(a => a.kind === kind);
+  if (meta && meta.source === "osm") {
+    return loadOsmAmenity(kind);   // live OpenStreetMap, no DB needed
+  }
+
   const sb = getSupabase();
   if (!sb) return null;
-  if (deep.cache[kind]) return deep.cache[kind].length;
   const { data, error } = await sb.rpc("amenities_in_polygon", {
     catchment: deep.catchment.geometry,
     kinds: [kind],
@@ -1309,6 +1324,57 @@ async function loadAmenityKind(kind) {
   if (error) { console.error("amenities_in_polygon", error); return null; }
   deep.cache[kind] = data || [];
   return deep.cache[kind].length;
+}
+
+// Food stores from OpenStreetMap via the Overpass API. Like crime, this takes
+// the catchment polygon and needs no storage. We ask for supermarkets,
+// convenience stores, greengrocers and similar within the polygon.
+async function loadOsmAmenity(kind) {
+  // Build an Overpass "poly" filter from the catchment outer ring (lat lng ...).
+  let ring;
+  const g = deep.catchment.geometry;
+  if (g.type === "Polygon") ring = g.coordinates[0];
+  else if (g.type === "MultiPolygon") ring = g.coordinates[0][0];
+  else return 0;
+  // Overpass wants "lat lon lat lon ..." space-separated.
+  let pts = ring;
+  if (pts.length > 60) {
+    const step = Math.ceil(pts.length / 60);
+    pts = pts.filter((_, i) => i % step === 0);
+  }
+  const polyStr = pts.map(([lng, lat]) => `${lat.toFixed(5)} ${lng.toFixed(5)}`).join(" ");
+
+  // Food retail tags. node+way+relation so we catch both points and buildings.
+  const q = `[out:json][timeout:25];
+    (
+      nwr["shop"~"supermarket|convenience|greengrocer|grocery"](poly:"${polyStr}");
+    );
+    out center tags;`;
+
+  try {
+    const r = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "data=" + encodeURIComponent(q),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const json = await r.json();
+    const rows = (json.elements || []).map(el => {
+      const lng = el.lon ?? el.center?.lon;
+      const lat = el.lat ?? el.center?.lat;
+      if (lng == null || lat == null) return null;
+      const t = el.tags || {};
+      const kindLabel = t.shop === "supermarket" ? "Supermarket"
+        : t.shop === "convenience" ? "Convenience store"
+        : t.shop === "greengrocer" ? "Greengrocer" : "Food store";
+      return { lng, lat, name: t.name || kindLabel, props: { type: kindLabel } };
+    }).filter(Boolean);
+    deep.cache[kind] = rows;
+    return rows.length;
+  } catch (e) {
+    console.error("overpass", e);
+    return null;
+  }
 }
 
 function renderAmenityLayer(kind) {
@@ -1319,7 +1385,11 @@ function renderAmenityLayer(kind) {
     features: rows.map(r => ({
       type: "Feature",
       geometry: { type: "Point", coordinates: [r.lng, r.lat] },
-      properties: { name: r.name || meta.label, kind },
+      properties: {
+        name: r.name || meta.label,
+        kind,
+        sub: (r.props && (r.props.type || r.props.phase)) || meta.label,
+      },
     })),
   };
   const srcId = `amenity-${kind}`;
@@ -1336,12 +1406,12 @@ function renderAmenityLayer(kind) {
         "circle-stroke-width": 1.5,
       },
     });
-    // Tap an amenity for its name.
+    // Tap an amenity for its name + subtype.
     map.on("click", `${srcId}-dot`, (e) => {
       const pr = e.features[0].properties;
       new maplibregl.Popup({ offset: 8 })
         .setLngLat(e.lngLat)
-        .setHTML(`<strong>${pr.name}</strong><br>${meta.label}`)
+        .setHTML(`<strong>${pr.name}</strong><br>${pr.sub || meta.label}`)
         .addTo(map);
     });
   }
@@ -1356,9 +1426,11 @@ function removeAmenityLayer(kind) {
 async function toggleAmenityKind(kind, on) {
   if (on) {
     deep.enabledKinds.add(kind);
+    updateDeepStat(kind, "loading…");
     const n = await loadAmenityKind(kind);
     if (n === null) {
-      updateDeepStat(kind, "DB not configured");
+      const meta = AMENITY_KINDS.find(a => a.kind === kind);
+      updateDeepStat(kind, meta && meta.source === "osm" ? "couldn't load" : "DB not configured");
       deep.enabledKinds.delete(kind);
       const cb = document.getElementById(`dd-${kind}`);
       if (cb) cb.checked = false;
@@ -1557,7 +1629,8 @@ function renderCrimeLayer(crimes) {
       id: "crime-heat", type: "heatmap", source: "crime",
       layout: { visibility: deep.crimeView === "heat" ? "visible" : "none" },
       paint: {
-        "heatmap-weight": ["interpolate", ["linear"], ["get", "count"], 0, 0, maxCount, 1],
+        "heatmap-weight": ["interpolate", ["linear"], ["sqrt", ["get", "count"]],
+          0, 0, Math.sqrt(maxCount), 1],
         "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 16, 3.5],
         // Wider radius so the relatively few snap points blend into a surface
         // rather than reading as separate blobs (snap-point data is sparse).
@@ -1575,31 +1648,38 @@ function renderCrimeLayer(crimes) {
       },
     });
 
-    // Dots sized by crime count at that location, so stacked snap points read
-    // as big dots. Radius scales sqrt-like (area ∝ count) between min and max.
-    const rMax = 26, rMin = 6;
+    // Dots sized so the CIRCLE AREA is proportional to the crime count — the
+    // correct way to scale proportional symbols (a count of 40 should look ~8x
+    // the area of a count of 5, i.e. ~2.8x the radius, NOT 8x). We map
+    // sqrt(count) linearly to radius. Using sqrt(maxCount) as the top stop keeps
+    // the spread sensible regardless of the busiest point.
+    const rMax = 30, rMin = 7;
+    const sqrtMax = Math.sqrt(maxCount);
+    const radiusExpr = maxCount <= 1
+      ? rMin
+      : ["interpolate", ["linear"], ["sqrt", ["get", "count"]],
+         1, rMin, sqrtMax, rMax];
     map.addLayer({
       id: "crime-dot", type: "circle", source: "crime",
       layout: { visibility: deep.crimeView === "heat" ? "none" : "visible" },
       paint: {
-        "circle-radius": maxCount <= 1
-          ? rMin
-          : ["interpolate", ["linear"], ["get", "count"], 1, rMin, maxCount, rMax],
+        "circle-radius": radiusExpr,
         "circle-color": CRIME_COLOR,
         "circle-opacity": 0.55,
         "circle-stroke-color": "#fff",
         "circle-stroke-width": 1.5,
       },
     });
-    // Count label on each dot.
+    // Count label on each dot. Keep text size nearly constant (readability)
+    // with only a slight bump for the biggest dots.
     map.addLayer({
       id: "crime-count", type: "symbol", source: "crime",
       layout: {
         visibility: deep.crimeView === "heat" ? "none" : "visible",
         "text-field": ["to-string", ["get", "count"]],
         "text-size": maxCount <= 1
-          ? 10
-          : ["interpolate", ["linear"], ["get", "count"], 1, 10, maxCount, 15],
+          ? 11
+          : ["interpolate", ["linear"], ["sqrt", ["get", "count"]], 1, 10, sqrtMax, 14],
         "text-font": ["Noto Sans Regular"],
         "text-allow-overlap": true,
       },
