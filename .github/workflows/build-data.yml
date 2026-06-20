@@ -69,6 +69,12 @@ jobs:
           echo "Building rail overlay: passenger lines (OSM/Overpass) + stations (CSV)..."
           python pipeline/build_rail_layer.py
 
+      - name: Add station usage (heavy-rail, optional)
+        if: ${{ inputs.include_rail }}
+        run: |
+          echo "Building station-usage layer (ORR entries/exits joined to stations)..."
+          python pipeline/build_station_usage.py
+
       - name: Install tippecanoe (for vector tiles)
         run: pip install tippecanoe
 
@@ -95,6 +101,12 @@ jobs:
             echo "Staged rail.geojson ($(du -h web/data/rail.geojson | cut -f1))"
           else
             echo "No rail.geojson on disk (rail step was off or failed)."
+          fi
+          if [ -f web/data/stations.geojson ]; then
+            git add -f web/data/stations.geojson
+            echo "Staged stations.geojson ($(du -h web/data/stations.geojson | cut -f1))"
+          else
+            echo "No stations.geojson on disk (station step was off or failed)."
           fi
 
           echo "=== What is staged? ==="
