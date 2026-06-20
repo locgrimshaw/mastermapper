@@ -810,6 +810,36 @@ footer {
   color: var(--text-dim);
 }
 
+/* Points / Heatmap toggle */
+.dd-crime-toggle {
+  display: inline-flex;
+  border: 1px solid var(--ink-line);
+  border-radius: 7px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.dd-crime-toggle button {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.dd-crime-toggle button + button { border-left: 1px solid var(--ink-line); }
+.dd-crime-toggle button.active {
+  background: #b5179e;
+  color: #fff;
+}
+.dd-crime-avg {
+  font-family: var(--font-data);
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: 8px;
+}
+
 /* On small screens the panel takes the full width. */
 @media (max-width: 720px) {
   .deepdive-panel { width: 100vw; max-width: 100vw; }

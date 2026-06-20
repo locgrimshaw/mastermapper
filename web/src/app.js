@@ -1212,6 +1212,8 @@ const deep = {
   prevView: null,        // {center, zoom} to restore on exit
   enabledKinds: new Set(),  // which amenity layers are toggled on
   cache: {},             // kind -> array of features {lng,lat,name,props}
+  crimeView: "points",   // "points" | "heat"
+  crimeData: null,       // cached 12-month crime array
 };
 
 async function enterDeepDive(p) {
@@ -1241,6 +1243,8 @@ async function enterDeepDive(p) {
   deep.prevView = { center: map.getCenter(), zoom: map.getZoom() };
   deep.enabledKinds = new Set();
   deep.cache = {};
+  deep.crimeView = "points";
+  deep.crimeData = null;
 
   // Dim the choropleth so amenity points read clearly, and zoom to the area.
   if (map.getLayer("lsoa-fill")) map.setPaintProperty("lsoa-fill", "fill-opacity", 0.35);
@@ -1408,70 +1412,93 @@ function catchmentToPolyParam() {
   return pts.map(([lng, lat]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join(":");
 }
 
-// The police API publishes data a couple of months behind; find the most recent
-// month it actually has by asking the availability endpoint.
-async function latestCrimeMonth() {
+// The police API publishes data a couple of months behind; get the list of
+// available months (most recent first), so we can pull the last 12.
+async function crimeMonths() {
   try {
     const r = await fetch("https://data.police.uk/api/crimes-street-dates");
-    if (!r.ok) return null;
+    if (!r.ok) return [];
     const arr = await r.json();
-    return arr && arr.length ? arr[0].date : null;   // e.g. "2025-12"
-  } catch (_) { return null; }
+    return arr.map(d => d.date);   // ["2025-12","2025-11",...]
+  } catch (_) { return []; }
+}
+
+async function fetchCrimesForMonth(poly, month) {
+  const form = new URLSearchParams();
+  form.set("poly", poly);
+  form.set("date", month);
+  const r = await fetch("https://data.police.uk/api/crimes-street/all-crime", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  });
+  if (r.status === 503) return { tooMany: true, crimes: [] };
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return { tooMany: false, crimes: await r.json() };
 }
 
 async function loadCrime() {
   const body = document.getElementById("dd-crime-body");
   const periodEl = document.getElementById("dd-crime-period");
   if (!body) return;
-  body.innerHTML = `<p class="hint">Loading crime data…</p>`;
 
   const poly = catchmentToPolyParam();
   if (!poly) { body.innerHTML = `<p class="hint">Couldn't read the catchment shape.</p>`; return; }
 
-  const month = await latestCrimeMonth();
-  // Use POST with the poly in the body: it sidesteps the API's 4094-char GET
-  // URL limit, which a detailed LSOA boundary can exceed.
-  const url = "https://data.police.uk/api/crimes-street/all-crime";
-  const form = new URLSearchParams();
-  form.set("poly", poly);
-  if (month) form.set("date", month);
-
-  let crimes;
-  try {
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString(),
-    });
-    if (r.status === 503) {
-      body.innerHTML =
-        `<p class="hint">This area has too many crimes for the police API to
-         return at once (their limit is 10,000). That usually means a very
-         dense city-centre LSOA. Crime mapping still works for most areas.</p>`;
-      return;
-    }
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    crimes = await r.json();
-  } catch (e) {
-    body.innerHTML =
-      `<p class="hint">Couldn't load crime data (${e.message}).</p>
-       <button class="dd-load-btn" id="dd-crime-load" type="button">Try again</button>`;
+  const months = (await crimeMonths()).slice(0, 12);   // last 12 available
+  if (!months.length) {
+    body.innerHTML = `<p class="hint">Couldn't reach the police data service.</p>
+      <button class="dd-load-btn" id="dd-crime-load" type="button">Try again</button>`;
     body.querySelector("#dd-crime-load")?.addEventListener("click", loadCrime);
     return;
   }
 
-  if (periodEl && month) {
-    const [y, m] = month.split("-");
-    const mn = new Date(`${y}-${m}-01`).toLocaleString("en-GB", { month: "short", year: "numeric" });
-    periodEl.textContent = `· ${mn}`;
+  // Fetch each month in turn, showing progress. Sequential (not parallel) to be
+  // gentle on the free API and avoid rate limits.
+  const all = [];
+  let tooManyHit = false;
+  for (let i = 0; i < months.length; i++) {
+    body.innerHTML = `<p class="hint">Loading crime data… month ${i + 1} of ${months.length}</p>`;
+    try {
+      const res = await fetchCrimesForMonth(poly, months[i]);
+      if (res.tooMany) { tooManyHit = true; break; }
+      for (const c of res.crimes) { c._month = months[i]; all.push(c); }
+    } catch (e) {
+      // One bad month shouldn't kill the lot; note it and continue.
+      console.warn("crime month failed", months[i], e);
+    }
   }
 
-  renderCrimeLayer(crimes);
-  renderCrimeStats(crimes, body);
+  if (tooManyHit) {
+    body.innerHTML =
+      `<p class="hint">This area has too many crimes for the police API to
+       return (their per-request limit is 10,000). That happens in dense
+       city-centre LSOAs over a 12-month span. Try a smaller area.</p>`;
+    return;
+  }
+  if (!all.length) {
+    body.innerHTML = `<p class="hint">No recorded street-level crimes here in the last ${months.length} months.</p>`;
+    removeCrimeLayer();
+    return;
+  }
+
+  // Period label: "Jan 2025 – Dec 2025".
+  if (periodEl) {
+    const fmt = (mm) => {
+      const [y, m] = mm.split("-");
+      return new Date(`${y}-${m}-01`).toLocaleString("en-GB", { month: "short", year: "numeric" });
+    };
+    const oldest = months[months.length - 1], newest = months[0];
+    periodEl.textContent = `· ${fmt(oldest)} – ${fmt(newest)}`;
+  }
+
+  deep.crimeData = all;
+  renderCrimeLayer(all);
+  renderCrimeStats(all, body, months.length);
 }
 
-function renderCrimeLayer(crimes) {
-  const fc = {
+function crimeFeatureCollection(crimes) {
+  return {
     type: "FeatureCollection",
     features: crimes
       .filter(c => c.location && c.location.longitude && c.location.latitude)
@@ -1487,12 +1514,44 @@ function renderCrimeLayer(crimes) {
         },
       })),
   };
+}
+
+function renderCrimeLayer(crimes) {
+  const fc = crimeFeatureCollection(crimes);
+
   if (map.getSource("crime")) {
     map.getSource("crime").setData(fc);
   } else {
     map.addSource("crime", { type: "geojson", data: fc });
+
+    // Heatmap layer — weights by point density. Hidden until the user toggles
+    // to heatmap mode. Sits below the dots in the layer order.
+    map.addLayer({
+      id: "crime-heat", type: "heatmap", source: "crime",
+      layout: { visibility: deep.crimeView === "heat" ? "visible" : "none" },
+      paint: {
+        // More points nearby -> hotter. Intensity/radius grow with zoom so it
+        // reads at both the catchment overview and when zoomed right in.
+        "heatmap-weight": 1,
+        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 10, 1, 16, 3],
+        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 10, 12, 16, 30],
+        "heatmap-opacity": 0.75,
+        "heatmap-color": [
+          "interpolate", ["linear"], ["heatmap-density"],
+          0, "rgba(0,0,0,0)",
+          0.2, "rgba(69,10,80,0.5)",
+          0.4, "#7b2382",
+          0.6, "#b5179e",
+          0.8, "#e0479e",
+          1, "#ffd0e8",
+        ],
+      },
+    });
+
+    // Dot layer — individual crimes, clickable for category + street.
     map.addLayer({
       id: "crime-dot", type: "circle", source: "crime",
+      layout: { visibility: deep.crimeView === "heat" ? "none" : "visible" },
       paint: {
         "circle-radius": 5,
         "circle-color": CRIME_COLOR,
@@ -1511,15 +1570,28 @@ function renderCrimeLayer(crimes) {
   }
 }
 
+// Switch between "points" and "heat" views without refetching.
+function setCrimeView(view) {
+  deep.crimeView = view;
+  if (map.getLayer("crime-dot"))
+    map.setLayoutProperty("crime-dot", "visibility", view === "heat" ? "none" : "visible");
+  if (map.getLayer("crime-heat"))
+    map.setLayoutProperty("crime-heat", "visibility", view === "heat" ? "visible" : "none");
+  // Reflect the active button in the panel.
+  document.querySelectorAll(".dd-crime-toggle button").forEach(b =>
+    b.classList.toggle("active", b.dataset.view === view));
+}
+
 function removeCrimeLayer() {
   if (map.getLayer("crime-dot")) map.removeLayer("crime-dot");
+  if (map.getLayer("crime-heat")) map.removeLayer("crime-heat");
   if (map.getSource("crime")) map.removeSource("crime");
 }
 
-function renderCrimeStats(crimes, body) {
+function renderCrimeStats(crimes, body, monthCount) {
   const total = crimes.length;
   if (!total) {
-    body.innerHTML = `<p class="hint">No recorded street-level crimes in this area for the latest month.</p>`;
+    body.innerHTML = `<p class="hint">No recorded street-level crimes in this area.</p>`;
     return;
   }
   // Count by category, sort desc.
@@ -1538,10 +1610,22 @@ function renderCrimeStats(crimes, body) {
       <span class="dd-crime-n">${n}</span>
     </div>`).join("");
 
+  const perMonth = monthCount ? (total / monthCount).toFixed(0) : null;
+
   body.innerHTML = `
-    <div class="dd-crime-total"><strong>${total}</strong> recorded crimes</div>
+    <div class="dd-crime-toggle" role="group" aria-label="Crime map style">
+      <button type="button" data-view="points" class="${deep.crimeView === "heat" ? "" : "active"}">Points</button>
+      <button type="button" data-view="heat" class="${deep.crimeView === "heat" ? "active" : ""}">Heatmap</button>
+    </div>
+    <div class="dd-crime-total">
+      <strong>${total}</strong> crimes over ${monthCount} months
+      ${perMonth ? `<span class="dd-crime-avg">≈ ${perMonth}/month</span>` : ""}
+    </div>
     <div class="dd-crime-list">${rows}</div>
-    <p class="hint" style="margin-top:8px">Street-level crimes from data.police.uk, snapped to approximate locations. Toggling deep dive off clears these.</p>`;
+    <p class="hint" style="margin-top:8px">Street-level crimes from data.police.uk, snapped to approximate locations. Leaving the deep dive clears these.</p>`;
+
+  body.querySelectorAll(".dd-crime-toggle button").forEach(b =>
+    b.addEventListener("click", () => setCrimeView(b.dataset.view)));
 }
 
 function buildDeepDivePanel(p) {
@@ -1590,7 +1674,7 @@ function buildDeepDivePanel(p) {
       <section class="dd-block" id="dd-crime-block">
         <h3 class="dd-h">Crime <span class="dd-h-note" id="dd-crime-period"></span></h3>
         <div id="dd-crime-body">
-          <button class="dd-load-btn" id="dd-crime-load" type="button">Load crime data</button>
+          <button class="dd-load-btn" id="dd-crime-load" type="button">Load 12 months of crime</button>
         </div>
       </section>
     </div>`;
