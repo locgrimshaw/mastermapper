@@ -1347,3 +1347,79 @@ footer {
   }
   #legend .ramp { width: 130px; }
 }
+
+/* ---- Brownfield site popup (graphical) ---------------------------------- */
+.bf-popup .maplibregl-popup-content {
+  padding: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--float-shadow);
+  background: var(--surface-float);
+  color: var(--text);
+}
+.bf-popup .maplibregl-popup-tip { display: none; }
+.bf-popup .maplibregl-popup-close-button {
+  font-size: 20px;
+  width: 26px;
+  height: 26px;
+  color: #fff;
+  right: 2px;
+  top: 2px;
+  z-index: 2;
+  line-height: 1;
+}
+.bf-card { font-family: var(--font-ui); min-width: 210px; }
+.bf-head {
+  background: var(--bf-accent, #3f9b5e);
+  color: #fff;
+  padding: 10px 12px 9px;
+}
+.bf-title { font-weight: 600; font-size: 13.5px; line-height: 1.25; padding-right: 20px; }
+.bf-addr { font-size: 11px; opacity: 0.92; margin-top: 2px; }
+.bf-hero {
+  padding: 10px 12px 4px;
+  text-align: center;
+}
+.bf-hero-n {
+  font-family: var(--font-data);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--bf-accent, #3f9b5e);
+}
+.bf-facts {
+  display: flex;
+  gap: 8px;
+  padding: 4px 12px 8px;
+}
+.bf-fact {
+  flex: 1;
+  background: var(--accent-dim);
+  border-radius: 7px;
+  padding: 6px 4px;
+  text-align: center;
+}
+.bf-fact-v { font-family: var(--font-data); font-weight: 600; font-size: 12.5px; color: var(--text); }
+.bf-fact-l { font-size: 9.5px; color: var(--text-dim); margin-top: 2px; }
+.bf-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 12px 8px; }
+.bf-chip {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--track);
+  color: var(--text);
+  text-transform: capitalize;
+}
+.bf-chip-good { background: #2f6b4f; color: #fff; }
+.bf-chip-public { background: #e0a32e; color: #1a1205; }
+.bf-link {
+  display: block;
+  text-align: center;
+  padding: 9px 12px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  border-top: 1px solid var(--ink-line);
+}
+.bf-link:hover { background: var(--bf-accent, #3f9b5e); color: #fff; }

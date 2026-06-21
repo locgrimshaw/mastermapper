@@ -60,6 +60,7 @@ SOURCE_CANDIDATES = [
 # Lenient header matching: map our field -> list of source spellings.
 COLS = {
     "reference": ["reference", "Reference"],
+    "entity": ["entity", "Entity", "entity-id"],
     "organisation": ["organisation-entity", "organisation", "OrganisationURI",
                      "organisation-name"],
     "name": ["name", "Name"],
@@ -260,7 +261,7 @@ def main() -> int:
         print("WARNING: no 'reference' column found; using row index as ref.")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    out_fields = ["reference", "organisation", "name", "site_address",
+    out_fields = ["reference", "entity", "organisation", "name", "site_address",
                   "hectares", "dwellings_min", "dwellings_max",
                   "ownership_status", "is_public", "deliverable",
                   "permission_status", "permission_date", "notes",
@@ -299,6 +300,7 @@ def main() -> int:
 
             w.writerow({
                 "reference": ref,
+                "entity": re.sub(r"\D", "", str(g("entity") or "")),
                 "organisation": (g("organisation") or "").strip(),
                 "name": (g("name") or ref).strip(),
                 "site_address": (g("site_address") or "").strip(),

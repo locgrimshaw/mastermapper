@@ -1251,13 +1251,30 @@ function wireInteractions() {
     if (!state.hasStations || !map.getLayer("station-dot")) return;
     if (state.stationsVisible === false) return;
     if (state.plotPointMode) return;            // a click is meant to drop a point
+    // Query a small box around the click (not a single pixel) so taps near a
+    // station dot still register — single-pixel hit-testing misses small dots,
+    // which is why clicks were falling through to the rail-stop card.
+    const tol = 8;
+    const box = [
+      [e.point.x - tol, e.point.y - tol],
+      [e.point.x + tol, e.point.y + tol],
+    ];
     let hits;
     try {
-      hits = map.queryRenderedFeatures(e.point, { layers: ["station-dot"] });
+      hits = map.queryRenderedFeatures(box, { layers: ["station-dot"] });
     } catch (_) { hits = null; }
     if (hits && hits.length) {
+      // Pick the station nearest the actual click point (box may catch a few).
+      let best = hits[0], bestD = Infinity;
+      for (const h of hits) {
+        const c = h.geometry && h.geometry.coordinates;
+        if (!c) continue;
+        const p = map.project(c);
+        const d = (p.x - e.point.x) ** 2 + (p.y - e.point.y) ** 2;
+        if (d < bestD) { bestD = d; best = h; }
+      }
       window._stopClickGuard = true;            // suppress the lsoa-fill handler
-      inspectStation(hits[0].properties, e.point);
+      inspectStation(best.properties, e.point);
       setDrawer(false);
       // The lsoa-fill handler consumes the guard in the same click cycle; if no
       // LSOA is under the click (data edge), clear it next tick so it can't
@@ -1334,15 +1351,45 @@ function wireInteractions() {
     // station dots), let the station card win — it has usage + the profile
     // button. We check by querying station-dot features at the click point.
     map.on("click", "rail-stop", (e) => {
-      if (state.hasStations && map.getLayer("station-dot")) {
-        const hits = map.queryRenderedFeatures(e.point, { layers: ["station-dot"] });
-        if (hits && hits.length) return;   // station handler will handle it
+      const props = e.features[0].properties;
+      // If we have station-usage data, a click on a heavy-rail stop should show
+      // the RICH station card, not the plain stop card. Try to match the stop
+      // to a station by CRS (the reliable key) or by name, and upgrade.
+      if (state.hasStations) {
+        const station = findStationForStop(props);
+        if (station) {
+          window._stopClickGuard = true;
+          inspectStation(station.properties, e.point);
+          setDrawer(false);
+          setTimeout(() => { window._stopClickGuard = false; }, 0);
+          return;
+        }
       }
       window._stopClickGuard = true;
       inspectStop(e.features[0].properties, e.point);
       setDrawer(false);
     });
   }
+}
+
+// Find the station-usage feature matching a rail-stop's properties, by CRS
+// first (reliable) then normalised name. Returns the GeoJSON feature or null.
+function findStationForStop(stopProps) {
+  const feats = (state.stationsData && state.stationsData.features) || [];
+  if (!feats.length) return null;
+  const crs = (stopProps.crs || stopProps.CRS || "").toUpperCase();
+  if (crs) {
+    const byCrs = feats.find(f => (f.properties.crs || "").toUpperCase() === crs);
+    if (byCrs) return byCrs;
+  }
+  const norm = (s) => (s || "").toLowerCase().replace(/\(.*?\)/g, "")
+    .replace(/\b(rail|railway)?\s*station\b/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const n = norm(stopProps.name);
+  if (n) {
+    const byName = feats.find(f => norm(f.properties.name) === n);
+    if (byName) return byName;
+  }
+  return null;
 }
 
 // Build a small inline SVG glyph for a transit mode. Pure SVG so it needs no
@@ -1484,6 +1531,14 @@ function stationQualityNote(p, year) {
 function inspectStation(p, point) {
   closeDetail();
   closeStop();
+  // Diagnostic: log which rich (1410) fields are present, so it's easy to
+  // verify in DevTools whether the deployed stations.geojson was built from
+  // Table 1410 (rich) or 1415 (trend only). If interchanges/season_share are
+  // null for every station, the data needs rebuilding from the 1410 file.
+  console.info("[station]", p.name, {
+    usage: p.usage, interchanges: p.interchanges, season_share: p.season_share,
+    usage_pctile: p.usage_pctile, region: p.region, adjusted: p.adjusted,
+  });
   state.selectedStation = p;
   state.selectedPoint = point;
   if (map.getLayer("station-selected")) {
@@ -1964,6 +2019,13 @@ function toggleAllAmenities(on) {
       cb.checked = on;
       toggleAmenityKind(a.kind, on);
     }
+  }
+  // The "nearest access" route lines belong to the amenities — turning all
+  // amenities off should clear them too; turning all on recomputes them.
+  if (!on) {
+    removeAccessRoutes();
+  } else {
+    computeNearestDistances();
   }
 }
 
@@ -2570,7 +2632,7 @@ function renderBrownfieldLayer() {
   const pointFeatures = [];
   for (const s of sites) {
     const baseProps = {
-      id: s.id, reference: s.reference, name: s.name, site_address: s.site_address,
+      id: s.id, reference: s.reference, entity: s.entity, name: s.name, site_address: s.site_address,
       hectares: s.hectares, dwellings_min: s.dwellings_min, dwellings_max: s.dwellings_max,
       ownership_status: s.ownership_status, is_public: s.is_public,
       deliverable: s.deliverable, permission_status: s.permission_status,
@@ -2622,7 +2684,7 @@ function renderBrownfieldLayer() {
   // Click any brownfield feature -> detail card (tracked popup so it clears).
   const onClick = (e) => {
     const pr = e.features[0].properties;
-    openClickPopup({ offset: 8, maxWidth: "260px" }, e.lngLat, brownfieldPopupHTML(pr));
+    openClickPopup({ offset: 12, maxWidth: "300px", closeButton: true, closeOnClick: true, className: "bf-popup" }, e.lngLat, brownfieldPopupHTML(pr));
   };
   for (const id of ["brownfield-poly-fill", "brownfield-pt-dot"]) {
     if (map.getLayer(id)) {
@@ -2644,19 +2706,49 @@ function removeBrownfieldLayer() {
 
 // HTML for a brownfield site popup.
 function brownfieldPopupHTML(pr) {
+  const pub = pr.is_public === true || pr.is_public === "true";
+  const accent = pub ? "#e0a32e" : "#3f9b5e";
   const cap = brownfieldCapacityText(pr);
-  const own = brownfieldOwnershipLabel(pr);
-  const lines = [];
-  lines.push(`<strong>${pr.name || pr.reference || "Brownfield site"}</strong>`);
-  if (pr.site_address) lines.push(`<div style="font-size:11px">${pr.site_address}</div>`);
+  const ha = (pr.hectares != null && pr.hectares !== "") ? `${Number(pr.hectares).toFixed(2)} ha` : null;
+  const perm = pr.permission_status ? String(pr.permission_status).replace(/-/g, " ") : null;
+  const deliverable = String(pr.deliverable || "").toLowerCase() === "yes";
+  const ownTxt = pr.ownership_status
+    ? String(pr.ownership_status).replace(/-/g, " ")
+    : (pub ? "public-authority owned" : null);
+
+  // Canonical link: planning.data.gov.uk entity page (the site-plan-url field
+  // is frequently blank or a dead council URL, so prefer the entity link).
+  let linkHref = null;
+  if (pr.entity != null && pr.entity !== "") {
+    linkHref = `https://www.planning.data.gov.uk/entity/${pr.entity}`;
+  } else if (pr.source_url) {
+    linkHref = pr.source_url;
+  }
+
+  const title = pr.name || pr.reference || "Brownfield site";
+
+  // A compact, graphical card: coloured header strip, a capacity "hero" number,
+  // a small fact grid, status chips, and the canonical link.
+  const chips = [];
+  if (deliverable) chips.push(`<span class="bf-chip bf-chip-good">Deliverable</span>`);
+  if (perm) chips.push(`<span class="bf-chip">${perm}</span>`);
+  if (pub) chips.push(`<span class="bf-chip bf-chip-public">Public-owned</span>`);
+
   const facts = [];
-  if (cap) facts.push(cap);
-  if (pr.hectares != null && pr.hectares !== "") facts.push(`${Number(pr.hectares).toFixed(2)} ha`);
-  if (facts.length) lines.push(`<div style="margin-top:4px;font-size:11px">${facts.join(" · ")}</div>`);
-  if (own) lines.push(`<div style="font-size:11px;margin-top:2px">${own}</div>`);
-  if (pr.permission_status) lines.push(`<div style="font-size:11px;text-transform:capitalize">${String(pr.permission_status).replace(/-/g," ")}</div>`);
-  if (pr.source_url) lines.push(`<div style="font-size:11px;margin-top:4px"><a href="${pr.source_url}" target="_blank" rel="noopener">Site plan ↗</a></div>`);
-  return lines.join("");
+  if (ha) facts.push(`<div class="bf-fact"><div class="bf-fact-v">${ha}</div><div class="bf-fact-l">Area</div></div>`);
+  if (ownTxt) facts.push(`<div class="bf-fact"><div class="bf-fact-v" style="text-transform:capitalize;font-size:11px">${ownTxt}</div><div class="bf-fact-l">Ownership</div></div>`);
+
+  return `
+    <div class="bf-card" style="--bf-accent:${accent}">
+      <div class="bf-head">
+        <div class="bf-title">${title}</div>
+        ${pr.site_address ? `<div class="bf-addr">${pr.site_address}</div>` : ""}
+      </div>
+      ${cap ? `<div class="bf-hero"><span class="bf-hero-n">${cap}</span></div>` : ""}
+      ${facts.length ? `<div class="bf-facts">${facts.join("")}</div>` : ""}
+      ${chips.length ? `<div class="bf-chips">${chips.join("")}</div>` : ""}
+      ${linkHref ? `<a class="bf-link" href="${linkHref}" target="_blank" rel="noopener">View on Planning Data ↗</a>` : ""}
+    </div>`;
 }
 
 function brownfieldCapacityText(pr) {
@@ -3818,6 +3910,31 @@ map.on("load", async () => {
     buildRailToggle();
     buildStationControls();
     wireInteractions();
+    // Cold-load race fix: on a fresh load (empty cache) the PMTiles header +
+    // first tiles can still be in flight when the layers are added, so the map
+    // can render blank until something triggers a repaint (which is why a
+    // manual refresh "fixed" it — the tiles were then cached). We listen for
+    // the lsoa vector source becoming loaded and force a repaint so overlays
+    // appear without user intervention. Guarded so it only fires once.
+    let _firstPaintDone = false;
+    const ensureFirstPaint = () => {
+      if (_firstPaintDone) return;
+      let loaded = false;
+      try { loaded = map.isSourceLoaded("lsoa"); } catch (_) { loaded = false; }
+      if (!loaded) return;
+      _firstPaintDone = true;
+      map.off("sourcedata", onSourceData);
+      map.off("idle", ensureFirstPaint);
+      // Nudge a full re-evaluation of layers/filters now data is present.
+      try { map.triggerRepaint(); } catch (_) {}
+    };
+    const onSourceData = (e) => {
+      if (e.sourceId === "lsoa" && e.isSourceLoaded) ensureFirstPaint();
+    };
+    map.on("sourcedata", onSourceData);
+    map.on("idle", ensureFirstPaint);
+    // In case the source was already loaded synchronously (warm cache).
+    ensureFirstPaint();
     // Intentionally NOT fitting to the national bbox — the map opens on London
     // (set in the map constructor: center [-0.11, 51.51], zoom 10.5). A city
     // view reads better and only loads the tiles in view, so it starts faster
