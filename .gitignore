@@ -10,10 +10,24 @@ data/raw/*
 # but a normal CSV via "Add file" works fine).
 !data/raw/uk_stations.csv
 
-# ORR "Estimates of station usage" (Table 1410/1415). Heavy-rail entries/exits
-# joined to station locations to drive the station-led analysis. Commit the CSV
-# you download from the ORR data portal here.
+# ORR "Estimates of station usage". Commit the CSV(s) you download from the ORR
+# data portal here. Table 1410 (single year) carries the rich fields
+# (interchanges, ticket split, region, quality); Table 1415 (time series) adds
+# the multi-year trend. Commit 1410 as the primary; optionally add 1415 too and
+# the builder merges the trend. Several accepted names:
 !data/raw/orr_station_usage.csv
+!data/raw/orr_station_usage_1410.csv
+!data/raw/orr_station_usage_1415.csv
+!data/raw/orr_1410.csv
+!data/raw/orr_1415.csv
+!data/raw/orr_station_usage_timeseries.csv
+
+# Brownfield Land Register national download (planning.data.gov.uk). Build
+# input for build_brownfield_csv.py -> supabase/brownfield_import.csv. Larger
+# (~tens of MB) but git handles it; it's a build input, not published to Pages.
+!data/raw/brownfield-land.csv
+!data/raw/brownfield-land.json
+!data/raw/brownfield-land.geojson
 
 # Optional GP practice file fallback: if the NHS auto-download is blocked, you
 # can download the CSV in your browser and commit it here, and the loader will

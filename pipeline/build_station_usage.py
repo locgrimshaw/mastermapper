@@ -17,10 +17,17 @@ Heavy rail ONLY for now (Network Rail's estate). Metro/tram/Underground are
 intentionally excluded here even though rail.geojson carries them.
 
 Inputs (committed; see docs/DATASETS.md):
-  data/raw/orr_station_usage.csv   ORR "Estimates of station usage", Table 1410
-                                   (Passenger entries and exits and interchanges
-                                   by station), the CSV variant. We also accept
-                                   the time-series Table 1415 to derive a trend.
+  data/raw/orr_station_usage_1410.csv   PRIMARY. ORR "Estimates of station
+                                   usage", Table 1410 (single year). Carries the
+                                   rich fields: interchanges, ticket-type split
+                                   (Full/Reduced/Season), Region, quality flags.
+                                   (Generic name orr_station_usage.csv also
+                                   accepted.)
+  data/raw/orr_station_usage_1415.csv   OPTIONAL. Table 1415 (time series). Read
+                                   ONLY for the multi-year trend sparkline,
+                                   merged onto the primary by CRS/name. Without
+                                   it the trend just uses whatever year columns
+                                   the primary file carries (one, for 1410).
   web/data/rail.geojson            station LOCATIONS (output of
                                    build_rail_layer.py); we take its mode="rail"
                                    stops as the canonical England station set and
@@ -53,8 +60,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 RAIL_GEOJSON = ROOT / "web" / "data" / "rail.geojson"
-USAGE_CSV = RAW / "orr_station_usage.csv"
+# Primary usage file. Prefer Table 1410 (single year, but carries the rich
+# fields: interchanges, ticket split, region, quality flags). We accept the
+# generic name OR an explicit 1410 name, whichever is committed.
+USAGE_CSV_CANDIDATES = [
+    RAW / "orr_station_usage_1410.csv",
+    RAW / "orr_station_usage.csv",
+    RAW / "orr_1410.csv",
+]
+# Optional time-series file (Table 1415) read ONLY for the multi-year trend,
+# merged onto the primary by CRS/name. If absent, the trend just uses whatever
+# year columns the primary file happens to contain (one, for 1410).
+TREND_CSV_CANDIDATES = [
+    RAW / "orr_station_usage_1415.csv",
+    RAW / "orr_1415.csv",
+    RAW / "orr_station_usage_timeseries.csv",
+]
 OUT = ROOT / "web" / "data" / "stations.geojson"
+
+
+def _first_existing(paths):
+    return next((p for p in paths if p.exists()), None)
+
+
+# Resolved at runtime in load_usage()/load_trend().
+USAGE_CSV = _first_existing(USAGE_CSV_CANDIDATES) or USAGE_CSV_CANDIDATES[1]
 
 # Candidate column names in the ORR Table 1410 CSV. ORR tweaks headers between
 # releases, so we sniff a set of plausible spellings rather than hard-code one.
@@ -242,43 +272,25 @@ def _to_int(v):
         return None
 
 
-def load_usage():
-    """Load ORR usage keyed by CRS and by normalised name.
-
-    Returns (by_crs, by_name, meta) where each value is a dict:
-        { usage, operator, trend: [{year, value}, ...] }
-    `meta` carries the detected latest-year label for the legend/provenance.
-    """
-    if not USAGE_CSV.exists():
-        print(f"  no {USAGE_CSV.name} — stations will have no usage figures "
-              "(layer still builds). See docs/DATASETS.md.")
-        return {}, {}, {}
-
-    # ORR/government CSVs are frequently NOT UTF-8 (often Windows-1252 / Latin-1,
-    # e.g. an accented station name). Try UTF-8 first, then fall back through the
-    # common encodings; latin-1 maps every byte so it never raises, guaranteeing
-    # we can always read the file even if a stray byte is unusual.
+def _read_orr_csv(path):
+    """Read an ORR CSV robustly (encoding fallback) and locate the real header
+    row. Returns (header_list, body_rows, header_idx) or (None, None, None)."""
     rows = None
     for enc in ("utf-8-sig", "cp1252", "latin-1"):
         try:
-            with USAGE_CSV.open(newline="", encoding=enc) as fh:
+            with path.open(newline="", encoding=enc) as fh:
                 rows = list(csv.reader(fh))
             if enc != "utf-8-sig":
-                print(f"  ({USAGE_CSV.name} read as {enc}, not UTF-8)")
+                print(f"  ({path.name} read as {enc}, not UTF-8)")
             break
         except UnicodeDecodeError:
             continue
     if rows is None:
-        print(f"  WARNING: couldn't decode {USAGE_CSV.name} in any known "
-              "encoding. Building without usage.")
-        return {}, {}, {}
+        print(f"  WARNING: couldn't decode {path.name} in any known encoding.")
+        return None, None, None
     if not rows:
-        return {}, {}, {}
-
-    # The CSV sometimes has a title/blurb line before the header. Find the row
-    # that looks like a REAL header: several columns, with a name column and an
-    # entries/exits column. We require >= 3 cells so a one-cell title row (which
-    # can spuriously contain "station" and a "2024-25" year) can't match.
+        return None, None, None
+    # Find the real header: >= 3 cells, a name column, an entries/exits column.
     header_idx = 0
     for i, r in enumerate(rows[:12]):
         if len(r) < 3:
@@ -286,8 +298,75 @@ def load_usage():
         if _pick(r, NAME_CANDIDATES) and _find_entries_exits_cols(r)[0]:
             header_idx = i
             break
-    header = rows[header_idx]
-    body = rows[header_idx + 1:]
+    return rows[header_idx], rows[header_idx + 1:], header_idx
+
+
+def load_trend():
+    """Read the OPTIONAL Table 1415 time-series file (if present) and return
+    {crs -> [{year, value}, ...]} plus {normname -> trend}. Used to enrich the
+    primary file's single-year data with a multi-year sparkline.
+
+    Returns (by_crs, by_name) — empty dicts if no time-series file is committed.
+    """
+    path = _first_existing(TREND_CSV_CANDIDATES)
+    if path is None:
+        return {}, {}
+    print(f"  reading time-series (trend) from {path.name}...")
+    header, body, _ = _read_orr_csv(path)
+    if header is None:
+        return {}, {}
+    crs_col = _pick(header, CRS_CANDIDATES)
+    name_col = _pick(header, NAME_CANDIDATES)
+    _, dated_cols = _find_entries_exits_cols(header)
+    if name_col is None or not dated_cols:
+        print(f"    (no usable year columns in {path.name}; skipping trend)")
+        return {}, {}
+    idx = {h: i for i, h in enumerate(header)}
+    trend_cols = dated_cols[-TREND_MAX_YEARS:]
+    by_crs, by_name = {}, {}
+    for r in body:
+        if not r or len(r) <= idx[name_col]:
+            continue
+        name = r[idx[name_col]].strip()
+        if not name:
+            continue
+        trend = []
+        for col, yr in trend_cols:
+            v = _to_int(r[idx[col]]) if idx.get(col, 1e9) < len(r) else None
+            if v is not None and yr:
+                trend.append({"year": yr, "value": v})
+        if len(trend) < 2:
+            continue
+        crs = (r[idx[crs_col]].strip().upper() if crs_col and idx[crs_col] < len(r) else "")
+        if crs:
+            by_crs[crs] = trend
+        nn = norm_name(name)
+        if nn:
+            by_name[nn] = trend
+    print(f"    trend series for {len(by_crs)} stations "
+          f"({len(trend_cols)} years)")
+    return by_crs, by_name
+
+
+def load_usage():
+    """Load ORR usage keyed by CRS and by normalised name.
+
+    Returns (by_crs, by_name, meta) where each value is a dict:
+        { usage, operator, trend, interchanges, season_share, region,
+          quality, adjusted }
+    `meta` carries the detected latest-year label for the legend/provenance.
+    """
+    if not USAGE_CSV.exists():
+        print(f"  no usage file found (looked for "
+              f"{', '.join(p.name for p in USAGE_CSV_CANDIDATES)}) — stations "
+              "will have no usage figures. See docs/DATASETS.md.")
+        return {}, {}, {}
+    print(f"  primary usage file: {USAGE_CSV.name}")
+
+    header, body, _ = _read_orr_csv(USAGE_CSV)
+    if header is None:
+        print("  WARNING: couldn't read the usage file. Building without usage.")
+        return {}, {}, {}
 
     crs_col = _pick(header, CRS_CANDIDATES)
     name_col = _pick(header, NAME_CANDIDATES)
@@ -420,6 +499,8 @@ def main() -> int:
         return 0
 
     by_crs, by_name, meta = load_usage()
+    # Optional richer trend from a Table 1415 time-series file, merged by CRS.
+    trend_by_crs, trend_by_name = load_trend()
 
     feats = []
     matched_crs = matched_name = unmatched = 0
@@ -434,6 +515,17 @@ def main() -> int:
             else:
                 unmatched += 1
 
+        # Prefer the multi-year time-series trend where available; otherwise
+        # fall back to whatever year columns the primary file carried.
+        ts_trend = None
+        if s["crs"] and s["crs"] in trend_by_crs:
+            ts_trend = trend_by_crs[s["crs"]]
+        else:
+            nn = norm_name(s["name"])
+            if nn and nn in trend_by_name:
+                ts_trend = trend_by_name[nn]
+        trend = ts_trend if ts_trend else (rec["trend"] if rec else [])
+
         props = {
             "name": s["name"],
             "crs": s["crs"],
@@ -441,7 +533,7 @@ def main() -> int:
             "operator": (rec["operator"] if rec else "") or "",
             # Trend kept compact: list of {year, value}. Frontend draws a
             # sparkline / computes a % change from it.
-            "trend": rec["trend"] if rec else [],
+            "trend": trend,
             "interchanges": rec.get("interchanges") if rec else None,
             "season_share": rec.get("season_share") if rec else None,
             "region": rec.get("region") if rec else None,
