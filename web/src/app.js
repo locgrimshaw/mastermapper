@@ -336,8 +336,15 @@ async function loadData() {
       state.stationsData = await sr.json();
       state.hasStations = (state.stationsData.features || []).length > 0;
       state.stationsMeta = state.stationsData.metadata || null;
+      console.info(`[stations] loaded ${state.stationsData.features?.length ?? 0} stations`,
+        state.stationsMeta || "");
+    } else {
+      console.warn(`[stations] data/stations.geojson HTTP ${sr.status} — station layer disabled`);
     }
-  } catch { state.stationsData = null; state.hasStations = false; }
+  } catch (err) {
+    state.stationsData = null; state.hasStations = false;
+    console.warn("[stations] failed to load stations.geojson:", err.message);
+  }
 
   // Append the per-build stamp so a rebuilt lsoa.pmtiles (same filename) is
   // fetched fresh rather than served from a stale browser/CDN cache. PMTiles
@@ -562,11 +569,11 @@ function addStationLayer() {
     map.getCanvas().style.cursor = "";
     stationPopup.remove();
   });
-  map.on("click", "station-dot", (e) => {
-    window._stopClickGuard = true;   // same guard the rail-stop click uses
-    inspectStation(e.features[0].properties, e.point);
-    setDrawer(false);
-  });
+  // NOTE: the station CLICK is handled centrally in wireInteractions() via a
+  // queryRenderedFeatures check, not a layer-specific handler here. On the live
+  // site the station dots coincide with tile-based rail stops and sit among
+  // several interactive layers; a central priority check is far more reliable
+  // than depending on per-layer click dispatch order.
 }
 
 // Show/hide the station layer (the "Stations" toggle).
@@ -1234,6 +1241,31 @@ function closeDetail() {
 // ---- Hover popup ----------------------------------------------------------
 
 function wireInteractions() {
+  // --- Station click (highest priority) ------------------------------------
+  // Handled centrally rather than as a layer-specific handler: query for a
+  // station dot at the click point first, and if found, open the station card
+  // and stop. This is robust to layer ordering and to the station dots
+  // coinciding with tile-based rail stops on the live map. Registered FIRST so
+  // it runs before the lsoa-fill / rail-stop handlers in the same click cycle.
+  map.on("click", (e) => {
+    if (!state.hasStations || !map.getLayer("station-dot")) return;
+    if (state.stationsVisible === false) return;
+    if (state.plotPointMode) return;            // a click is meant to drop a point
+    let hits;
+    try {
+      hits = map.queryRenderedFeatures(e.point, { layers: ["station-dot"] });
+    } catch (_) { hits = null; }
+    if (hits && hits.length) {
+      window._stopClickGuard = true;            // suppress the lsoa-fill handler
+      inspectStation(hits[0].properties, e.point);
+      setDrawer(false);
+      // The lsoa-fill handler consumes the guard in the same click cycle; if no
+      // LSOA is under the click (data edge), clear it next tick so it can't
+      // swallow a later, legitimate click.
+      setTimeout(() => { window._stopClickGuard = false; }, 0);
+    }
+  });
+
   const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
   map.on("mousemove", "lsoa-fill", (e) => {
     const f = e.features[0];
