@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws3-tray" />
+  <link rel="stylesheet" href="src/styles.css?v=ws4-batch" />
 </head>
 <body>
   <div id="app">
@@ -87,7 +87,12 @@
           <span class="dd-label">Show stations on map</span>
           <span class="dd-stat" id="station-count-stat"></span>
         </label>
+        <button type="button" id="batch-open-btn" class="batch-cta">⚡ Batch / pipeline analysis →</button>
       </section>
+
+      <!-- Batch analysis setup + results overlays -->
+      <div id="batch-setup" class="batch-setup" hidden></div>
+      <div id="batch-results" class="batch-results" hidden></div>
 
       <section class="block" id="rail-block" hidden>
         <h2>Transit overlay</h2>
@@ -121,6 +126,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws3-tray"></script>
+  <script type="module" src="src/app.js?v=ws4-batch"></script>
 </body>
 </html>

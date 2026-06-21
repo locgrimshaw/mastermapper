@@ -752,6 +752,12 @@ function buildStationControls() {
 
   if (showCb) showCb.addEventListener("change", (e) => setStationsVisible(e.target.checked));
 
+  const batchBtn = document.getElementById("batch-open-btn");
+  if (batchBtn && !batchBtn._wired) {
+    batchBtn._wired = true;
+    batchBtn.addEventListener("click", openBatchSetup);
+  }
+
   if (input && results) {
     // Pre-index for quick search: lowercase name + crs.
     const index = feats.map(f => ({
@@ -3746,6 +3752,548 @@ function reportProfilePage(i, rank, esc) {
 
     <p class="p-synth">${esc(synthesisSentence(i))}</p>
   </section>`;
+}
+
+// ===========================================================================
+// BATCH / PIPELINE ANALYSIS
+// Profile MANY stations at once and present a potent, animated dashboard.
+// Reuses the single-station pipeline (isochrone → area-weighted deprivation &
+// population → brownfield supply) headlessly, then ranks and visualises.
+// ===========================================================================
+
+const batch = {
+  running: false,
+  cancel: false,
+  results: [],          // array of snapshot objects (same shape as shortlist)
+  errors: [],           // { name, crs, reason }
+};
+
+// --- Entry: open the setup sheet with three ways to choose stations ---------
+function openBatchSetup() {
+  const el = document.getElementById("batch-setup");
+  if (!el) return;
+  const feats = (state.stationsData && state.stationsData.features) || [];
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="batch-backdrop"></div>
+    <div class="batch-sheet">
+      <div class="batch-head">
+        <div>
+          <div class="batch-eyebrow">Pipeline analysis</div>
+          <h2>Batch-profile stations</h2>
+          <p class="batch-sub">Score a whole portfolio on need, supply and usage in one pass. Pick how to choose the stations.</p>
+        </div>
+        <button class="batch-close" type="button">×</button>
+      </div>
+
+      <div class="batch-methods">
+        <div class="batch-method" data-method="view">
+          <div class="bm-icon">🗺️</div>
+          <div class="bm-title">Busiest in current map view</div>
+          <div class="bm-desc">Profile the busiest stations visible on the map right now.</div>
+          <div class="bm-control">
+            <label>How many <select id="batch-topn">
+              <option value="5">5</option><option value="10" selected>10</option>
+              <option value="15">15</option><option value="20">20</option>
+            </select></label>
+            <button class="bm-go" data-go="view" type="button">Use map view →</button>
+          </div>
+        </div>
+
+        <div class="batch-method" data-method="paste">
+          <div class="bm-icon">⌨️</div>
+          <div class="bm-title">Paste a station list</div>
+          <div class="bm-desc">CRS codes or names, separated by commas or new lines (e.g. <code>LUT, HEN, SAC</code>).</div>
+          <div class="bm-control bm-control-col">
+            <textarea id="batch-paste" rows="3" placeholder="LUT, HEN, STP&#10;or one per line…"></textarea>
+            <button class="bm-go" data-go="paste" type="button">Profile these →</button>
+          </div>
+        </div>
+
+        <div class="batch-method" data-method="file">
+          <div class="bm-icon">📄</div>
+          <div class="bm-title">Upload a list (CSV / txt)</div>
+          <div class="bm-desc">A file with one CRS code or station name per line, or a CSV with a <code>crs</code> / <code>name</code> column.</div>
+          <div class="bm-control bm-control-col">
+            <input type="file" id="batch-file" accept=".csv,.txt,.tsv" />
+            <button class="bm-go" data-go="file" type="button">Profile uploaded →</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="batch-foot">${feats.length.toLocaleString()} stations available · each profile builds a ${STATION_WALK_MINUTES}-min walk catchment. Large batches take ~1–2s per station.</p>
+    </div>`;
+
+  const close = () => { el.hidden = true; el.innerHTML = ""; };
+  el.querySelector(".batch-close").addEventListener("click", close);
+  el.querySelector(".batch-backdrop").addEventListener("click", close);
+
+  el.querySelector('[data-go="view"]').addEventListener("click", () => {
+    const n = parseInt(document.getElementById("batch-topn").value, 10) || 10;
+    const chosen = stationsInViewByUsage(n);
+    if (!chosen.length) { alert("No stations in the current map view. Zoom out or pan to some stations."); return; }
+    startBatch(chosen);
+  });
+  el.querySelector('[data-go="paste"]').addEventListener("click", () => {
+    const raw = document.getElementById("batch-paste").value || "";
+    const chosen = resolveStationList(parseTokens(raw));
+    handleResolved(chosen, raw);
+  });
+  el.querySelector('[data-go="file"]').addEventListener("click", () => {
+    const f = document.getElementById("batch-file").files[0];
+    if (!f) { alert("Choose a file first."); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const tokens = parseFileTokens(reader.result || "");
+      const chosen = resolveStationList(tokens);
+      handleResolved(chosen, reader.result);
+    };
+    reader.readAsText(f);
+  });
+
+  function handleResolved(chosen, raw) {
+    if (!chosen.matched.length) {
+      alert("Couldn't match any stations from that input. Use CRS codes (e.g. LUT) or exact station names.");
+      return;
+    }
+    if (chosen.unmatched.length) {
+      const ok = confirm(`Matched ${chosen.matched.length} station(s). ${chosen.unmatched.length} not found: ${chosen.unmatched.slice(0, 8).join(", ")}${chosen.unmatched.length > 8 ? "…" : ""}.\n\nProfile the ${chosen.matched.length} matched?`);
+      if (!ok) return;
+    }
+    startBatch(chosen.matched);
+  }
+}
+
+// Tokenise a pasted blob into candidate tokens (CRS or names).
+function parseTokens(raw) {
+  return raw.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+}
+// Tokenise an uploaded file: if it looks like CSV with a header, pull the
+// crs/name column; otherwise treat each line as a token.
+function parseFileTokens(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const header = lines[0].toLowerCase();
+  if (header.includes(",") && (header.includes("crs") || header.includes("name") || header.includes("tlc"))) {
+    const cols = lines[0].split(",").map(c => c.trim().toLowerCase());
+    let idx = cols.findIndex(c => c === "crs" || c === "tlc");
+    if (idx < 0) idx = cols.findIndex(c => c.includes("crs") || c.includes("tlc"));
+    if (idx < 0) idx = cols.findIndex(c => c === "name" || c.includes("name"));
+    if (idx < 0) idx = 0;
+    return lines.slice(1).map(l => (l.split(",")[idx] || "").trim()).filter(Boolean);
+  }
+  return lines;
+}
+
+// Resolve tokens (CRS or names) to station features. Returns matched features +
+// unmatched tokens.
+function resolveStationList(tokens) {
+  const feats = (state.stationsData && state.stationsData.features) || [];
+  const byCrs = new Map();
+  const byName = new Map();
+  const norm = (s) => (s || "").toLowerCase().replace(/\(.*?\)/g, "")
+    .replace(/\b(rail|railway)?\s*station\b/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  for (const f of feats) {
+    if (f.properties.crs) byCrs.set(f.properties.crs.toUpperCase(), f);
+    byName.set(norm(f.properties.name), f);
+  }
+  const matched = [];
+  const unmatched = [];
+  const seen = new Set();
+  for (const t of tokens) {
+    const up = t.toUpperCase();
+    let hit = null;
+    if (up.length === 3 && byCrs.has(up)) hit = byCrs.get(up);
+    else if (byCrs.has(up)) hit = byCrs.get(up);
+    else if (byName.has(norm(t))) hit = byName.get(norm(t));
+    if (hit) {
+      const key = (hit.properties.crs || hit.properties.name).toUpperCase();
+      if (!seen.has(key)) { seen.add(key); matched.push(hit); }
+    } else {
+      unmatched.push(t);
+    }
+  }
+  return { matched, unmatched };
+}
+
+// The busiest N stations whose dot is within the current map bounds.
+function stationsInViewByUsage(n) {
+  const feats = (state.stationsData && state.stationsData.features) || [];
+  const b = map.getBounds();
+  const inView = feats.filter(f => {
+    const c = f.geometry.coordinates;
+    return c[0] >= b.getWest() && c[0] <= b.getEast() && c[1] >= b.getSouth() && c[1] <= b.getNorth();
+  });
+  inView.sort((a, b2) => (Number(b2.properties.usage) || 0) - (Number(a.properties.usage) || 0));
+  return inView.slice(0, n);
+}
+
+// --- The runner: profile each station headlessly, with live progress --------
+async function startBatch(stationFeatures) {
+  const setup = document.getElementById("batch-setup");
+  if (setup) { setup.hidden = true; setup.innerHTML = ""; }
+  batch.running = true;
+  batch.cancel = false;
+  batch.results = [];
+  batch.errors = [];
+  // Remember where the user was so we can restore the view after the batch
+  // (profiling jumps the map around to load tiles for each catchment).
+  const savedView = { center: map.getCenter(), zoom: map.getZoom() };
+
+  const total = stationFeatures.length;
+  renderBatchProgress(0, total, null);
+
+  for (let i = 0; i < stationFeatures.length; i++) {
+    if (batch.cancel) break;
+    const f = stationFeatures[i];
+    const name = f.properties.name || f.properties.crs || "station";
+    renderBatchProgress(i, total, name);
+    try {
+      const snap = await profileStationHeadless(f);
+      if (snap) batch.results.push(snap);
+      else batch.errors.push({ name, crs: f.properties.crs || "", reason: "no catchment" });
+    } catch (e) {
+      batch.errors.push({ name, crs: f.properties.crs || "", reason: e.message || "error" });
+    }
+    // Gentle throttle so we don't hammer Valhalla / Supabase.
+    await sleep(220);
+  }
+
+  batch.running = false;
+  // Restore the user's original view.
+  try { map.jumpTo(savedView); } catch (_) {}
+  renderBatchProgress(total, total, null);
+  await sleep(300);
+  renderBatchResults(batch.results, batch.errors);
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Profile a single station WITHOUT opening the deep-dive UI. Builds the
+// catchment, ensures the LSOA tiles for that area are loaded (so the
+// area-weighted scoring has data), computes need/population, fetches supply,
+// and returns a snapshot.
+async function profileStationHeadless(feature) {
+  const props = feature.properties;
+  const coords = feature.geometry.coordinates;
+
+  // 1. Catchment (isochrone).
+  const catchment = await fetchIsochrone(coords[0], coords[1], "pedestrian", STATION_WALK_MINUTES);
+  if (!catchment) return null;
+
+  // 2. Make sure the LSOA vector tiles covering this catchment are loaded.
+  //    querySourceFeatures only sees loaded tiles, so jump the map to the
+  //    station and wait for idle before scoring. (Off-screen panel hides the
+  //    movement from the user's eye; the batch overlay is on top anyway.)
+  await ensureTilesAt(catchment, coords);
+
+  // 3. Score deprivation + population from the now-loaded tiles.
+  const { domains, parts } = areaWeightedScore(catchment);
+  const popRes = areaWeightedPopulation(catchment);
+
+  // 4. Supply summary from Supabase (best-effort).
+  let supply = null;
+  try {
+    const sb = getSupabase();
+    if (sb) {
+      const { data } = await sb.rpc("brownfield_summary_in_polygon", {
+        catchment: catchment.geometry, min_dwellings: null,
+        public_only: false, deliverable_only: false,
+      });
+      supply = (data && data[0]) || null;
+    }
+  } catch (_) { supply = null; }
+
+  // 5. Assemble a snapshot (same shape as buildStationSnapshot).
+  const need = combinedScoreFromDomains(domains, state.weights);
+  const usage = props.usage != null && props.usage !== "" ? Number(props.usage) : null;
+  const supplyHomes = supply ? (Number(supply.dwellings_max_total) || 0) : null;
+  const upliftPeople = supplyHomes != null ? Math.round(supplyHomes * PEOPLE_PER_HOME) : null;
+  const population = popRes.population;
+
+  return {
+    key: (props.crs && props.crs.toUpperCase()) || props.name,
+    name: props.name || "Station",
+    crs: props.crs || "",
+    operator: props.operator || "",
+    region: props.region || "",
+    year: state.stationsMeta?.latest_year || "",
+    walkMinutes: STATION_WALK_MINUTES,
+    coords,
+    need, usage,
+    usagePctile: props.usage_pctile != null && props.usage_pctile !== "" ? Number(props.usage_pctile) : null,
+    supplyHomes,
+    supplySites: supply ? (Number(supply.n_sites) || 0) : null,
+    supplyPublic: supply ? (Number(supply.n_public) || 0) : null,
+    population,
+    area_km2: popRes.area_km2,
+    parts,
+    interchanges: props.interchanges != null && props.interchanges !== "" ? Number(props.interchanges) : null,
+    season_share: props.season_share != null && props.season_share !== "" ? Number(props.season_share) : null,
+    usagePerResident: (usage != null && population) ? usage / population : null,
+    upliftPeople,
+    upliftPct: (upliftPeople != null && population) ? (upliftPeople / population) * 100 : null,
+    domains: domains ? { ...domains } : null,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+// Jump the map to cover the catchment and resolve once the lsoa source has
+// rendered tiles there, so querySourceFeatures returns the overlapping LSOAs.
+function ensureTilesAt(catchment, coords) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (done) return; done = true; map.off("idle", onIdle); resolve(); };
+    const onIdle = () => finish();
+    try {
+      let bbox = null;
+      if (window.turf) { try { bbox = turf.bbox(catchment); } catch (_) {} }
+      if (bbox) {
+        map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+          { padding: 40, duration: 0, maxZoom: 13 });
+      } else {
+        map.jumpTo({ center: coords, zoom: 12 });
+      }
+    } catch (_) {
+      try { map.jumpTo({ center: coords, zoom: 12 }); } catch (e) {}
+    }
+    map.on("idle", onIdle);
+    // Safety timeout so a stuck tile fetch can't hang the whole batch.
+    setTimeout(finish, 2500);
+  });
+}
+
+// --- Live progress overlay --------------------------------------------------
+function renderBatchProgress(done, total, currentName) {
+  const el = document.getElementById("batch-results");
+  if (!el) return;
+  el.hidden = false;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  if (!el.querySelector(".batch-prog")) {
+    el.innerHTML = `
+      <div class="batch-backdrop"></div>
+      <div class="batch-prog-wrap">
+        <div class="batch-prog">
+          <div class="bp-ring">
+            <svg viewBox="0 0 120 120">
+              <circle class="bp-track" cx="60" cy="60" r="52"></circle>
+              <circle class="bp-fill" cx="60" cy="60" r="52"></circle>
+            </svg>
+            <div class="bp-pct">0%</div>
+          </div>
+          <div class="bp-title">Profiling stations…</div>
+          <div class="bp-current"></div>
+          <div class="bp-count"></div>
+          <button class="bp-cancel" type="button">Cancel</button>
+        </div>
+      </div>`;
+    el.querySelector(".bp-cancel").addEventListener("click", () => { batch.cancel = true; });
+  }
+  const circ = 2 * Math.PI * 52;
+  const fill = el.querySelector(".bp-fill");
+  if (fill) { fill.style.strokeDasharray = `${circ}`; fill.style.strokeDashoffset = `${circ * (1 - pct / 100)}`; }
+  const pctEl = el.querySelector(".bp-pct"); if (pctEl) pctEl.textContent = `${pct}%`;
+  const cur = el.querySelector(".bp-current"); if (cur) cur.textContent = currentName ? `Now: ${currentName}` : (done >= total ? "Finalising…" : "");
+  const cnt = el.querySelector(".bp-count"); if (cnt) cnt.textContent = `${done} of ${total}`;
+}
+
+// --- The results dashboard (the showpiece) ----------------------------------
+function renderBatchResults(results, errors) {
+  const el = document.getElementById("batch-results");
+  if (!el) return;
+  el.hidden = false;
+
+  if (!results.length) {
+    el.innerHTML = `
+      <div class="batch-backdrop"></div>
+      <div class="batch-dash">
+        <div class="batch-dash-head"><h2>Batch analysis</h2><button class="batch-close" type="button">×</button></div>
+        <div class="batch-dash-body"><p class="hint">No stations could be profiled${errors.length ? ` (${errors.length} failed)` : ""}. Try a different selection.</p></div>
+      </div>`;
+    el.querySelector(".batch-close").addEventListener("click", () => { el.hidden = true; el.innerHTML = ""; });
+    return;
+  }
+
+  // Opportunity score (transparent, presentation-only composite for RANKING
+  // only — the three signals stay separate in the display). Normalises each
+  // signal 0-1 and weights need & supply highest (social-value lens), usage as
+  // a supporting factor. Under-used + deprived + supply rises to the top.
+  const scored = results.map(r => {
+    const needN = r.need == null ? 0 : clamp01(r.need / 100);
+    const supplyN = r.supplyHomes == null ? 0 : clamp01(r.supplyHomes / SUPPLY_REF_HOMES);
+    // Usage contributes INVERSELY for the "latent opportunity" reading: an
+    // under-used station scores higher (more headroom). Use percentile.
+    const usageHeadroom = r.usagePctile == null ? 0.5 : clamp01(1 - r.usagePctile / 100);
+    const opp = Math.round((0.45 * needN + 0.40 * supplyN + 0.15 * usageHeadroom) * 100);
+    return { ...r, opp, needN, supplyN, usageHeadroom };
+  }).sort((a, b) => b.opp - a.opp);
+
+  // Aggregate headline numbers.
+  const totalHomes = scored.reduce((s, r) => s + (r.supplyHomes || 0), 0);
+  const totalUplift = scored.reduce((s, r) => s + (r.upliftPeople || 0), 0);
+  const totalPublic = scored.reduce((s, r) => s + (r.supplyPublic || 0), 0);
+  const avgNeed = Math.round(scored.reduce((s, r) => s + (r.need || 0), 0) / scored.length);
+  const topPick = scored[0];
+
+  const leagueRows = scored.map((r, i) => {
+    const bars = triadBars(r);
+    return `
+      <button class="bl-row" data-key="${r.key}" style="--delay:${i * 45}ms">
+        <span class="bl-rank">${i + 1}</span>
+        <span class="bl-name">
+          <span class="bl-name-main">${r.name}</span>
+          <span class="bl-name-sub">${r.crs || ""}${r.region ? " · " + r.region : ""}</span>
+        </span>
+        <span class="bl-opp"><span class="bl-opp-n">${r.opp}</span><span class="bl-opp-l">opportunity</span></span>
+        <span class="bl-sig">
+          <span class="bl-sig-bar" title="Need ${r.need == null ? "n/a" : r.need.toFixed(0)}"><i style="width:0%;--w:${bars.needPct || 0}%;background:#d9772f"></i></span>
+          <span class="bl-sig-bar" title="Supply ${r.supplyHomes == null ? "n/a" : r.supplyHomes}"><i style="width:0%;--w:${bars.supplyPct || 0}%;background:#3f9b5e"></i></span>
+          <span class="bl-sig-bar" title="Usage pct ${r.usagePctile == null ? "n/a" : Math.round(r.usagePctile)}"><i style="width:0%;--w:${bars.usagePct || 0}%;background:#7a3ea8"></i></span>
+        </span>
+        <span class="bl-homes">${r.supplyHomes != null ? r.supplyHomes.toLocaleString() : "—"}<small>homes</small></span>
+      </button>`;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="batch-backdrop"></div>
+    <div class="batch-dash">
+      <div class="batch-dash-head">
+        <div>
+          <div class="batch-eyebrow">Pipeline analysis · ${scored.length} stations</div>
+          <h2>Opportunity assessment</h2>
+        </div>
+        <div class="batch-dash-actions">
+          <button class="batch-shortlist-all" id="batch-shortlist-all" type="button">★ Shortlist all</button>
+          <button class="batch-export" id="batch-export" type="button">Export report ↗</button>
+          <button class="batch-close" type="button">×</button>
+        </div>
+      </div>
+
+      <div class="batch-dash-body">
+        <div class="batch-kpis">
+          ${kpiCard("Top candidate", topPick.name, topPick.crs || topPick.region || "", "var(--accent)")}
+          ${kpiCard("Total est. homes", totalHomes.toLocaleString(), `${totalPublic.toLocaleString()} on public land`, "#3f9b5e")}
+          ${kpiCard("Modelled new residents", "+" + fmtCount(totalUplift), `at ${PEOPLE_PER_HOME}/home`, "#7a3ea8")}
+          ${kpiCard("Avg. catchment need", avgNeed + "/100", "deprivation", "#d9772f")}
+        </div>
+
+        <div class="batch-cols">
+          <div class="batch-col-main">
+            <div class="batch-section-h">Opportunity league <span>need + supply + usage headroom</span></div>
+            <div class="batch-league">${leagueRows}</div>
+          </div>
+          <div class="batch-col-side">
+            <div class="batch-section-h">Need vs supply <span>bubble = usage</span></div>
+            <div class="batch-quad" id="batch-quad">${batchQuadrantSVG(scored)}</div>
+            <p class="batch-quad-key">Top-right = deprived <em>and</em> land-rich — the priority quadrant. Bubble size = passenger usage.</p>
+          </div>
+        </div>
+
+        ${errors.length ? `<p class="batch-errs">${errors.length} station(s) couldn't be profiled: ${errors.slice(0, 6).map(e => e.name).join(", ")}${errors.length > 6 ? "…" : ""}.</p>` : ""}
+      </div>
+    </div>`;
+
+  // Wire close + actions.
+  const close = () => { el.hidden = true; el.innerHTML = ""; };
+  el.querySelector(".batch-close").addEventListener("click", close);
+  el.querySelector(".batch-backdrop").addEventListener("click", close);
+  el.querySelector("#batch-export").addEventListener("click", () => {
+    const html = buildReportHTML(scored);
+    const w = window.open("", "_blank");
+    if (!w) { alert("Pop-up blocked — allow pop-ups to open the report."); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  });
+  el.querySelector("#batch-shortlist-all").addEventListener("click", () => {
+    let added = 0;
+    for (const r of scored) { if (shortlist.add(r)) added++; }
+    const tray = document.getElementById("shortlist-tray"); if (tray) tray.dataset.dismissed = "";
+    updateShortlistTray();
+    el.querySelector("#batch-shortlist-all").textContent = `★ Added ${added}`;
+  });
+
+  // Row click → close dash, fly to station, open its full deep dive.
+  el.querySelectorAll(".bl-row").forEach(row => {
+    row.addEventListener("click", () => {
+      const r = scored.find(x => x.key === row.dataset.key);
+      if (!r) return;
+      close();
+      const feats = (state.stationsData && state.stationsData.features) || [];
+      const hit = feats.find(f => ((f.properties.crs || "").toUpperCase() === r.key) || f.properties.name === r.name);
+      if (hit) { state.selectedStation = hit.properties; profileStation(hit.properties, null); }
+    });
+  });
+  el.querySelectorAll(".bl-row .bl-quad-dot, .batch-quad [data-key]").forEach(d => {
+    d.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const k = d.getAttribute("data-key");
+      const r = scored.find(x => x.key === k); if (!r) return;
+      close();
+      const feats = (state.stationsData && state.stationsData.features) || [];
+      const hit = feats.find(f => ((f.properties.crs || "").toUpperCase() === k) || f.properties.name === r.name);
+      if (hit) { state.selectedStation = hit.properties; profileStation(hit.properties, null); }
+    });
+  });
+
+  // Trigger the bar-grow animation on next frame.
+  requestAnimationFrame(() => {
+    el.querySelectorAll(".bl-sig-bar i").forEach(i => { i.style.width = i.style.getPropertyValue("--w"); });
+  });
+}
+
+function kpiCard(label, big, sub, color) {
+  return `<div class="batch-kpi" style="--kpi:${color}">
+    <div class="batch-kpi-l">${label}</div>
+    <div class="batch-kpi-v">${big}</div>
+    <div class="batch-kpi-s">${sub}</div>
+  </div>`;
+}
+
+// A need-vs-supply scatter ("priority quadrant"), bubbles sized by usage.
+function batchQuadrantSVG(scored) {
+  const W = 300, H = 300, pad = 30;
+  // Scale supply to the batch's OWN max so the bubbles fill the vertical range
+  // (a fixed reference would clamp land-rich batches all to the top).
+  const maxHomes = Math.max(1, ...scored.map(r => r.supplyHomes || 0));
+  const x = (needVal) => pad + (clamp01((needVal || 0) / 100)) * (W - 2 * pad);
+  const y = (homes) => (H - pad) - clamp01((homes || 0) / maxHomes) * (H - 2 * pad);
+  const maxUsage = Math.max(1, ...scored.map(r => r.usage || 0));
+
+  // Place dots, then nudge labels vertically to reduce obvious collisions.
+  const placed = scored.map((r, i) => ({
+    r, i,
+    cx: x(r.need),
+    cy: y(r.supplyHomes),
+    rad: 5 + 9 * Math.sqrt((r.usage || 0) / maxUsage),
+    top: i < 3,
+  }));
+  const dots = placed.map(p => {
+    const { r, cx, cy, rad, top, i } = p;
+    // Label above by default; if another top dot is close above, drop below.
+    let ly = cy - rad - 4;
+    if (top) {
+      const clash = placed.some(q => q !== p && q.top &&
+        Math.abs(q.cx - cx) < 26 && Math.abs((q.cy - q.rad - 4) - ly) < 11);
+      if (clash) ly = cy + rad + 11;
+    }
+    return `<g class="bq-dot" data-key="${r.key}" style="--delay:${i * 40}ms">
+      <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}"
+        fill="${top ? "rgba(224,163,46,0.88)" : "rgba(122,62,168,0.6)"}"
+        stroke="#fff" stroke-width="1.2"></circle>
+      ${top ? `<text x="${cx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" class="bq-lbl">${r.crs || r.name.slice(0, 6)}</text>` : ""}
+    </g>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" class="bq-svg">
+    <defs><linearGradient id="bqg" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="rgba(255,255,255,0.02)"/>
+      <stop offset="1" stop-color="rgba(224,163,46,0.12)"/>
+    </linearGradient></defs>
+    <rect x="${pad}" y="${pad}" width="${W - 2 * pad}" height="${H - 2 * pad}" fill="url(#bqg)" stroke="var(--ink-line)"/>
+    <line x1="${W / 2}" y1="${pad}" x2="${W / 2}" y2="${H - pad}" stroke="var(--ink-line)" stroke-dasharray="3 3"/>
+    <line x1="${pad}" y1="${H / 2}" x2="${W - pad}" y2="${H / 2}" stroke="var(--ink-line)" stroke-dasharray="3 3"/>
+    <text x="${W - pad}" y="${H - 9}" text-anchor="end" class="bq-axis">more deprived →</text>
+    <text x="${pad - 8}" y="${pad - 12}" class="bq-axis">↑ more land</text>
+    ${dots}
+  </svg>`;
 }
 
 function stationSectionHTML(st) {
