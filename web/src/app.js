@@ -77,6 +77,26 @@ function SELECT_COLOR() {
   return state.theme === "light" ? "#1c2533" : "#ffffff";
 }
 
+// --- Tracked click popups --------------------------------------------------
+// Click popups (amenity, crime) persist until dismissed, so we track them and
+// can clear them all when a deep dive closes (otherwise they linger on the map).
+const _clickPopups = [];
+function openClickPopup(opts, lngLat, html) {
+  const p = new maplibregl.Popup(opts).setLngLat(lngLat).setHTML(html).addTo(map);
+  _clickPopups.push(p);
+  p.on("close", () => {
+    const i = _clickPopups.indexOf(p);
+    if (i >= 0) _clickPopups.splice(i, 1);
+  });
+  return p;
+}
+function closeAllPopups() {
+  while (_clickPopups.length) {
+    const p = _clickPopups.pop();
+    try { p.remove(); } catch (_) {}
+  }
+}
+
 // --- Rail overlay: modes, colours, labels ----------------------------------
 // Four transit modes, each its own colour so they're distinguishable on the
 // map and in the toggle list. Colours are picked to read over both ends of the
@@ -1277,11 +1297,15 @@ function wireInteractions() {
       stopPopup.remove();
     });
 
-    // Click a stop -> pin its details. Set a guard so the lsoa-fill handler,
-    // which also fires for this tap, doesn't immediately overwrite the stop
-    // panel with the zone panel. (stopPropagation alone doesn't prevent the
-    // other layer handler from running in the same MapLibre click cycle.)
+    // Click a stop -> pin its details. But if the station-usage layer is on and
+    // a station dot sits under the same click (heavy-rail stops coincide with
+    // station dots), let the station card win — it has usage + the profile
+    // button. We check by querying station-dot features at the click point.
     map.on("click", "rail-stop", (e) => {
+      if (state.hasStations && map.getLayer("station-dot")) {
+        const hits = map.queryRenderedFeatures(e.point, { layers: ["station-dot"] });
+        if (hits && hits.length) return;   // station handler will handle it
+      }
       window._stopClickGuard = true;
       inspectStop(e.features[0].properties, e.point);
       setDrawer(false);
@@ -1731,6 +1755,9 @@ async function enterDeepDive(p) {
 // isochrone, or a drawn plot's buffer). `meta` carries what the panel header
 // and score block should show.
 function runDeepDive(catchment, meta) {
+  // Clear anything left from a previous deep dive (amenity icons, route lines,
+  // popups, mask) before starting a fresh one.
+  clearDeepDiveMapArtifacts();
   deep.catchment = catchment;
   deep.domains = meta.domains || null;   // per-domain averages for live scoring
   deep.active = true;
@@ -1835,6 +1862,36 @@ function autoEnableAmenities() {
       toggleAmenityKind(a.kind, true);
     }
   }
+  syncAllAmenitiesCheckbox();
+}
+
+// Turn every amenity layer on or off at once from the master toggle. Ticks each
+// per-kind box to match and triggers its load/remove.
+function toggleAllAmenities(on) {
+  for (const a of AMENITY_KINDS) {
+    const cb = document.getElementById(`dd-${a.kind}`);
+    if (!cb) continue;
+    if (cb.checked !== on) {
+      cb.checked = on;
+      toggleAmenityKind(a.kind, on);
+    }
+  }
+}
+
+// Keep the master "All amenities" box reflecting the per-kind state: checked if
+// all on, unchecked if all off, indeterminate if mixed.
+function syncAllAmenitiesCheckbox() {
+  const allCb = document.getElementById("dd-all-amenities");
+  if (!allCb) return;
+  let on = 0, total = 0;
+  for (const a of AMENITY_KINDS) {
+    const cb = document.getElementById(`dd-${a.kind}`);
+    if (!cb) continue;
+    total++;
+    if (cb.checked) on++;
+  }
+  allCb.checked = total > 0 && on === total;
+  allCb.indeterminate = on > 0 && on < total;
 }
 
 // Origin point for "nearest" measurements: the plot point if set, else the
@@ -1970,16 +2027,23 @@ function drawAccessRoute(kind, geometry, color, labelTxt) {
     map.getSource(lineSrc).setData(lineData);
   } else {
     map.addSource(lineSrc, { type: "geojson", data: lineData });
-    // Casing (white underlay) then the coloured route, so it reads over any base.
+    // A thin dashed route: a subtle white casing for legibility over the base,
+    // then the coloured dashed line on top. Kept understated so the routes
+    // inform without dominating the map.
     map.addLayer({
       id: `${lineSrc}-case`, type: "line", source: lineSrc,
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": "#fff", "line-width": 6, "line-opacity": 0.9 },
+      layout: { "line-cap": "butt", "line-join": "round" },
+      paint: { "line-color": "#fff", "line-width": 3, "line-opacity": 0.55 },
     });
     map.addLayer({
       id: `${lineSrc}-line`, type: "line", source: lineSrc,
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": color, "line-width": 3.2 },
+      layout: { "line-cap": "butt", "line-join": "round" },
+      paint: {
+        "line-color": color,
+        "line-width": 1.6,
+        "line-opacity": 0.9,
+        "line-dasharray": [3, 2],
+      },
     });
     // Subtle label following the route line, coloured to match with a white halo.
     map.addLayer({
@@ -2064,12 +2128,7 @@ function setAccessRow(kind, label, value) {
 
 function exitDeepDive() {
   deep.active = false;
-  for (const a of AMENITY_KINDS) removeAmenityLayer(a.kind);
-  removeCrimeLayer();
-  removeAccessRoutes();
-  removeCatchmentOutline();
-  if (map.getLayer("plot-point-dot")) map.removeLayer("plot-point-dot");
-  if (map.getSource("plot-point-src")) map.removeSource("plot-point-src");
+  clearDeepDiveMapArtifacts();
   if (map.getLayer("lsoa-fill"))
     map.setPaintProperty("lsoa-fill", "fill-opacity", state.fillOpacity);
   setDeepPanelOpen(false);
@@ -2078,6 +2137,41 @@ function exitDeepDive() {
   if (deep.prevView) {
     map.easeTo({ center: deep.prevView.center, zoom: deep.prevView.zoom, duration: 500 });
   }
+}
+
+// Remove EVERY map artifact a deep dive can create — amenity layers/sources,
+// access-route layers/sources, crime, the catchment outline/mask, the plot
+// point, and any open popups. Done by ID prefix sweep (not just tracked sets)
+// so nothing can be orphaned if state ever drifts (e.g. starting a new deep
+// dive over an old one). Safe to call repeatedly.
+function clearDeepDiveMapArtifacts() {
+  const style = map.getStyle && map.getStyle();
+  const layerIds = (style && style.layers ? style.layers.map(l => l.id) : []);
+  const sourceIds = style && style.sources ? Object.keys(style.sources) : [];
+
+  // Layers first (a source can't be removed while a layer uses it).
+  for (const id of layerIds) {
+    if (id.startsWith("amenity-") || id.startsWith("access-route-")) {
+      if (map.getLayer(id)) map.removeLayer(id);
+    }
+  }
+  for (const id of sourceIds) {
+    if (id.startsWith("amenity-") || id.startsWith("access-route-")) {
+      if (map.getSource(id)) map.removeSource(id);
+    }
+  }
+
+  // Tracked sets too (covers any non-prefixed leftovers + resets state).
+  for (const a of AMENITY_KINDS) removeAmenityLayer(a.kind);
+  removeCrimeLayer();
+  removeAccessRoutes();
+  removeCatchmentOutline();
+  if (map.getLayer("plot-point-dot")) map.removeLayer("plot-point-dot");
+  if (map.getSource("plot-point-src")) map.removeSource("plot-point-src");
+
+  // Close any popups left open by amenity/stop/station clicks.
+  closeAllPopups();
+  deep.accessRouteKinds = new Set();
 }
 
 function setCatchmentOutline(feature) {
@@ -2264,10 +2358,8 @@ async function renderAmenityLayer(kind) {
   // Tap an amenity for its name + subtype.
   map.on("click", layerId, (e) => {
     const pr = e.features[0].properties;
-    new maplibregl.Popup({ offset: 8 })
-      .setLngLat(e.lngLat)
-      .setHTML(`<strong>${pr.name}</strong><br>${pr.sub || meta.label}`)
-      .addTo(map);
+    openClickPopup({ offset: 8 }, e.lngLat,
+      `<strong>${pr.name}</strong><br>${pr.sub || meta.label}`);
   });
 }
 
@@ -2635,14 +2727,11 @@ function renderCrimeLayer(crimes) {
 
     map.on("click", "crime-dot", (e) => {
       const pr = e.features[0].properties;
-      new maplibregl.Popup({ offset: 8 })
-        .setLngLat(e.lngLat)
-        .setHTML(
-          `<strong>${pr.count} crime${pr.count == 1 ? "" : "s"}</strong>` +
-          (pr.street ? `<br>${pr.street}` : "") +
-          (pr.breakdown ? `<br><span style="font-size:11px;text-transform:capitalize">${pr.breakdown}</span>` : "")
-        )
-        .addTo(map);
+      openClickPopup({ offset: 8 }, e.lngLat,
+        `<strong>${pr.count} crime${pr.count == 1 ? "" : "s"}</strong>` +
+        (pr.street ? `<br>${pr.street}` : "") +
+        (pr.breakdown ? `<br><span style="font-size:11px;text-transform:capitalize">${pr.breakdown}</span>` : "")
+      );
     });
   }
 }
@@ -2833,6 +2922,11 @@ function buildDeepDivePanel(meta) {
           <span class="dd-h">Amenities in this area</span><span class="dd-caret">▾</span>
         </button>
         <div class="dd-block-content">
+          <label class="dd-row dd-row-all">
+            <input type="checkbox" class="enable" id="dd-all-amenities" checked />
+            <span class="dd-label"><strong>All amenities</strong></span>
+            <span class="dd-stat" id="dd-stat-all"></span>
+          </label>
           <div class="dd-toggles">${toggles}</div>
           ${note}
           <p class="hint" style="margin-top:8px">Each shows the count in the catchment and, where population is known, the rate per 1,000 residents. Toggle a layer to map it.</p>
@@ -2880,8 +2974,13 @@ function buildDeepDivePanel(meta) {
   });
   for (const a of AMENITY_KINDS) {
     const cb = panel.querySelector(`#dd-${a.kind}`);
-    if (cb) cb.addEventListener("change", (e) => toggleAmenityKind(a.kind, e.target.checked));
+    if (cb) cb.addEventListener("change", (e) => {
+      toggleAmenityKind(a.kind, e.target.checked);
+      syncAllAmenitiesCheckbox();
+    });
   }
+  const allCb = panel.querySelector("#dd-all-amenities");
+  if (allCb) allCb.addEventListener("change", (e) => toggleAllAmenities(e.target.checked));
   const crimeBtn = panel.querySelector("#dd-crime-load");
   if (crimeBtn) crimeBtn.addEventListener("click", loadCrime);
   const crimeShow = panel.querySelector("#dd-crime-show");

@@ -93,6 +93,12 @@ html, body {
   font-family: var(--font-ui);
   color: var(--text);
   background: var(--ink);
+  /* The whole app is a fixed-viewport layout; nothing should scroll the page
+     itself. Off-screen panels (the deep-dive slides in from the right via
+     translateX(100%)) must not create a scrollable overflow area — otherwise
+     you can pan the page to a blank region beside the map. */
+  overflow: hidden;
+  width: 100%;
 }
 
 #app {
@@ -100,6 +106,9 @@ html, body {
   grid-template-columns: 360px 1fr;
   height: 100vh;
   width: 100vw;
+  max-width: 100%;
+  overflow: hidden;   /* clip the off-screen deep-dive panel */
+  position: relative;
 }
 
 /* ---- Side panel ---- */
@@ -669,6 +678,14 @@ footer {
 }
 
 .dd-label { flex: 1; }
+
+/* Master "All amenities" toggle: a small divider below it sets it apart from
+   the per-kind rows beneath. */
+.dd-row-all {
+  padding-bottom: 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--ink-line);
+}
 
 .dd-stat {
   font-family: var(--font-data);
