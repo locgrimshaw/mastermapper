@@ -1,0 +1,88 @@
+name: Build brownfield import CSV
+
+# Transforms the national brownfield-land download into a Supabase-ready import
+# CSV (supabase/brownfield_import.csv), entirely in CI — no local Python needed.
+#
+# ONE-TIME-PER-REFRESH USAGE:
+#   1. Download the brownfield-land dataset (CSV) from
+#      https://www.planning.data.gov.uk/dataset/brownfield-land
+#   2. Commit it to the repo at  data/raw/brownfield-land.csv
+#      (via the GitHub web UI: Add file > Upload files, into data/raw/).
+#   3. Actions tab > "Build brownfield import CSV" > Run workflow.
+#   4. When it finishes, get supabase/brownfield_import.csv either:
+#        - from the repo (the workflow commits it), or
+#        - from the run's "Artifacts" (downloadable zip), if you prefer not to
+#          pull the repo.
+#   5. Upload that CSV to Supabase per supabase/import_brownfield.sql.
+#
+# The source download (data/raw/brownfield-land.csv) can be large; it is a build
+# input only and is NOT published to the site (the Pages deploy ignores it).
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_result:
+        description: "Commit the generated brownfield_import.csv back to the repo (otherwise it's only a downloadable artifact)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The transform uses only the Python standard library, so no pip install
+      # is required — but install requirements anyway in case that changes.
+      - name: Install dependencies (if any)
+        run: pip install -r pipeline/requirements.txt || true
+
+      - name: Check the source download is present
+        run: |
+          if [ ! -f data/raw/brownfield-land.csv ] \
+             && [ ! -f data/raw/brownfield-land.json ] \
+             && [ ! -f data/raw/brownfield-land.geojson ]; then
+            echo "::error::No brownfield source found. Commit the download to "
+            echo "::error::data/raw/brownfield-land.csv (or .json/.geojson) first."
+            echo "Download it from https://www.planning.data.gov.uk/dataset/brownfield-land"
+            exit 1
+          fi
+          echo "Source file found:"
+          ls -lh data/raw/brownfield-land.* || true
+
+      - name: Build the Supabase import CSV
+        run: |
+          echo "Transforming brownfield download -> supabase/brownfield_import.csv"
+          python pipeline/build_brownfield_csv.py
+
+      - name: Upload import CSV as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: brownfield_import_csv
+          path: supabase/brownfield_import.csv
+          if-no-files-found: error
+
+      - name: Commit the import CSV back to the repo
+        if: ${{ inputs.commit_result }}
+        run: |
+          if [ ! -f supabase/brownfield_import.csv ]; then
+            echo "No output CSV produced — nothing to commit."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f supabase/brownfield_import.csv
+          if git diff --staged --quiet; then
+            echo "No change to brownfield_import.csv."
+          else
+            git commit -m "Build brownfield import CSV [skip ci]"
+            git push
+            echo "Committed supabase/brownfield_import.csv"
+          fi
