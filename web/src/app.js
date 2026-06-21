@@ -1855,6 +1855,144 @@ const deep = {
   brownfieldSummary: null,  // { n_sites, n_public, dwellings_*_total, hectares_total }
 };
 
+// ---- Workstream 3: shortlist, triad, synthesis, comparison, export --------
+// Session-only shortlist of station profiles the user has pinned. Each entry is
+// a self-contained SNAPSHOT (the numbers at pin time), so comparison/export
+// don't depend on re-querying. Keyed by CRS (falls back to name).
+const shortlist = {
+  items: [],            // array of snapshot objects (see buildStationSnapshot)
+  has(key) { return this.items.some(i => i.key === key); },
+  add(snap) { if (!this.has(snap.key)) { this.items.push(snap); return true; } return false; },
+  remove(key) { this.items = this.items.filter(i => i.key !== key); },
+  get(key) { return this.items.find(i => i.key === key) || null; },
+};
+
+// Occupancy assumption for modelled population uplift: homes × people/home.
+// 2.3 is close to the England average household size; exposed so it's tunable.
+const PEOPLE_PER_HOME = 2.3;
+
+// Self-contained print stylesheet for the export report. Deliberately a clean,
+// editorial document look — serif headings, generous whitespace, one station
+// per page. No external fonts so it renders identically offline / in PDF.
+const REPORT_CSS = `
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f4f3ef; color: #1a2230;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .report { max-width: 880px; margin: 0 auto; }
+  h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; font-weight: 600; color: #14304a; }
+  .cover { background: linear-gradient(160deg,#14304a,#1f4763); color: #fff; padding: 64px 56px 48px; }
+  .cover-mark { font-size: 13px; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.7; }
+  .cover h1 { color: #fff; font-size: 40px; margin: 14px 0 6px; line-height: 1.1; }
+  .cover-sub { font-size: 16px; opacity: 0.9; margin: 0 0 4px; }
+  .cover-date { font-size: 13px; opacity: 0.7; margin: 0 0 24px; }
+  .cover-legend { display: flex; flex-direction: column; gap: 6px; font-size: 13px; margin-bottom: 22px; }
+  .cover-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: middle; }
+  .cover-note { font-size: 12.5px; line-height: 1.55; opacity: 0.85; max-width: 640px; }
+  .summary { padding: 40px 56px; }
+  .summary h2 { font-size: 22px; margin: 0 0 16px; }
+  .r-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .r-table th { text-align: left; border-bottom: 2px solid #14304a; padding: 8px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #5d6b80; }
+  .r-table td { padding: 10px; border-bottom: 1px solid #e2e0d8; vertical-align: top; }
+  .r-rank { font-family: Georgia, serif; font-size: 18px; color: #b5613a; width: 28px; }
+  .r-name strong { display: block; }
+  .r-name span { font-size: 11px; color: #5d6b80; }
+  .r-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .r-num small { display: block; font-size: 10px; color: #8a93a3; }
+  .r-foot { font-size: 11px; color: #8a93a3; margin-top: 12px; }
+  .profile { padding: 48px 56px; border-top: 1px solid #e2e0d8; page-break-before: always; break-before: page; }
+  .p-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 22px; }
+  .p-rank { font-family: Georgia, serif; font-size: 30px; color: #fff; background: #b5613a; width: 48px; height: 48px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+  .p-head h2 { font-size: 26px; margin: 0; }
+  .p-meta { font-size: 12.5px; color: #5d6b80; margin: 4px 0 0; }
+  .p-triad { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; margin-bottom: 22px; }
+  .p-triad-cell { background: #fff; border: 1px solid #e2e0d8; border-radius: 10px; padding: 14px 16px; }
+  .p-triad-label { font-size: 10px; letter-spacing: 0.1em; color: #8a93a3; }
+  .p-triad-val { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; margin: 2px 0; }
+  .p-triad-sub { font-size: 11px; color: #5d6b80; margin-bottom: 8px; }
+  .p-triad-bar { height: 6px; background: #eceae3; border-radius: 3px; overflow: hidden; }
+  .p-triad-bar i { display: block; height: 100%; }
+  .p-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin-bottom: 22px; }
+  .p-stat { background: #faf9f6; border: 1px solid #e9e7df; border-radius: 8px; padding: 12px; text-align: center; }
+  .p-stat-v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; color: #14304a; }
+  .p-stat-l { font-size: 10.5px; color: #5d6b80; margin-top: 3px; }
+  .p-domains h3 { font-size: 14px; margin: 0 0 10px; }
+  .p-domain { display: grid; grid-template-columns: 140px 1fr 32px; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; }
+  .p-domain-l { color: #3a4658; }
+  .p-domain-bar { height: 7px; background: #eceae3; border-radius: 4px; overflow: hidden; }
+  .p-domain-bar i { display: block; height: 100%; background: #d9772f; }
+  .p-domain-v { text-align: right; font-variant-numeric: tabular-nums; color: #5d6b80; }
+  .p-synth { font-size: 13px; line-height: 1.6; color: #2a3645; background: #f0ede5; border-left: 3px solid #b5613a; padding: 12px 16px; margin-top: 22px; border-radius: 0 6px 6px 0; }
+  .report-footer { padding: 28px 56px 56px; font-size: 10.5px; color: #8a93a3; line-height: 1.5; }
+  @media print { .cover { padding-top: 48px; } .profile { padding-top: 36px; } body { background: #fff; } }
+`;
+
+
+// Capture everything the triad / synthesis / comparison / export need from the
+// CURRENTLY-OPEN station deep dive, as a flat snapshot. Pulls from `deep`
+// (live), so call it while a station profile is open.
+function buildStationSnapshot() {
+  const st = deep.station;
+  if (!st) return null;
+  const key = (st.crs && st.crs.toUpperCase()) || st.name || "station";
+
+  // NEED: live combined deprivation score (0-100, higher = more deprived).
+  const need = combinedScoreFromDomains(deep.domains, state.weights);
+
+  // SUPPLY: brownfield capacity in the catchment (max-dwellings total).
+  const bf = deep.brownfieldSummary;
+  const supplyHomes = bf ? (Number(bf.dwellings_max_total) || 0) : null;
+  const supplySites = bf ? (Number(bf.n_sites) || 0) : null;
+  const supplyPublic = bf ? (Number(bf.n_public) || 0) : null;
+
+  // USAGE: annual entries/exits + its national percentile.
+  const usage = st.usage != null ? Number(st.usage) : null;
+  const usagePctile = st.usage_pctile != null ? Number(st.usage_pctile) : null;
+
+  // Modelled population uplift from the developable supply.
+  const upliftPeople = supplyHomes != null ? Math.round(supplyHomes * PEOPLE_PER_HOME) : null;
+
+  return {
+    key,
+    name: st.name || "Station",
+    crs: st.crs || "",
+    operator: st.operator || "",
+    region: st.region || "",
+    year: st.year || "",
+    walkMinutes: STATION_WALK_MINUTES,
+    // Triad raw values
+    need, usage, usagePctile,
+    supplyHomes, supplySites, supplyPublic,
+    // Context
+    population: deep.population,
+    area_km2: deep.area_km2,
+    interchanges: st.interchanges ?? null,
+    season_share: st.season_share ?? null,
+    usagePerResident: (usage != null && deep.population) ? usage / deep.population : null,
+    upliftPeople,
+    upliftPct: (upliftPeople != null && deep.population) ? (upliftPeople / deep.population) * 100 : null,
+    domains: deep.domains ? { ...deep.domains } : null,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+// Normalise each triad signal to 0-100 so the three bars are visually
+// comparable. NEED is already 0-100. USAGE uses its national percentile.
+// SUPPLY is scaled against a reference capacity (so a 0-500+ home site reads
+// near the top); this is presentation-only and clearly a relative indicator.
+const SUPPLY_REF_HOMES = 500;
+function triadBars(snap) {
+  const needPct = snap.need == null ? null : clamp01(snap.need / 100) * 100;
+  const usagePct = snap.usagePctile == null
+    ? (snap.usage == null ? null : null)
+    : snap.usagePctile;
+  const supplyPct = snap.supplyHomes == null ? null
+    : clamp01(snap.supplyHomes / SUPPLY_REF_HOMES) * 100;
+  return { needPct, usagePct, supplyPct };
+}
+function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+
 async function enterDeepDive(p) {
   // LSOA deep dive: the catchment IS the clicked zone's polygon.
   const code = p.lsoa_code;
@@ -1935,6 +2073,34 @@ function runDeepDive(catchment, meta) {
   // catchment, and compute nearest-distance stats. Done after the panel exists.
   autoEnableAmenities();
   computeNearestDistances();
+
+  // For a STATION profile, fetch the brownfield SUPPLY summary automatically
+  // (lightweight — counts only, not all sites) so the need/supply/usage triad
+  // and headline synthesis can populate without the user toggling the layer.
+  if (meta.station) {
+    autoLoadStationSupply();
+  }
+}
+
+// Fetch the brownfield summary for the current catchment (counts only) and
+// render the station synthesis (headline + triad). Used for station profiles.
+async function autoLoadStationSupply() {
+  try {
+    const sb = getSupabase();
+    if (sb) {
+      const f = deep.brownfieldFilters;
+      const { data } = await sb.rpc("brownfield_summary_in_polygon", {
+        catchment: deep.catchment.geometry,
+        min_dwellings: f.minDwellings > 0 ? f.minDwellings : null,
+        public_only: !!f.publicOnly,
+        deliverable_only: !!f.deliverableOnly,
+      });
+      deep.brownfieldSummary = (data && data[0]) || deep.brownfieldSummary;
+    }
+  } catch (e) {
+    console.warn("[synthesis] supply summary failed:", e.message);
+  }
+  renderStationSynthesis();
 }
 
 // Compute the catchment's area, estimated resident population and density, store
@@ -3227,6 +3393,327 @@ function renderCrimeStats(crimes, body, monthCount) {
 // need/supply/usage triad (need = deprivation block; supply = brownfield, added
 // in Workstream 2). Deliberately kept as its own visible signal rather than
 // folded into a single score.
+// Render the station synthesis block: a one-line headline that ties the three
+// signals together, the need/supply/usage triad, a modelled population-uplift
+// line, and pin/compare controls. Called once the supply summary has loaded.
+function renderStationSynthesis() {
+  const el = document.getElementById("dd-synthesis");
+  if (!el || !deep.station) return;
+  const snap = buildStationSnapshot();
+  if (!snap) { el.innerHTML = ""; return; }
+
+  el.innerHTML = `
+    <div class="dd-eyebrow" style="margin-bottom:6px">Opportunity synthesis</div>
+    <p class="syn-headline">${synthesisSentence(snap)}</p>
+    ${triadHTML(snap)}
+    ${snap.upliftPeople != null ? `
+      <p class="syn-uplift">Developing the catchment's brownfield capacity could add
+        ~<strong>${snap.upliftPeople.toLocaleString()}</strong> residents
+        ${snap.upliftPct != null ? `(<strong>${snap.upliftPct.toFixed(0)}%</strong> on current population)` : ""}
+        at ${PEOPLE_PER_HOME} people/home.</p>` : ""}
+    <div class="syn-actions">
+      <button class="syn-btn" id="syn-pin-btn" type="button"></button>
+      <button class="syn-btn syn-btn-ghost" id="syn-compare-btn" type="button">Shortlist & compare →</button>
+    </div>`;
+
+  const pinBtn = el.querySelector("#syn-pin-btn");
+  const updatePinBtn = () => {
+    const pinned = shortlist.has(snap.key);
+    pinBtn.textContent = pinned ? "★ Shortlisted" : "☆ Add to shortlist";
+    pinBtn.classList.toggle("syn-btn-active", pinned);
+  };
+  updatePinBtn();
+  pinBtn.addEventListener("click", () => {
+    if (shortlist.has(snap.key)) shortlist.remove(snap.key);
+    else shortlist.add(buildStationSnapshot());   // fresh snapshot at pin time
+    updatePinBtn();
+    updateShortlistTray();
+  });
+  el.querySelector("#syn-compare-btn").addEventListener("click", openShortlistPanel);
+}
+
+// One-sentence plain-English synthesis of the three signals.
+function synthesisSentence(snap) {
+  const needTxt = snap.need == null ? "an area of unknown deprivation"
+    : `an area that is ${depBand(snap.need).replace(/^among /, "among ")}`;
+  const usageTxt = snap.usagePctile == null ? ""
+    : snap.usagePctile >= 66 ? "a well-used station"
+    : snap.usagePctile <= 33 ? "a relatively under-used station"
+    : "a moderately-used station";
+  const supplyTxt = (snap.supplySites && snap.supplySites > 0)
+    ? `${snap.supplySites} brownfield site${snap.supplySites === 1 ? "" : "s"} (~${(snap.supplyHomes || 0).toLocaleString()} homes${snap.supplyPublic ? `, ${snap.supplyPublic} publicly owned` : ""})`
+    : "no recorded brownfield sites";
+  let s = `${snap.name} is ${usageTxt ? usageTxt + " in " : ""}${needTxt}.`;
+  s += ` Its ${snap.walkMinutes}-min catchment contains ${supplyTxt}.`;
+  if (snap.usagePctile != null && snap.usagePctile <= 33 && snap.need != null && snap.need >= 60 && snap.supplyHomes) {
+    s += " An under-used station in a deprived area with developable land — a strong regeneration candidate.";
+  }
+  return s;
+}
+
+// The need / supply / usage triad — three cells, each a headline value + a
+// normalised 0-100 bar so they read comparably. Kept as three SEPARATE signals
+// (not blended). Reused by the panel and the comparison view.
+function triadHTML(snap, compact) {
+  const bars = triadBars(snap);
+  const cell = (label, value, sub, pct, color) => `
+    <div class="triad-cell">
+      <div class="triad-label">${label}</div>
+      <div class="triad-value" style="color:${color}">${value}</div>
+      <div class="triad-sub">${sub || ""}</div>
+      <div class="triad-bar"><span style="width:${pct == null ? 0 : pct.toFixed(0)}%;background:${color}"></span></div>
+    </div>`;
+  const needVal = snap.need == null ? "—" : snap.need.toFixed(0);
+  const usageVal = snap.usage == null ? "—" : fmtCount(snap.usage);
+  const supplyVal = snap.supplyHomes == null ? "—" : (snap.supplyHomes || 0).toLocaleString();
+  return `
+    <div class="triad${compact ? " triad-compact" : ""}">
+      ${cell("NEED", needVal, "deprivation /100", bars.needPct, "#d9772f")}
+      ${cell("SUPPLY", supplyVal, "est. homes", bars.supplyPct, "#3f9b5e")}
+      ${cell("USAGE", usageVal, snap.usagePctile != null ? `${Math.round(snap.usagePctile)}ᵗʰ pctile` : "entries/exits", bars.usagePct, "#7a3ea8")}
+    </div>`;
+}
+
+// ---- Shortlist tray + comparison panel ------------------------------------
+
+// Keep the bottom-left tray in sync with the shortlist. Hidden when empty.
+function updateShortlistTray() {
+  const tray = document.getElementById("shortlist-tray");
+  if (!tray) return;
+  const n = shortlist.items.length;
+  if (n === 0) { tray.hidden = true; tray.innerHTML = ""; return; }
+  tray.hidden = false;
+  tray.innerHTML = `
+    <div class="tray-label">Shortlist <span class="tray-count">${n}</span></div>
+    <div class="tray-chips">
+      ${shortlist.items.map(i => `<span class="tray-chip" title="${i.name}">${i.crs || i.name.slice(0, 8)}</span>`).join("")}
+    </div>
+    <button class="tray-open" id="tray-open-btn" type="button">Compare & export →</button>`;
+  tray.querySelector("#tray-open-btn").addEventListener("click", openShortlistPanel);
+}
+
+// Open the comparison modal showing all shortlisted stations side by side.
+function openShortlistPanel() {
+  const modal = document.getElementById("compare-modal");
+  if (!modal) return;
+  if (!shortlist.items.length) {
+    modal.hidden = false;
+    modal.innerHTML = `
+      <div class="compare-backdrop"></div>
+      <div class="compare-sheet">
+        <div class="compare-head"><h2>Shortlist</h2><button class="compare-close" type="button">×</button></div>
+        <div class="compare-body"><p class="hint">No stations shortlisted yet. Profile a station and use "Add to shortlist".</p></div>
+      </div>`;
+    wireCompareModal(modal);
+    return;
+  }
+
+  const items = shortlist.items;
+  // Rank helpers: highlight the leader in each signal.
+  const maxNeed = Math.max(...items.map(i => i.need ?? -1));
+  const maxSupply = Math.max(...items.map(i => i.supplyHomes ?? -1));
+  const maxUsage = Math.max(...items.map(i => i.usage ?? -1));
+
+  const rows = items.map(i => {
+    const bars = triadBars(i);
+    const lead = (v, m) => (v != null && v === m && m >= 0) ? " compare-lead" : "";
+    return `
+      <tr>
+        <td class="cmp-name">
+          <div class="cmp-name-main">${i.name}</div>
+          <div class="cmp-name-sub">${i.crs || ""}${i.region ? " · " + i.region : ""}</div>
+          <button class="cmp-remove" data-key="${i.key}" title="Remove">Remove</button>
+        </td>
+        <td class="cmp-num${lead(i.need, maxNeed)}">
+          ${i.need == null ? "—" : i.need.toFixed(0)}
+          <div class="cmp-bar"><span style="width:${bars.needPct || 0}%;background:#d9772f"></span></div>
+        </td>
+        <td class="cmp-num${lead(i.supplyHomes, maxSupply)}">
+          ${i.supplyHomes == null ? "—" : i.supplyHomes.toLocaleString()}
+          <div class="cmp-sub">${i.supplySites || 0} sites · ${i.supplyPublic || 0} public</div>
+          <div class="cmp-bar"><span style="width:${bars.supplyPct || 0}%;background:#3f9b5e"></span></div>
+        </td>
+        <td class="cmp-num${lead(i.usage, maxUsage)}">
+          ${i.usage == null ? "—" : fmtCount(i.usage)}
+          <div class="cmp-sub">${i.usagePctile != null ? Math.round(i.usagePctile) + "th pctile" : ""}</div>
+          <div class="cmp-bar"><span style="width:${bars.usagePct || 0}%;background:#7a3ea8"></span></div>
+        </td>
+        <td class="cmp-num">${i.population != null ? fmtCount(i.population) : "—"}</td>
+        <td class="cmp-num">${i.upliftPeople != null ? "+" + fmtCount(i.upliftPeople) : "—"}</td>
+      </tr>`;
+  }).join("");
+
+  modal.hidden = false;
+  modal.innerHTML = `
+    <div class="compare-backdrop"></div>
+    <div class="compare-sheet">
+      <div class="compare-head">
+        <div>
+          <h2>Station comparison</h2>
+          <p class="compare-sub">${items.length} shortlisted · need, supply and usage kept as separate signals</p>
+        </div>
+        <div class="compare-head-actions">
+          <button class="compare-export" id="compare-export-btn" type="button">Export report ↗</button>
+          <button class="compare-close" type="button">×</button>
+        </div>
+      </div>
+      <div class="compare-body">
+        <table class="compare-table">
+          <thead><tr>
+            <th>Station</th><th>Need<br><span>/100</span></th>
+            <th>Supply<br><span>est. homes</span></th><th>Usage<br><span>entries/exits</span></th>
+            <th>Population</th><th>Modelled<br><span>uplift</span></th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p class="hint" style="margin-top:10px">Bars are normalised 0-100 for visual comparison (need = score; usage = national percentile; supply scaled to ${SUPPLY_REF_HOMES} homes). Leader in each signal is highlighted. Modelled uplift = est. homes x ${PEOPLE_PER_HOME} people/home.</p>
+      </div>
+    </div>`;
+  wireCompareModal(modal);
+}
+
+function wireCompareModal(modal) {
+  const close = () => { modal.hidden = true; modal.innerHTML = ""; };
+  modal.querySelector(".compare-close")?.addEventListener("click", close);
+  modal.querySelector(".compare-backdrop")?.addEventListener("click", close);
+  modal.querySelectorAll(".cmp-remove").forEach(btn => {
+    btn.addEventListener("click", () => {
+      shortlist.remove(btn.dataset.key);
+      updateShortlistTray();
+      openShortlistPanel();   // re-render
+    });
+  });
+  modal.querySelector("#compare-export-btn")?.addEventListener("click", exportShortlistReport);
+}
+
+// ---- Export: a polished, standalone, printable report ---------------------
+// Builds a self-contained HTML document (inline CSS, no external deps) for the
+// shortlisted stations and opens it in a new tab. The user prints it to PDF.
+// Designed to be board-ready: cover, methodology note, comparison table, and a
+// full one-page profile per station with the triad and domain breakdown.
+function exportShortlistReport() {
+  if (!shortlist.items.length) { alert("Shortlist is empty — nothing to export."); return; }
+  const html = buildReportHTML(shortlist.items);
+  const w = window.open("", "_blank");
+  if (!w) { alert("Pop-up blocked — allow pop-ups to open the report."); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}
+
+function buildReportHTML(items) {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // Rank by a transparent "opportunity" ordering: most deprived first among
+  // those with developable supply, so the report leads with the strongest
+  // social-value candidates. (Display only — the signals stay separate.)
+  const ranked = [...items].sort((a, b) => {
+    const sa = (a.supplyHomes || 0) > 0 ? 1 : 0, sb = (b.supplyHomes || 0) > 0 ? 1 : 0;
+    if (sa !== sb) return sb - sa;
+    return (b.need || 0) - (a.need || 0);
+  });
+
+  const summaryRows = ranked.map((i, idx) => `
+    <tr>
+      <td class="r-rank">${idx + 1}</td>
+      <td class="r-name"><strong>${esc(i.name)}</strong><span>${esc(i.crs)}${i.region ? " · " + esc(i.region) : ""}</span></td>
+      <td class="r-num">${i.need == null ? "—" : i.need.toFixed(0)}</td>
+      <td class="r-num">${i.supplyHomes == null ? "—" : i.supplyHomes.toLocaleString()}<small>${i.supplySites || 0} sites</small></td>
+      <td class="r-num">${i.usage == null ? "—" : fmtCount(i.usage)}<small>${i.usagePctile != null ? Math.round(i.usagePctile) + "th pctile" : ""}</small></td>
+      <td class="r-num">${i.population != null ? fmtCount(i.population) : "—"}</td>
+      <td class="r-num">${i.upliftPeople != null ? "+" + fmtCount(i.upliftPeople) : "—"}</td>
+    </tr>`).join("");
+
+  const profiles = ranked.map((i, idx) => reportProfilePage(i, idx + 1, esc)).join("");
+
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Station Opportunity Report — ${dateStr}</title>
+<style>${REPORT_CSS}</style></head><body>
+<main class="report">
+  <header class="cover">
+    <div class="cover-mark">MasterMapper</div>
+    <h1>Station Opportunity Report</h1>
+    <p class="cover-sub">Social-value-led site identification · ${ranked.length} shortlisted station${ranked.length === 1 ? "" : "s"}</p>
+    <p class="cover-date">Generated ${dateStr}</p>
+    <div class="cover-legend">
+      <span><i style="background:#d9772f"></i> Need — catchment deprivation (national percentile)</span>
+      <span><i style="background:#3f9b5e"></i> Supply — brownfield dwelling capacity</span>
+      <span><i style="background:#7a3ea8"></i> Usage — annual passenger entries/exits</span>
+    </div>
+    <p class="cover-note">These three signals are reported <strong>separately</strong>, not blended into a single score. Each station's catchment is a ${ranked[0]?.walkMinutes || 15}-minute walk isochrone. Deprivation is area-weighted across overlapping LSOAs; brownfield capacity is the Land Register estimate; population is an area-weighted estimate. Figures are indicative and intended to support, not replace, professional appraisal.</p>
+  </header>
+
+  <section class="summary">
+    <h2>Comparison summary</h2>
+    <table class="r-table">
+      <thead><tr><th>#</th><th>Station</th><th>Need</th><th>Supply</th><th>Usage</th><th>Population</th><th>Uplift</th></tr></thead>
+      <tbody>${summaryRows}</tbody>
+    </table>
+    <p class="r-foot">Ranked by developable supply then deprivation. "Uplift" models brownfield capacity × ${PEOPLE_PER_HOME} people/home.</p>
+  </section>
+
+  ${profiles}
+
+  <footer class="report-footer">
+    <p>MasterMapper · Generated ${dateStr} · Data: ONS / MHCLG IoD2025 (OGL), ORR station usage (OGL), MHCLG Brownfield Land Register (OGL), OpenStreetMap (ODbL). Indicative figures for planning support.</p>
+  </footer>
+</main>
+<script>window.addEventListener("load",function(){setTimeout(function(){try{window.print();}catch(e){}},400);});</script>
+</body></html>`;
+}
+
+// One full profile "page" per station for the report.
+function reportProfilePage(i, rank, esc) {
+  const bars = triadBars(i);
+  const domainRows = i.domains ? DOMAINS.map(d => {
+    const v = i.domains[d.key];
+    if (v == null) return "";
+    return `<div class="p-domain"><span class="p-domain-l">${esc(DOMAIN_LABELS[d.key])}</span>
+      <span class="p-domain-bar"><i style="width:${Math.max(0, Math.min(100, v))}%"></i></span>
+      <span class="p-domain-v">${Number(v).toFixed(0)}</span></div>`;
+  }).join("") : "";
+
+  const triadCell = (label, val, sub, pct, color) => `
+    <div class="p-triad-cell">
+      <div class="p-triad-label">${label}</div>
+      <div class="p-triad-val" style="color:${color}">${val}</div>
+      <div class="p-triad-sub">${sub}</div>
+      <div class="p-triad-bar"><i style="width:${pct == null ? 0 : pct.toFixed(0)}%;background:${color}"></i></div>
+    </div>`;
+
+  return `
+  <section class="profile">
+    <div class="p-head">
+      <div class="p-rank">${rank}</div>
+      <div>
+        <h2>${esc(i.name)}</h2>
+        <p class="p-meta">${esc(i.crs)}${i.operator ? " · " + esc(i.operator) : ""}${i.region ? " · " + esc(i.region) : ""} · ${i.walkMinutes}-min walk catchment</p>
+      </div>
+    </div>
+
+    <div class="p-triad">
+      ${triadCell("NEED", i.need == null ? "—" : i.need.toFixed(0), "deprivation /100", bars.needPct, "#d9772f")}
+      ${triadCell("SUPPLY", i.supplyHomes == null ? "—" : i.supplyHomes.toLocaleString(), (i.supplySites || 0) + " sites · " + (i.supplyPublic || 0) + " public", bars.supplyPct, "#3f9b5e")}
+      ${triadCell("USAGE", i.usage == null ? "—" : fmtCount(i.usage), i.usagePctile != null ? Math.round(i.usagePctile) + "th national pctile" : "entries/exits", bars.usagePct, "#7a3ea8")}
+    </div>
+
+    <div class="p-grid">
+      <div class="p-stat"><div class="p-stat-v">${i.population != null ? fmtCount(i.population) : "—"}</div><div class="p-stat-l">Catchment population</div></div>
+      <div class="p-stat"><div class="p-stat-v">${i.area_km2 != null ? i.area_km2.toFixed(2) + " km²" : "—"}</div><div class="p-stat-l">Catchment area</div></div>
+      <div class="p-stat"><div class="p-stat-v">${i.usagePerResident != null ? i.usagePerResident.toFixed(0) : "—"}</div><div class="p-stat-l">Usage per resident</div></div>
+      <div class="p-stat"><div class="p-stat-v">${i.season_share != null ? Math.round(i.season_share * 100) + "%" : "—"}</div><div class="p-stat-l">Season-ticket share</div></div>
+      <div class="p-stat"><div class="p-stat-v">${i.interchanges != null ? fmtCount(i.interchanges) : "—"}</div><div class="p-stat-l">Interchanges</div></div>
+      <div class="p-stat"><div class="p-stat-v">${i.upliftPeople != null ? "+" + fmtCount(i.upliftPeople) : "—"}</div><div class="p-stat-l">Modelled uplift${i.upliftPct != null ? " (" + i.upliftPct.toFixed(0) + "%)" : ""}</div></div>
+    </div>
+
+    ${domainRows ? `<div class="p-domains"><h3>Deprivation by domain</h3>${domainRows}</div>` : ""}
+
+    <p class="p-synth">${esc(synthesisSentence(i))}</p>
+  </section>`;
+}
+
 function stationSectionHTML(st) {
   const usage = (st.usage != null) ? Number(st.usage) : null;
   const trend = st.trend || [];
@@ -3314,6 +3801,7 @@ function buildDeepDivePanel(meta) {
     </div>
 
     <div class="dd-body">
+      ${meta.station ? `<section class="dd-synthesis" id="dd-synthesis"></section>` : ""}
       ${meta.station ? stationSectionHTML(meta.station) : ""}
 
       <section class="dd-block" data-section="score">
@@ -3909,6 +4397,7 @@ map.on("load", async () => {
     buildLayerToggle();
     buildRailToggle();
     buildStationControls();
+    updateShortlistTray();
     wireInteractions();
     // Cold-load race fix: on a fresh load (empty cache) the PMTiles header +
     // first tiles can still be in flight when the layers are added, so the map

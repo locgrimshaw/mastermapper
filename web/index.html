@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws2-fixes" />
+  <link rel="stylesheet" href="src/styles.css?v=ws3-synthesis" />
 </head>
 <body>
   <div id="app">
@@ -107,6 +107,10 @@
          floating detail panel so it doesn't obscure the map. -->
     <aside id="deepdive-panel" class="deepdive-panel" aria-hidden="true"></aside>
     <div id="legend"></div>
+
+    <!-- Workstream 3: shortlist tray (bottom-left) + comparison modal -->
+    <div id="shortlist-tray" class="shortlist-tray" hidden></div>
+    <div id="compare-modal" class="compare-modal" hidden></div>
   </div>
 
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
@@ -117,6 +121,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws2-fixes"></script>
+  <script type="module" src="src/app.js?v=ws3-synthesis"></script>
 </body>
 </html>
