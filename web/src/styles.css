@@ -687,6 +687,28 @@ footer {
   border-bottom: 1px solid var(--ink-line);
 }
 
+/* Brownfield filters */
+.dd-bf-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 8px 0 4px;
+  font-size: 12px;
+  color: var(--text);
+}
+.dd-bf-filter { display: flex; align-items: center; gap: 6px; }
+.dd-bf-filter select {
+  background: var(--ink-2);
+  color: var(--text);
+  border: 1px solid var(--ink-line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+.dd-bf-check { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+
 .dd-stat {
   font-family: var(--font-data);
   font-size: 11px;
@@ -960,6 +982,32 @@ footer {
 .st-trend-pct.up { color: var(--good); }
 .st-trend-pct.down { color: var(--accent); }
 .st-trend-pct.flat { color: var(--text-dim); }
+
+/* Station stat chips (interchanges / season share / percentile) */
+.st-chips {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+.st-chip {
+  background: var(--accent-dim);
+  border: 1px solid var(--ink-line);
+  border-radius: 8px;
+  padding: 8px 6px;
+  text-align: center;
+  min-width: 0;
+}
+.st-chip-num {
+  font-family: var(--font-data);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.1;
+}
+.st-chip-sup { font-size: 9px; vertical-align: super; color: var(--text-dim); }
+.st-chip-cap { font-size: 9.5px; color: var(--text-dim); margin-top: 3px; }
+.st-quality { color: var(--accent); }
 
 /* Plain-English summary under the headline score */
 .dd-score-summary {

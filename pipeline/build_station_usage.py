@@ -65,6 +65,25 @@ NAME_CANDIDATES = ["Station Name", "Station name", "station", "stationName",
 OPERATOR_CANDIDATES = ["Station Facility Owner", "Operator", "TOC",
                        "Train Operating Company", "Owning Operator",
                        "Station operator"]
+# Interchanges (passengers changing trains, not entering/exiting). A high
+# interchange:entry ratio marks a network node rather than a local destination.
+INTERCHANGE_CANDIDATES = ["Interchanges", "Interchange", "Total Interchanges"]
+# Entries+exits split by ticket type. ORR categories are Full / Reduced /
+# Season (NOT journey-purpose — ORR can't classify business/leisure). The
+# SEASON share is the standard commuter proxy. Latest-year columns carry the
+# year; we match the type word and prefer the most recent year.
+TICKET_FULL_HINT = re.compile(r"\bfull\b", re.I)
+TICKET_REDUCED_HINT = re.compile(r"reduced", re.I)
+TICKET_SEASON_HINT = re.compile(r"season", re.I)
+ENTRIES_HINT = re.compile(r"entr", re.I)
+EXITS_HINT = re.compile(r"exit", re.I)
+REGION_CANDIDATES = ["Region", "Government Office Region", "ORR Region",
+                     "Region (December 2024)"]
+# Quality / methodology flags ORR includes per station.
+QUALITY_CANDIDATES = ["Quality limitations", "Quality Limitations",
+                      "Change and quality comments"]
+ADJUSTMENT_CANDIDATES = ["Data source/adjustments", "Data source / adjustments",
+                         "Data sources/adjustments"]
 # Keep at most this many recent years for the trend sparkline (the time-series
 # file can carry ~28). 6 gives a clear post-pandemic recovery shape.
 TREND_MAX_YEARS = 6
@@ -136,17 +155,21 @@ def _pick(header, candidates):
 
 
 def _find_entries_exits_cols(header):
-    """Return (latest_col, [(col, year_label), ...]) for entries+exits usage.
+    """Return (latest_col, [(col, year_label), ...]) for TOTAL entries+exits.
 
     Strategy: find every YEAR-SPAN column (these are the per-year entries-&-exits
     columns in the time series, or the single year column in Table 1410),
-    excluding any explicitly marked as interchanges. The right-most year is the
-    'latest'. If no year-span column exists, fall back to a column literally
-    named with entries/exits words.
+    excluding any marked as interchanges OR as a ticket-type split (Full /
+    Reduced / Season), which are sub-totals, not the grand total. The right-most
+    year is the 'latest'. If no year-span column exists, fall back to a column
+    literally named with entries/exits words.
     """
+    def is_ticket_split(h):
+        return bool(TICKET_FULL_HINT.search(h) or TICKET_REDUCED_HINT.search(h)
+                    or TICKET_SEASON_HINT.search(h))
     cols = []
     for h in header:
-        if INTERCHANGE_HINT.search(h):
+        if INTERCHANGE_HINT.search(h) or is_ticket_split(h):
             continue
         yr = _year_label(h)
         if yr:
@@ -156,9 +179,55 @@ def _find_entries_exits_cols(header):
         return cols[-1][0], cols
     # Fallback: a single explicitly-named entries/exits column with no year.
     for h in header:
-        if ENTRIES_EXITS_HINT.search(h) and not INTERCHANGE_HINT.search(h):
+        if (ENTRIES_EXITS_HINT.search(h) and not INTERCHANGE_HINT.search(h)
+                and not is_ticket_split(h)):
             return h, [(h, None)]
     return None, []
+
+
+def _find_interchange_col(header):
+    """The latest-year interchange column (a column mentioning 'interchange').
+    Picks the most recent year if several exist."""
+    cands = [h for h in header if INTERCHANGE_HINT.search(h)]
+    if not cands:
+        return None
+    dated = [(h, _year_label(h)) for h in cands]
+    dated_only = [d for d in dated if d[1]]
+    if dated_only:
+        dated_only.sort(key=lambda d: d[1])
+        return dated_only[-1][0]
+    return cands[-1]
+
+
+def _find_ticket_cols(header):
+    """Return {full, reduced, season} -> latest-year column name for the
+    entries+exits ticket-type split. ORR names these like 'Full Entries & Exits
+    2024-25' (and similar). We require an entries/exits sense and the type word,
+    excluding interchange columns, and pick the most recent year per type."""
+    out = {}
+    for key, hint in (("full", TICKET_FULL_HINT),
+                      ("reduced", TICKET_REDUCED_HINT),
+                      ("season", TICKET_SEASON_HINT)):
+        cands = []
+        for h in header:
+            if INTERCHANGE_HINT.search(h):
+                continue
+            if not hint.search(h):
+                continue
+            # Must be an entries/exits-type column (not a count of something else)
+            if not (ENTRIES_HINT.search(h) or EXITS_HINT.search(h)
+                    or ENTRIES_EXITS_HINT.search(h)):
+                continue
+            cands.append((h, _year_label(h)))
+        if not cands:
+            continue
+        dated = [c for c in cands if c[1]]
+        if dated:
+            dated.sort(key=lambda c: c[1])
+            out[key] = dated[-1][0]
+        else:
+            out[key] = cands[-1][0]
+    return out
 
 
 def _to_int(v):
@@ -207,9 +276,13 @@ def load_usage():
         return {}, {}, {}
 
     # The CSV sometimes has a title/blurb line before the header. Find the row
-    # that looks like a header (contains a name-ish and a usage-ish column).
+    # that looks like a REAL header: several columns, with a name column and an
+    # entries/exits column. We require >= 3 cells so a one-cell title row (which
+    # can spuriously contain "station" and a "2024-25" year) can't match.
     header_idx = 0
     for i, r in enumerate(rows[:12]):
+        if len(r) < 3:
+            continue
         if _pick(r, NAME_CANDIDATES) and _find_entries_exits_cols(r)[0]:
             header_idx = i
             break
@@ -220,6 +293,11 @@ def load_usage():
     name_col = _pick(header, NAME_CANDIDATES)
     op_col = _pick(header, OPERATOR_CANDIDATES)
     latest_col, dated_cols = _find_entries_exits_cols(header)
+    interchange_col = _find_interchange_col(header)
+    ticket_cols = _find_ticket_cols(header)
+    region_col = _pick(header, REGION_CANDIDATES)
+    quality_col = _pick(header, QUALITY_CANDIDATES)
+    adjust_col = _pick(header, ADJUSTMENT_CANDIDATES)
 
     if name_col is None or latest_col is None:
         print("  WARNING: couldn't find name / entries-exits columns in "
@@ -235,6 +313,17 @@ def load_usage():
 
     by_crs, by_name = {}, {}
     n = 0
+
+    def cell(r, col):
+        """Safe cell read by column name."""
+        if not col:
+            return None
+        i = idx.get(col)
+        if i is None or i >= len(r):
+            return None
+        v = r[i].strip()
+        return v if v != "" else None
+
     for r in body:
         if not r or len(r) <= idx[name_col]:
             continue
@@ -249,7 +338,31 @@ def load_usage():
             v = _to_int(r[idx[col]]) if idx.get(col, 1e9) < len(r) else None
             if v is not None and yr:
                 trend.append({"year": yr, "value": v})
-        rec = {"usage": usage, "operator": operator, "trend": trend}
+
+        interchanges = _to_int(cell(r, interchange_col))
+        full = _to_int(cell(r, ticket_cols.get("full")))
+        reduced = _to_int(cell(r, ticket_cols.get("reduced")))
+        season = _to_int(cell(r, ticket_cols.get("season")))
+        # Season-ticket share of all entries+exits: the commuter proxy. Only
+        # meaningful when we have season and at least one other category.
+        season_share = None
+        parts = [v for v in (full, reduced, season) if v is not None]
+        if season is not None and parts:
+            denom = sum(parts)
+            if denom > 0:
+                season_share = round(season / denom, 3)
+
+        rec = {
+            "usage": usage,
+            "operator": operator,
+            "trend": trend,
+            "interchanges": interchanges,
+            "season_share": season_share,
+            "region": cell(r, region_col),
+            # Keep quality/adjustment notes short; they can be long prose.
+            "quality": (cell(r, quality_col) or "")[:300] or None,
+            "adjusted": bool(cell(r, adjust_col)),
+        }
 
         crs = r[idx[crs_col]].strip().upper() if crs_col and idx[crs_col] < len(r) else ""
         if crs:
@@ -259,9 +372,16 @@ def load_usage():
             by_name[nn] = rec
         n += 1
 
+    cols_found = []
+    if interchange_col: cols_found.append("interchanges")
+    if ticket_cols: cols_found.append(f"ticket-split({'/'.join(ticket_cols)})")
+    if region_col: cols_found.append("region")
+    if quality_col: cols_found.append("quality")
     print(f"  loaded usage for {n} stations from {USAGE_CSV.name} "
           f"(latest year: {latest_year or 'unknown'}; "
           f"{len(dated_cols)} year column(s) for trend)")
+    if cols_found:
+        print(f"  extra fields detected: {', '.join(cols_found)}")
     return by_crs, by_name, {"latest_year": latest_year,
                              "year_count": len(dated_cols)}
 
@@ -322,12 +442,29 @@ def main() -> int:
             # Trend kept compact: list of {year, value}. Frontend draws a
             # sparkline / computes a % change from it.
             "trend": rec["trend"] if rec else [],
+            "interchanges": rec.get("interchanges") if rec else None,
+            "season_share": rec.get("season_share") if rec else None,
+            "region": rec.get("region") if rec else None,
+            "quality": rec.get("quality") if rec else None,
+            "adjusted": rec.get("adjusted") if rec else False,
         }
         feats.append({
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [round(s["lng"], 5), round(s["lat"], 5)]},
             "properties": props,
         })
+
+    # National usage percentile rank (0-100): "busier than X% of England
+    # stations". Computed across stations that HAVE a usage figure; the rest
+    # get null. Done here (build time) since it needs the whole set.
+    with_usage = sorted((f for f in feats if f["properties"]["usage"] is not None),
+                        key=lambda f: f["properties"]["usage"])
+    total = len(with_usage)
+    for i, f in enumerate(with_usage):
+        # Fraction of stations with usage strictly below this one.
+        f["properties"]["usage_pctile"] = round(i / total * 100, 1) if total > 1 else 50.0
+    for f in feats:
+        f["properties"].setdefault("usage_pctile", None)
 
     fc = {
         "type": "FeatureCollection",

@@ -125,17 +125,31 @@ def make_sample_stations():
         usage = trend[-1]["value"]
         operator = ["Govia Thameslink", "c2c", "Greater Anglia",
                     "Southeastern"][i % 4]
+        regions = ["London", "South East", "East of England", "London"]
         stations.append({
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [lon, lat]},
-            "properties": {"name": name, "crs": crs, "usage": usage,
-                           "operator": operator, "trend": trend},
+            "properties": {
+                "name": name, "crs": crs, "usage": usage,
+                "operator": operator, "trend": trend,
+                # Interchanges scale loosely with usage; season share varies.
+                "interchanges": int(usage * (0.05 + 0.25 * smooth_field(c, r, seed=600 + i))),
+                "season_share": round(0.12 + 0.4 * smooth_field(c, r, seed=700 + i), 3),
+                "region": regions[i % 4],
+                "quality": None,
+                "adjusted": (i % 5 == 0),
+            },
         })
         rail_stops.append({
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [lon, lat]},
             "properties": {"kind": "stop", "mode": "rail", "name": name, "crs": crs},
         })
+
+    # National usage percentile across the sample set (mirrors the real build).
+    ordered = sorted(stations, key=lambda f: f["properties"]["usage"])
+    for rank, f in enumerate(ordered):
+        f["properties"]["usage_pctile"] = round(rank / max(1, len(ordered) - 1) * 100, 1)
 
     stations_fc = {
         "type": "FeatureCollection",

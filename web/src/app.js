@@ -1446,6 +1446,38 @@ function sparklineSVG(trend, color) {
   </svg>`;
 }
 
+// Compact stat chips for a station: interchanges, season-ticket share (the
+// commuter proxy — ORR can't classify journey purpose, so we label it as
+// season share, not "commuters"), and national usage percentile. Reused by the
+// floating card and the deep-dive station section.
+function stationStatChips(p) {
+  const chips = [];
+  const intchg = (p.interchanges != null && p.interchanges !== "") ? Number(p.interchanges) : null;
+  if (intchg != null) {
+    chips.push(`<div class="st-chip"><div class="st-chip-num">${fmtCount(intchg)}</div><div class="st-chip-cap">Interchanges</div></div>`);
+  }
+  const season = (p.season_share != null && p.season_share !== "") ? Number(p.season_share) : null;
+  if (season != null) {
+    chips.push(`<div class="st-chip"><div class="st-chip-num">${Math.round(season * 100)}%</div><div class="st-chip-cap">Season tickets</div></div>`);
+  }
+  const pct = (p.usage_pctile != null && p.usage_pctile !== "") ? Number(p.usage_pctile) : null;
+  if (pct != null) {
+    chips.push(`<div class="st-chip"><div class="st-chip-num">${Math.round(pct)}<span class="st-chip-sup">th</span></div><div class="st-chip-cap">Usage percentile</div></div>`);
+  }
+  if (!chips.length) return "";
+  return `<div class="st-chips">${chips.join("")}</div>`;
+}
+
+// A small caveat line when the station's latest estimate was methodology-
+// adjusted or flagged for quality — keeps the figures honest for scrutiny.
+function stationQualityNote(p, year) {
+  if (!p.adjusted && !p.quality) return "";
+  const bits = [];
+  if (p.adjusted) bits.push("estimate adjusted / supplemented with local data");
+  if (p.quality) bits.push(p.quality);
+  return `<p class="hint st-quality" style="margin-top:6px">⚠ ${bits.join(" · ")}</p>`;
+}
+
 // Pin a station's details in the floating panel (reuses #floating-detail),
 // with usage, operator and a trend sparkline, plus a button that builds the
 // station's walk-time catchment and runs the deep dive on it.
@@ -1466,6 +1498,12 @@ function inspectStation(p, point) {
   const meta = [];
   if (p.crs) meta.push(`CRS ${p.crs}`);
   if (p.operator) meta.push(p.operator);
+  if (p.region) meta.push(p.region);
+
+  // Compact stat chips: interchanges, season-ticket share (commuter proxy),
+  // and national usage percentile. Each only shows when present.
+  const statsBlock = stationStatChips(p);
+  const qualityNote = stationQualityNote(p, year);
 
   let trendBlock = "";
   if (trend.length >= 2) {
@@ -1503,6 +1541,8 @@ function inspectStation(p, point) {
       <div class="cap">Annual passenger usage${year ? ` · ${year}` : ""}</div>
     </div>
     ${trendBlock}
+    ${statsBlock}
+    ${qualityNote}
     <button class="deepdive-btn" id="station-profile-btn" type="button">
       Profile this station →
     </button>
@@ -1575,6 +1615,12 @@ async function profileStation(p, point) {
     station: {
       name: station.name, crs: station.crs, operator: station.operator,
       usage, trend, year: state.stationsMeta?.latest_year || "",
+      interchanges: station.interchanges != null && station.interchanges !== "" ? Number(station.interchanges) : null,
+      season_share: station.season_share != null && station.season_share !== "" ? Number(station.season_share) : null,
+      usage_pctile: station.usage_pctile != null && station.usage_pctile !== "" ? Number(station.usage_pctile) : null,
+      region: station.region || null,
+      quality: station.quality || null,
+      adjusted: station.adjusted === true || station.adjusted === "true",
     },
   });
 }
@@ -1747,6 +1793,11 @@ const deep = {
   area_km2: null,        // catchment area in km²
   popPartial: false,    // true if some overlapping LSOAs lacked population
   counts: {},           // kind -> latest count in catchment (for density)
+  station: null,        // station meta when this is a station profile
+  brownfield: null,     // cached brownfield sites in catchment (array)
+  brownfieldVisible: false, // layer toggle
+  brownfieldFilters: { minDwellings: 0, publicOnly: false, deliverableOnly: false },
+  brownfieldSummary: null,  // { n_sites, n_public, dwellings_*_total, hectares_total }
 };
 
 async function enterDeepDive(p) {
@@ -1804,6 +1855,10 @@ function runDeepDive(catchment, meta) {
   deep.popPartial = false;
   deep.counts = {};
   deep.station = meta.station || null;   // station meta for the station section
+  deep.brownfield = null;
+  deep.brownfieldSummary = null;
+  deep.brownfieldVisible = false;
+  deep.brownfieldFilters = { minDwellings: 0, publicOnly: false, deliverableOnly: false };
 
   // The mask dims everything outside the catchment, so we keep the choropleth
   // reasonably visible (it shows through inside the catchment) rather than
@@ -1838,6 +1893,8 @@ function computeCatchmentPopulation() {
   renderCatchmentStats();
   // Any amenity counts already loaded now get a per-1,000 figure.
   refreshAmenityDensities();
+  // Station "usage per resident" needs the catchment population.
+  renderUsagePerResident();
 }
 
 // Compact number formatting for stat cells: 1,234 / 12.3k / 1.2M.
@@ -2183,12 +2240,14 @@ function clearDeepDiveMapArtifacts() {
 
   // Layers first (a source can't be removed while a layer uses it).
   for (const id of layerIds) {
-    if (id.startsWith("amenity-") || id.startsWith("access-route-")) {
+    if (id.startsWith("amenity-") || id.startsWith("access-route-")
+        || id.startsWith("brownfield-")) {
       if (map.getLayer(id)) map.removeLayer(id);
     }
   }
   for (const id of sourceIds) {
-    if (id.startsWith("amenity-") || id.startsWith("access-route-")) {
+    if (id.startsWith("amenity-") || id.startsWith("access-route-")
+        || id.startsWith("brownfield-")) {
       if (map.getSource(id)) map.removeSource(id);
     }
   }
@@ -2197,6 +2256,7 @@ function clearDeepDiveMapArtifacts() {
   for (const a of AMENITY_KINDS) removeAmenityLayer(a.kind);
   removeCrimeLayer();
   removeAccessRoutes();
+  removeBrownfieldLayer();
   removeCatchmentOutline();
   if (map.getLayer("plot-point-dot")) map.removeLayer("plot-point-dot");
   if (map.getSource("plot-point-src")) map.removeSource("plot-point-src");
@@ -2461,6 +2521,233 @@ function removeAmenityLayer(kind) {
   const srcId = `amenity-${kind}`;
   if (map.getLayer(`${srcId}-dot`)) map.removeLayer(`${srcId}-dot`);
   if (map.getSource(srcId)) map.removeSource(srcId);
+}
+
+// ---- Brownfield land (developable supply) ---------------------------------
+// Colour for brownfield markers/footprints. A green-gold, distinct from the
+// deprivation ramp, amenity colours and the purple stations.
+const BROWNFIELD_COLOR = "#3f9b5e";
+const BROWNFIELD_COLOR_PUBLIC = "#e0a32e";   // public-owned sites stand out
+
+// Load brownfield sites in the catchment from Supabase, applying current
+// filters server-side. Caches the result on deep.brownfield and also fetches
+// the summary. Returns the site count, or null on error/not-configured.
+async function loadBrownfield() {
+  const sb = getSupabase();
+  if (!sb) { deep._lastBrownfieldError = "not_configured"; return null; }
+  const f = deep.brownfieldFilters;
+  const params = {
+    catchment: deep.catchment.geometry,
+    min_dwellings: f.minDwellings > 0 ? f.minDwellings : null,
+    public_only: !!f.publicOnly,
+    deliverable_only: !!f.deliverableOnly,
+  };
+  const [sitesRes, sumRes] = await Promise.all([
+    sb.rpc("brownfield_in_polygon", params),
+    sb.rpc("brownfield_summary_in_polygon", params),
+  ]);
+  if (sitesRes.error) {
+    console.error("brownfield_in_polygon failed", sitesRes.error);
+    deep._lastBrownfieldError = sitesRes.error.message || "query failed";
+    return null;
+  }
+  deep._lastBrownfieldError = null;
+  deep.brownfield = sitesRes.data || [];
+  deep.brownfieldSummary = (sumRes.data && sumRes.data[0]) || null;
+  return deep.brownfield.length;
+}
+
+// Render the brownfield layer: polygon footprints where we have them, and
+// circle markers for point-only sites. Public-owned sites use a distinct
+// colour. Click a feature for its detail card.
+function renderBrownfieldLayer() {
+  removeBrownfieldLayer();
+  const sites = deep.brownfield || [];
+  if (!sites.length) return;
+
+  // Split into polygon features and point features.
+  const polyFeatures = [];
+  const pointFeatures = [];
+  for (const s of sites) {
+    const baseProps = {
+      id: s.id, reference: s.reference, name: s.name, site_address: s.site_address,
+      hectares: s.hectares, dwellings_min: s.dwellings_min, dwellings_max: s.dwellings_max,
+      ownership_status: s.ownership_status, is_public: s.is_public,
+      deliverable: s.deliverable, permission_status: s.permission_status,
+      permission_date: s.permission_date, notes: s.notes, source_url: s.source_url,
+    };
+    if (s.area_geojson) {
+      let geom = null;
+      try { geom = JSON.parse(s.area_geojson); } catch (_) { geom = null; }
+      if (geom) polyFeatures.push({ type: "Feature", geometry: geom, properties: baseProps });
+    }
+    if (s.lng != null && s.lat != null) {
+      pointFeatures.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [s.lng, s.lat] },
+        properties: baseProps,
+      });
+    }
+  }
+
+  const colorExpr = ["case", ["==", ["get", "is_public"], true], BROWNFIELD_COLOR_PUBLIC, BROWNFIELD_COLOR];
+
+  if (polyFeatures.length) {
+    map.addSource("brownfield-poly", { type: "geojson", data: { type: "FeatureCollection", features: polyFeatures } });
+    map.addLayer({
+      id: "brownfield-poly-fill", type: "fill", source: "brownfield-poly",
+      paint: { "fill-color": colorExpr, "fill-opacity": 0.28 },
+    });
+    map.addLayer({
+      id: "brownfield-poly-line", type: "line", source: "brownfield-poly",
+      paint: { "line-color": colorExpr, "line-width": 1.6 },
+    });
+  }
+  if (pointFeatures.length) {
+    map.addSource("brownfield-pt", { type: "geojson", data: { type: "FeatureCollection", features: pointFeatures } });
+    map.addLayer({
+      id: "brownfield-pt-dot", type: "circle", source: "brownfield-pt",
+      paint: {
+        // Size by max dwelling capacity so bigger opportunities read larger.
+        "circle-radius": ["interpolate", ["linear"], ["coalesce", ["get", "dwellings_max"], 0],
+          0, 4, 50, 6, 200, 9, 1000, 13],
+        "circle-color": colorExpr,
+        "circle-opacity": 0.85,
+        "circle-stroke-color": "#fff",
+        "circle-stroke-width": 1.2,
+      },
+    });
+  }
+
+  // Click any brownfield feature -> detail card (tracked popup so it clears).
+  const onClick = (e) => {
+    const pr = e.features[0].properties;
+    openClickPopup({ offset: 8, maxWidth: "260px" }, e.lngLat, brownfieldPopupHTML(pr));
+  };
+  for (const id of ["brownfield-poly-fill", "brownfield-pt-dot"]) {
+    if (map.getLayer(id)) {
+      map.on("click", id, onClick);
+      map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
+      map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
+    }
+  }
+}
+
+function removeBrownfieldLayer() {
+  for (const id of ["brownfield-poly-fill", "brownfield-poly-line", "brownfield-pt-dot"]) {
+    if (map.getLayer(id)) map.removeLayer(id);
+  }
+  for (const id of ["brownfield-poly", "brownfield-pt"]) {
+    if (map.getSource(id)) map.removeSource(id);
+  }
+}
+
+// HTML for a brownfield site popup.
+function brownfieldPopupHTML(pr) {
+  const cap = brownfieldCapacityText(pr);
+  const own = brownfieldOwnershipLabel(pr);
+  const lines = [];
+  lines.push(`<strong>${pr.name || pr.reference || "Brownfield site"}</strong>`);
+  if (pr.site_address) lines.push(`<div style="font-size:11px">${pr.site_address}</div>`);
+  const facts = [];
+  if (cap) facts.push(cap);
+  if (pr.hectares != null && pr.hectares !== "") facts.push(`${Number(pr.hectares).toFixed(2)} ha`);
+  if (facts.length) lines.push(`<div style="margin-top:4px;font-size:11px">${facts.join(" · ")}</div>`);
+  if (own) lines.push(`<div style="font-size:11px;margin-top:2px">${own}</div>`);
+  if (pr.permission_status) lines.push(`<div style="font-size:11px;text-transform:capitalize">${String(pr.permission_status).replace(/-/g," ")}</div>`);
+  if (pr.source_url) lines.push(`<div style="font-size:11px;margin-top:4px"><a href="${pr.source_url}" target="_blank" rel="noopener">Site plan ↗</a></div>`);
+  return lines.join("");
+}
+
+function brownfieldCapacityText(pr) {
+  const lo = (pr.dwellings_min != null && pr.dwellings_min !== "") ? Number(pr.dwellings_min) : null;
+  const hi = (pr.dwellings_max != null && pr.dwellings_max !== "") ? Number(pr.dwellings_max) : null;
+  if (lo == null && hi == null) return "";
+  if (lo != null && hi != null && lo !== hi) return `${lo}–${hi} homes`;
+  return `${hi ?? lo} homes`;
+}
+
+function brownfieldOwnershipLabel(pr) {
+  const pub = pr.is_public === true || pr.is_public === "true";
+  if (pr.ownership_status) {
+    const txt = String(pr.ownership_status).replace(/-/g, " ");
+    return (pub ? "🏛 " : "") + txt.charAt(0).toUpperCase() + txt.slice(1);
+  }
+  return pub ? "🏛 Public-authority owned" : "";
+}
+
+// Toggle the brownfield layer on/off (loads on first enable).
+async function toggleBrownfield(on) {
+  deep.brownfieldVisible = on;
+  if (!on) { removeBrownfieldLayer(); renderBrownfieldSummary(); return; }
+  setBrownfieldStatus("loading…");
+  const n = await loadBrownfield();
+  if (n === null) {
+    setBrownfieldStatus(deep._lastBrownfieldError === "not_configured"
+      ? "DB not configured" : "query error — see console");
+    deep.brownfieldVisible = false;
+    const cb = document.getElementById("dd-brownfield-show");
+    if (cb) cb.checked = false;
+    return;
+  }
+  renderBrownfieldLayer();
+  renderBrownfieldSummary();
+}
+
+// Re-query with current filters (called when a filter changes while on).
+async function refreshBrownfield() {
+  if (!deep.brownfieldVisible) { renderBrownfieldSummary(); return; }
+  setBrownfieldStatus("loading…");
+  const n = await loadBrownfield();
+  if (n === null) { setBrownfieldStatus("query error — see console"); return; }
+  renderBrownfieldLayer();
+  renderBrownfieldSummary();
+}
+
+function setBrownfieldStatus(text) {
+  const el = document.getElementById("dd-brownfield-status");
+  if (el) el.textContent = text;
+}
+
+// Fill the supply headline: site count, total capacity, public share.
+function renderBrownfieldSummary() {
+  const el = document.getElementById("dd-brownfield-summary");
+  if (!el) return;
+  const s = deep.brownfieldSummary;
+  if (!deep.brownfieldVisible || !s) {
+    el.innerHTML = "";
+    setBrownfieldStatus(deep.brownfieldVisible ? "" : "");
+    return;
+  }
+  const n = Number(s.n_sites) || 0;
+  if (n === 0) {
+    el.innerHTML = `<p class="hint">No brownfield sites match in this catchment${brownfieldFilterSuffix()}.</p>`;
+    setBrownfieldStatus("0 sites");
+    return;
+  }
+  const lo = Number(s.dwellings_min_total) || 0;
+  const hi = Number(s.dwellings_max_total) || 0;
+  const capTxt = lo && hi && lo !== hi ? `${lo.toLocaleString()}–${hi.toLocaleString()}`
+    : `${(hi || lo).toLocaleString()}`;
+  const pubN = Number(s.n_public) || 0;
+  const ha = Number(s.hectares_total) || 0;
+  el.innerHTML = `
+    <div class="dd-stats-grid" style="margin-top:6px">
+      <div class="dd-stat-cell"><div class="dd-stat-num">${n.toLocaleString()}</div><div class="dd-stat-cap">Sites</div></div>
+      <div class="dd-stat-cell"><div class="dd-stat-num">${capTxt}</div><div class="dd-stat-cap">Est. homes</div></div>
+      <div class="dd-stat-cell"><div class="dd-stat-num">${pubN.toLocaleString()}</div><div class="dd-stat-cap">Public-owned</div></div>
+    </div>
+    <p class="hint" style="margin-top:6px">${ha.toFixed(1)} ha of brownfield land in catchment${brownfieldFilterSuffix()}. Capacity is the register's estimate; gold markers are public-authority owned.</p>`;
+  setBrownfieldStatus(`${n} site${n === 1 ? "" : "s"}`);
+}
+
+function brownfieldFilterSuffix() {
+  const f = deep.brownfieldFilters;
+  const bits = [];
+  if (f.minDwellings > 0) bits.push(`≥${f.minDwellings} homes`);
+  if (f.publicOnly) bits.push("public-owned");
+  if (f.deliverableOnly) bits.push("deliverable");
+  return bits.length ? ` (filtered: ${bits.join(", ")})` : "";
 }
 
 async function toggleAmenityKind(kind, on) {
@@ -2867,6 +3154,10 @@ function stationSectionHTML(st) {
       </div>
     </div>` : "";
 
+  if (st.region) meta.push(st.region);
+  const chips = stationStatChips(st);
+  const quality = stationQualityNote(st, st.year);
+
   return `
     <section class="dd-block" data-section="station">
       <button class="dd-block-head" type="button" aria-expanded="true">
@@ -2878,10 +3169,32 @@ function stationSectionHTML(st) {
           <div class="dd-score-cap">Annual passenger usage${st.year ? ` · ${st.year}` : ""}</div>
         </div>
         ${trendBlock}
+        ${chips}
+        <div class="dd-stat-cell" id="dd-usage-per-resident" style="margin-top:8px;display:none">
+          <div class="dd-stat-num" id="dd-upr-value">—</div>
+          <div class="dd-stat-cap">Annual usage per catchment resident</div>
+        </div>
+        ${quality}
         ${meta.length ? `<p class="hint" style="margin-top:8px">${meta.join(" · ")}</p>` : ""}
         <p class="hint" style="margin-top:6px">Usage is the transit-asset signal — shown alongside need (deprivation) and, soon, developable supply, kept as separate measures rather than one blended score.</p>
       </div>
     </section>`;
+}
+
+// Fill the "usage per resident" figure once the catchment population is known.
+// A LOW value in a populous catchment = an under-used station relative to who
+// lives nearby — a strong regeneration signal.
+function renderUsagePerResident() {
+  const cell = document.getElementById("dd-usage-per-resident");
+  const val = document.getElementById("dd-upr-value");
+  if (!cell || !val || !deep.station) return;
+  const usage = deep.station.usage;
+  const pop = deep.population;
+  if (usage == null || pop == null || pop <= 0) { cell.style.display = "none"; return; }
+  const perResident = usage / pop;
+  val.textContent = perResident >= 100 ? Math.round(perResident).toLocaleString()
+    : perResident.toFixed(1);
+  cell.style.display = "";
 }
 
 function buildDeepDivePanel(meta) {
@@ -2946,6 +3259,36 @@ function buildDeepDivePanel(meta) {
             </div>
           </div>
           <p class="hint" id="dd-pop-note" style="margin-top:8px">Population is area-weighted from the LSOAs the catchment overlaps, assuming people are spread evenly within each.</p>
+        </div>
+      </section>
+
+      <section class="dd-block" data-section="brownfield">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Developable land · supply</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <label class="dd-row dd-row-all">
+            <input type="checkbox" class="enable" id="dd-brownfield-show" />
+            <span class="dd-label"><strong>Brownfield sites</strong></span>
+            <span class="dd-stat" id="dd-brownfield-status"></span>
+          </label>
+          <div class="dd-bf-filters">
+            <label class="dd-bf-filter">
+              <span>Min. homes</span>
+              <select id="dd-bf-mindwellings">
+                <option value="0">Any</option>
+                <option value="10">10+</option>
+                <option value="25">25+</option>
+                <option value="50">50+</option>
+                <option value="100">100+</option>
+                <option value="250">250+</option>
+              </select>
+            </label>
+            <label class="dd-bf-check"><input type="checkbox" id="dd-bf-public" /> Public-owned only</label>
+            <label class="dd-bf-check"><input type="checkbox" id="dd-bf-deliverable" /> Deliverable only</label>
+          </div>
+          <div id="dd-brownfield-summary"></div>
+          <p class="hint" style="margin-top:8px">Brownfield Land Register sites (England, MHCLG). The "supply" signal alongside need and usage. Coverage depends on what each local authority has published, so absence of a site isn't proof there's no opportunity.</p>
         </div>
       </section>
 
@@ -3017,6 +3360,25 @@ function buildDeepDivePanel(meta) {
   if (crimeBtn) crimeBtn.addEventListener("click", loadCrime);
   const crimeShow = panel.querySelector("#dd-crime-show");
   if (crimeShow) crimeShow.addEventListener("change", (e) => setCrimeVisible(e.target.checked));
+
+  // Brownfield (developable supply) controls.
+  const bfShow = panel.querySelector("#dd-brownfield-show");
+  if (bfShow) bfShow.addEventListener("change", (e) => toggleBrownfield(e.target.checked));
+  const bfMin = panel.querySelector("#dd-bf-mindwellings");
+  if (bfMin) bfMin.addEventListener("change", (e) => {
+    deep.brownfieldFilters.minDwellings = parseInt(e.target.value, 10) || 0;
+    refreshBrownfield();
+  });
+  const bfPublic = panel.querySelector("#dd-bf-public");
+  if (bfPublic) bfPublic.addEventListener("change", (e) => {
+    deep.brownfieldFilters.publicOnly = e.target.checked;
+    refreshBrownfield();
+  });
+  const bfDeliv = panel.querySelector("#dd-bf-deliverable");
+  if (bfDeliv) bfDeliv.addEventListener("change", (e) => {
+    deep.brownfieldFilters.deliverableOnly = e.target.checked;
+    refreshBrownfield();
+  });
 
   // Fill the deprivation headline, breakdown bars and plain-English summary.
   renderDeprivationScore();
