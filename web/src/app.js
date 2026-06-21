@@ -3425,7 +3425,12 @@ function renderStationSynthesis() {
   updatePinBtn();
   pinBtn.addEventListener("click", () => {
     if (shortlist.has(snap.key)) shortlist.remove(snap.key);
-    else shortlist.add(buildStationSnapshot());   // fresh snapshot at pin time
+    else {
+      shortlist.add(buildStationSnapshot());   // fresh snapshot at pin time
+      // Re-show the tray if it had been closed this session.
+      const tray = document.getElementById("shortlist-tray");
+      if (tray) tray.dataset.dismissed = "";
+    }
     updatePinBtn();
     updateShortlistTray();
   });
@@ -3481,15 +3486,44 @@ function updateShortlistTray() {
   const tray = document.getElementById("shortlist-tray");
   if (!tray) return;
   const n = shortlist.items.length;
-  if (n === 0) { tray.hidden = true; tray.innerHTML = ""; return; }
+  if (n === 0) { tray.hidden = true; tray.innerHTML = ""; tray.dataset.dismissed = ""; return; }
+  // If the user explicitly closed the tray this session, keep it hidden until a
+  // new item is added (adding clears the dismissed flag — see addToShortlist).
+  if (tray.dataset.dismissed === "1") { tray.hidden = true; return; }
   tray.hidden = false;
   tray.innerHTML = `
-    <div class="tray-label">Shortlist <span class="tray-count">${n}</span></div>
+    <div class="tray-head">
+      <div class="tray-label">Shortlist <span class="tray-count">${n}</span></div>
+      <button class="tray-close" id="tray-close-btn" type="button" title="Hide shortlist" aria-label="Hide shortlist">×</button>
+    </div>
     <div class="tray-chips">
-      ${shortlist.items.map(i => `<span class="tray-chip" title="${i.name}">${i.crs || i.name.slice(0, 8)}</span>`).join("")}
+      ${shortlist.items.map(i => `
+        <span class="tray-chip" title="${i.name}">
+          ${i.crs || i.name.slice(0, 10)}
+          <button class="tray-chip-x" data-key="${i.key}" title="Remove ${i.name}" aria-label="Remove ${i.name}">×</button>
+        </span>`).join("")}
     </div>
     <button class="tray-open" id="tray-open-btn" type="button">Compare & export →</button>`;
   tray.querySelector("#tray-open-btn").addEventListener("click", openShortlistPanel);
+  tray.querySelector("#tray-close-btn").addEventListener("click", () => {
+    tray.dataset.dismissed = "1";
+    tray.hidden = true;
+  });
+  tray.querySelectorAll(".tray-chip-x").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      shortlist.remove(btn.dataset.key);
+      updateShortlistTray();
+      // Keep any open synthesis pin-button state in sync.
+      const pinBtn = document.getElementById("syn-pin-btn");
+      if (pinBtn && deep.station) {
+        const k = (deep.station.crs && deep.station.crs.toUpperCase()) || deep.station.name;
+        const pinned = shortlist.has(k);
+        pinBtn.textContent = pinned ? "★ Shortlisted" : "☆ Add to shortlist";
+        pinBtn.classList.toggle("syn-btn-active", pinned);
+      }
+    });
+  });
 }
 
 // Open the comparison modal showing all shortlisted stations side by side.
