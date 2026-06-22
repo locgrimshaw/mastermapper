@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws4-debug" />
+  <link rel="stylesheet" href="src/styles.css?v=ws4-debug2" />
 </head>
 <body>
   <div id="app">
@@ -118,27 +118,72 @@
     <div id="compare-modal" class="compare-modal" hidden></div>
   </div>
 
-  <!-- On-screen debug console for mobile diagnostics. Loads ONLY when the URL
-       contains ?debug (e.g. .../mastermapper/?debug). Adds a floating console
-       panel so errors are readable on a phone/iPad with no computer attached. -->
+  <!-- On-screen debug console for mobile diagnostics. Self-contained (no
+       external library to load/block). Shows ONLY when the URL contains ?debug
+       (e.g. .../mastermapper/?debug). Captures console output + uncaught errors
+       into a panel you can read on a phone/iPad with no computer attached. -->
   <script>
     if (location.search.indexOf("debug") !== -1) {
-      var es = document.createElement("script");
-      es.src = "https://cdn.jsdelivr.net/npm/eruda";
-      es.onload = function () {
-        try {
-          eruda.init();
-          // Capture anything thrown before/around init too.
-          window.addEventListener("error", function (e) {
-            console.error("[uncaught] " + e.message + " @ " + (e.filename || "") + ":" + (e.lineno || ""));
-          });
-          window.addEventListener("unhandledrejection", function (e) {
-            console.error("[promise] " + (e.reason && (e.reason.stack || e.reason.message) || e.reason));
-          });
-          console.log("Debug console ready. Reproduce the issue (tap the map), then read any red lines.");
-        } catch (err) {}
-      };
-      document.head.appendChild(es);
+      (function () {
+        var box = document.createElement("div");
+        box.id = "mm-debug";
+        box.style.cssText = "position:fixed;left:0;right:0;bottom:0;height:42vh;z-index:99999;" +
+          "background:rgba(8,10,14,0.94);color:#d7e0ea;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;" +
+          "overflow:auto;border-top:2px solid #e0853a;padding:8px 10px 40px;-webkit-overflow-scrolling:touch;";
+        var bar = document.createElement("div");
+        bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:100000;display:flex;gap:8px;" +
+          "padding:6px 8px;background:#11151c;border-top:1px solid #2a3340;";
+        bar.innerHTML = '<button id="mm-dbg-clear" style="flex:1;padding:8px;background:#2a3340;color:#fff;border:0;border-radius:6px;font-size:13px">Clear</button>' +
+          '<button id="mm-dbg-copy" style="flex:1;padding:8px;background:#e0853a;color:#fff;border:0;border-radius:6px;font-size:13px">Copy all</button>' +
+          '<button id="mm-dbg-hide" style="flex:0 0 auto;padding:8px 14px;background:#2a3340;color:#fff;border:0;border-radius:6px;font-size:13px">Hide</button>';
+        function add(kind, args) {
+          var line = document.createElement("div");
+          var color = kind === "error" ? "#ff8f8f" : kind === "warn" ? "#ffd27a" : "#d7e0ea";
+          line.style.cssText = "color:" + color + ";white-space:pre-wrap;word-break:break-word;border-bottom:1px solid rgba(255,255,255,0.05);padding:2px 0";
+          var txt = [];
+          for (var i = 0; i < args.length; i++) {
+            var a = args[i];
+            try { txt.push(typeof a === "object" ? JSON.stringify(a) : String(a)); }
+            catch (e) { txt.push(String(a)); }
+          }
+          line.textContent = txt.join(" ");
+          box.appendChild(line);
+          box.scrollTop = box.scrollHeight;
+        }
+        // Wait for body, then attach.
+        function mount() {
+          if (!document.body) { return setTimeout(mount, 30); }
+          document.body.appendChild(box);
+          document.body.appendChild(bar);
+          document.getElementById("mm-dbg-clear").onclick = function () { box.innerHTML = ""; };
+          document.getElementById("mm-dbg-hide").onclick = function () {
+            var hidden = box.style.display === "none";
+            box.style.display = hidden ? "block" : "none";
+          };
+          document.getElementById("mm-dbg-copy").onclick = function () {
+            var all = box.innerText;
+            var ta = document.createElement("textarea");
+            ta.value = all; document.body.appendChild(ta); ta.select();
+            try { document.execCommand("copy"); } catch (e) {}
+            if (navigator.clipboard) { try { navigator.clipboard.writeText(all); } catch (e) {} }
+            ta.remove();
+            add("log", ["(copied " + all.length + " chars to clipboard)"]);
+          };
+          add("log", ["Debug console ready. Tap a station on the map, then read the lines (or Copy all and paste to share)."]);
+        }
+        mount();
+        // Hook console.
+        ["log", "warn", "error"].forEach(function (k) {
+          var orig = console[k] ? console[k].bind(console) : function () {};
+          console[k] = function () { try { add(k, arguments); } catch (e) {} orig.apply(null, arguments); };
+        });
+        window.addEventListener("error", function (e) {
+          add("error", ["[uncaught] " + e.message + " @ " + (e.filename || "") + ":" + (e.lineno || "")]);
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          add("error", ["[promise] " + (e.reason && (e.reason.stack || e.reason.message) || e.reason)]);
+        });
+      })();
     }
   </script>
 
@@ -150,6 +195,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws4-debug"></script>
+  <script type="module" src="src/app.js?v=ws4-debug2"></script>
 </body>
 </html>
