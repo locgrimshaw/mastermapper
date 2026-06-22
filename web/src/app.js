@@ -1787,31 +1787,19 @@ async function profileStation(p, point) {
   const minutes = STATION_WALK_MINUTES;
   setStationProfileBtn("Building catchment…", true);
   let catchment;
-  let approx = false;
   try {
     catchment = await fetchIsochrone(coords[0], coords[1], "pedestrian", minutes);
   } catch (e) {
-    // Routing unavailable — offer a circular approximation so the user isn't
-    // dead-ended. They opt in so it's clear the catchment is approximate.
-    const fallback = e.canFallback ? circularCatchment(coords[0], coords[1], minutes) : null;
-    if (fallback && confirm(
-        `The routing service is busy, so an exact walk catchment isn't available right now.\n\n` +
-        `Use an approximate circular ${minutes}-minute catchment instead? ` +
-        `(Straight-line distance, ignores the street network — figures will be indicative.)`)) {
-      catchment = fallback;
-      approx = true;
-    } else {
-      setStationProfileBtn("Profile this station →", false);
-      alert(`Couldn't build the station catchment — ${e.message}. ` +
-        `This uses a free public routing service that occasionally rate-limits; please wait a few seconds and try again.`);
-      return;
-    }
+    setStationProfileBtn("Profile this station →", false);
+    alert(`Couldn't build the station catchment — ${e.message}. Please try again in a few seconds.`);
+    return;
   }
   if (!catchment) {
     setStationProfileBtn("Profile this station →", false);
     alert("No catchment returned for that station.");
     return;
   }
+  const approx = !!(catchment.properties && catchment.properties._approx);
 
   // Remember the origin so "nearest access" routes from the station itself.
   plot.geometry = { type: "Point", coordinates: coords };
@@ -4917,13 +4905,15 @@ function combinedScoreFromDomains(domains, weights) {
 }
 
 // Build an isochrone polygon from a point via the public Valhalla server.
-// Returns a GeoJSON Feature (Polygon) or null. No API key needed.
+// Returns a GeoJSON Polygon Feature, or null only if even the fallback fails.
 //
 // The FOSSGIS demo server is free and shared, with a fair-usage rate limit, so
 // transient drops show up in the browser as "Failed to fetch" (a network-level
-// failure with no status). We therefore: send the X-Client-Id header they ask
-// of apps, apply a timeout, and retry a couple of times with backoff so a brief
-// blip doesn't surface as a hard error to the user.
+// failure with no status). We send the X-Client-Id header they ask of apps,
+// apply a timeout, and retry with backoff. If the service still can't be
+// reached, we AUTOMATICALLY fall back to a straight-line circular catchment so
+// the analysis always proceeds — the returned feature is tagged
+// properties._approx = true so the UI can flag it as approximate.
 async function fetchIsochrone(lng, lat, mode, minutes) {
   const body = {
     locations: [{ lat, lon: lng }],
@@ -4937,7 +4927,6 @@ async function fetchIsochrone(lng, lat, mode, minutes) {
   const attempts = 3;
   let lastErr = null;
   for (let i = 0; i < attempts; i++) {
-    // Per-attempt timeout so a hung request doesn't block forever.
     const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
     const timer = ctrl ? setTimeout(() => ctrl.abort(), 12000) : null;
     try {
@@ -4946,37 +4935,43 @@ async function fetchIsochrone(lng, lat, mode, minutes) {
         signal: ctrl ? ctrl.signal : undefined,
       });
       if (timer) clearTimeout(timer);
-      if (r.status === 429) throw new Error("rate-limited");   // back off and retry
+      if (r.status === 429) throw new Error("rate-limited");
       if (!r.ok) throw new Error(`Valhalla HTTP ${r.status}`);
       const gj = r.json ? await r.json() : null;
       const feats = (gj && gj.features) || [];
       const poly = feats.find(f => f.geometry &&
         (f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon"));
-      return poly || null;
+      if (poly) return poly;                       // success — real street-network isochrone
+      throw new Error("no polygon in response");
     } catch (e) {
       if (timer) clearTimeout(timer);
       lastErr = e;
       dbg("isochrone attempt", i + 1, "failed:", e.message);
-      // Don't retry a clear client error (4xx other than 429).
-      if (/HTTP 4(?!29)/.test(e.message)) break;
-      if (i < attempts - 1) await sleep(700 * (i + 1));   // 0.7s, 1.4s backoff
+      if (/HTTP 4(?!29)/.test(e.message)) break;   // don't retry a real client error
+      if (i < attempts - 1) await sleep(700 * (i + 1));
     }
   }
-  // Normalise the common opaque network error into something friendlier.
-  const msg = lastErr && /Failed to fetch|NetworkError|aborted|rate-limited/i.test(lastErr.message)
-    ? "routing service busy" : (lastErr ? lastErr.message : "unknown error");
-  const err = new Error(msg);
-  err.canFallback = true;   // signal callers that a circular approximation is possible
+
+  // Routing unavailable after retries → automatic circular fallback so the
+  // analysis still runs. Tagged approximate; callers surface a quiet notice.
+  dbg("isochrone falling back to circular catchment:", lastErr && lastErr.message);
+  const circ = circularCatchment(lng, lat, minutes);
+  if (circ) {
+    circ.properties = circ.properties || {};
+    circ.properties._approx = true;
+    return circ;
+  }
+  // Only if even the fallback can't be built (turf missing) do we fail.
+  const err = new Error(lastErr ? lastErr.message : "unknown error");
   throw err;
 }
 
-// Last-resort fallback when the routing service can't be reached: a straight-
-// line circular catchment using an average walk speed (~4.8 km/h => 80 m/min).
-// Clearly an approximation (ignores the street network), but lets analysis
-// proceed rather than dead-ending. Returns a GeoJSON polygon Feature or null.
+// Circular catchment: a straight-line approximation using an average walk speed
+// (~4.8 km/h ≈ 80 m/min). Ignores the street network, so it overstates reach a
+// little, but lets analysis proceed when routing is down. GeoJSON polygon or null.
 function circularCatchment(lng, lat, minutes) {
   if (!window.turf) return null;
-  const radiusKm = (minutes * 80) / 1000;   // metres → km
+  const radiusKm = (minutes * 80) / 1000;
   try {
     return turf.circle([lng, lat], radiusKm, { units: "kilometers", steps: 48 });
   } catch (_) { return null; }
@@ -5008,12 +5003,13 @@ async function runPlotDeepDive() {
     return;
   }
   if (!catchment) { setPlotStatus("No isochrone returned for that point."); return; }
-  setPlotStatus("");
+  const approx = !!(catchment.properties && catchment.properties._approx);
+  setPlotStatus(approx ? "Routing busy — used an approximate circular catchment." : "");
 
   const { domains, parts } = areaWeightedScore(catchment);
   runDeepDive(catchment, {
     eyebrow: "Isochrone deep dive",
-    title: `${plot.minutes}-min ${modeLabel.toLowerCase()}`,
+    title: `${plot.minutes}-min ${modeLabel.toLowerCase()}${approx ? " (approx.)" : ""}`,
     subtitle: parts ? `Area-weighted across ${parts} LSOA${parts === 1 ? "" : "s"}` : "Catchment analysis",
     domains,                      // per-domain averages → live re-weighting + breakdown
     scoreCaption: "Area-weighted deprivation · weighted",
