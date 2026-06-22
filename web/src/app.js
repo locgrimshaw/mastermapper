@@ -238,6 +238,11 @@ function fillColorExpression() {
 
 // ---- Map ------------------------------------------------------------------
 
+// Debug flag (set by ?debug in the URL). When on, key interaction steps log to
+// the console so touch problems are diagnosable on a phone with no computer.
+const DEBUG = (typeof location !== "undefined") && location.search.indexOf("debug") !== -1;
+function dbg(...args) { if (DEBUG) console.log("[mm]", ...args); }
+
 const map = new maplibregl.Map({
   container: "map",
   style: {
@@ -299,6 +304,21 @@ const map = new maplibregl.Map({
 window.addEventListener("error", (e) => {
   console.error("[uncaught]", e.message, "at", e.filename + ":" + e.lineno);
 });
+
+// Raw DOM-level probe (debug only): listens directly on the map canvas,
+// bypassing MapLibre's gesture system. If these fire on a tap but the MapLibre
+// "map click fired" log does NOT, the problem is inside MapLibre's gesture
+// handling (the Draw touch bug). If even these don't fire, something is
+// covering the canvas / swallowing the tap before it reaches the map.
+if (DEBUG) {
+  map.on("load", () => {
+    const c = map.getCanvas();
+    ["touchstart", "touchend", "click", "pointerup"].forEach(type => {
+      c.addEventListener(type, () => dbg("RAW canvas", type), { passive: true });
+    });
+    dbg("raw canvas probes attached");
+  });
+}
 
 const draw = new MapboxDraw({
   displayControlsDefault: false,
@@ -1268,6 +1288,8 @@ function wireInteractions() {
   // coinciding with tile-based rail stops on the live map. Registered FIRST so
   // it runs before the lsoa-fill / rail-stop handlers in the same click cycle.
   map.on("click", (e) => {
+    dbg("map click fired at", e.point && [Math.round(e.point.x), Math.round(e.point.y)],
+        "hasStations=", state.hasStations, "stationsVisible=", state.stationsVisible);
     if (!state.hasStations || !map.getLayer("station-dot")) return;
     if (state.stationsVisible === false) return;
     if (state.plotPointMode) return;            // a click is meant to drop a point
