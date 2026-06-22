@@ -1280,6 +1280,63 @@ function closeDetail() {
 
 // ---- Hover popup ----------------------------------------------------------
 
+// Within an open deep dive, resolve a tap to a detail-layer feature (brownfield
+// site, amenity, or crime point) and show its popup. Returns true if something
+// was hit. Used by the unified tap dispatcher so these work on touch (their
+// original layer-specific click handlers don't fire on touchscreens).
+function tapDeepDiveLayers(point, box, nearest, coarse) {
+  const q = (id) => {
+    if (!map.getLayer(id)) return null;
+    try { const h = map.queryRenderedFeatures(box, { layers: [id] }); return h && h.length ? h : null; }
+    catch (_) { return null; }
+  };
+
+  // 1. Brownfield sites (the actionable supply) — polygon fill then point dots.
+  for (const id of ["brownfield-pt-dot", "brownfield-poly-fill"]) {
+    const hits = q(id);
+    if (hits) {
+      const f = id.endsWith("-dot") ? nearest(hits) : hits[0];
+      const ll = f.geometry && f.geometry.type === "Point"
+        ? { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
+        : map.unproject([point.x, point.y]);
+      openClickPopup({ offset: 12, maxWidth: "300px", closeButton: true, closeOnClick: true, className: "bf-popup" },
+        ll, brownfieldPopupHTML(f.properties));
+      return true;
+    }
+  }
+
+  // 2. Amenities — any enabled kind's dot/symbol layer.
+  for (const a of AMENITY_KINDS) {
+    const hits = q(`amenity-${a.kind}-dot`);
+    if (hits) {
+      const f = nearest(hits);
+      const pr = f.properties;
+      const ll = f.geometry && f.geometry.coordinates
+        ? { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
+        : map.unproject([point.x, point.y]);
+      openClickPopup({ offset: 8 }, ll, `<strong>${pr.name}</strong><br>${pr.sub || a.label}`);
+      return true;
+    }
+  }
+
+  // 3. Crime points.
+  const crime = q("crime-dot");
+  if (crime) {
+    const f = nearest(crime);
+    const pr = f.properties;
+    const ll = f.geometry && f.geometry.coordinates
+      ? { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
+      : map.unproject([point.x, point.y]);
+    openClickPopup({ offset: 8 }, ll,
+      `<strong>${pr.count} crime${pr.count == 1 ? "" : "s"}</strong>` +
+      (pr.street ? `<br>${pr.street}` : "") +
+      (pr.breakdown ? `<br><span style="font-size:11px;text-transform:capitalize">${pr.breakdown}</span>` : ""));
+    return true;
+  }
+
+  return false;
+}
+
 function wireInteractions() {
   // --- Station click (highest priority) ------------------------------------
   // Handled centrally rather than as a layer-specific handler: query for a
@@ -1317,6 +1374,13 @@ function wireInteractions() {
       }
       return best;
     };
+
+    // When a deep dive is open, taps select the detail layers inside it —
+    // brownfield sites, amenities, crime — and show their popups. These run via
+    // the dispatcher (not layer-specific click handlers) so they work on touch.
+    if (deep.active) {
+      if (tapDeepDiveLayers(point, box, nearest, coarse)) return true;
+    }
 
     // 1. Station dot (rich card) — highest priority.
     if (state.hasStations && state.stationsVisible !== false && map.getLayer("station-dot")) {
@@ -1723,12 +1787,25 @@ async function profileStation(p, point) {
   const minutes = STATION_WALK_MINUTES;
   setStationProfileBtn("Building catchment…", true);
   let catchment;
+  let approx = false;
   try {
     catchment = await fetchIsochrone(coords[0], coords[1], "pedestrian", minutes);
   } catch (e) {
-    setStationProfileBtn("Profile this station →", false);
-    alert(`Couldn't build the station catchment (${e.message}).`);
-    return;
+    // Routing unavailable — offer a circular approximation so the user isn't
+    // dead-ended. They opt in so it's clear the catchment is approximate.
+    const fallback = e.canFallback ? circularCatchment(coords[0], coords[1], minutes) : null;
+    if (fallback && confirm(
+        `The routing service is busy, so an exact walk catchment isn't available right now.\n\n` +
+        `Use an approximate circular ${minutes}-minute catchment instead? ` +
+        `(Straight-line distance, ignores the street network — figures will be indicative.)`)) {
+      catchment = fallback;
+      approx = true;
+    } else {
+      setStationProfileBtn("Profile this station →", false);
+      alert(`Couldn't build the station catchment — ${e.message}. ` +
+        `This uses a free public routing service that occasionally rate-limits; please wait a few seconds and try again.`);
+      return;
+    }
   }
   if (!catchment) {
     setStationProfileBtn("Profile this station →", false);
@@ -1748,7 +1825,7 @@ async function profileStation(p, point) {
   runDeepDive(catchment, {
     eyebrow: "Station profile",
     title: station.name || "Station",
-    subtitle: `${minutes}-min walk catchment${parts ? ` · ${parts} LSOA${parts === 1 ? "" : "s"}` : ""}`,
+    subtitle: `${minutes}-min ${approx ? "circular (approx.)" : "walk"} catchment${parts ? ` · ${parts} LSOA${parts === 1 ? "" : "s"}` : ""}`,
     domains,
     scoreCaption: "Catchment deprivation · weighted",
     station: {
@@ -2759,12 +2836,8 @@ async function renderAmenityLayer(kind) {
     });
   }
 
-  // Tap an amenity for its name + subtype.
-  map.on("click", layerId, (e) => {
-    const pr = e.features[0].properties;
-    openClickPopup({ offset: 8 }, e.lngLat,
-      `<strong>${pr.name}</strong><br>${pr.sub || meta.label}`);
-  });
+  // (Amenity taps are handled by the unified handleMapTap dispatcher, so they
+  // work on touch as well as desktop — no layer-specific click handler here.)
 }
 
 // SVG marker images for amenity symbol layers, keyed by icon name. Each is a
@@ -2931,14 +3004,10 @@ function renderBrownfieldLayer() {
     });
   }
 
-  // Click any brownfield feature -> detail card (tracked popup so it clears).
-  const onClick = (e) => {
-    const pr = e.features[0].properties;
-    openClickPopup({ offset: 12, maxWidth: "300px", closeButton: true, closeOnClick: true, className: "bf-popup" }, e.lngLat, brownfieldPopupHTML(pr));
-  };
+  // Brownfield taps are handled by the unified handleMapTap dispatcher (works
+  // on touch + desktop); here we only set the hover cursor on desktop.
   for (const id of ["brownfield-poly-fill", "brownfield-pt-dot"]) {
     if (map.getLayer(id)) {
-      map.on("click", id, onClick);
       map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
     }
@@ -3386,14 +3455,7 @@ function renderCrimeLayer(crimes) {
       },
     });
 
-    map.on("click", "crime-dot", (e) => {
-      const pr = e.features[0].properties;
-      openClickPopup({ offset: 8 }, e.lngLat,
-        `<strong>${pr.count} crime${pr.count == 1 ? "" : "s"}</strong>` +
-        (pr.street ? `<br>${pr.street}` : "") +
-        (pr.breakdown ? `<br><span style="font-size:11px;text-transform:capitalize">${pr.breakdown}</span>` : "")
-      );
-    });
+    // (Crime taps handled by the unified handleMapTap dispatcher — touch + desktop.)
   }
 }
 
@@ -4856,6 +4918,12 @@ function combinedScoreFromDomains(domains, weights) {
 
 // Build an isochrone polygon from a point via the public Valhalla server.
 // Returns a GeoJSON Feature (Polygon) or null. No API key needed.
+//
+// The FOSSGIS demo server is free and shared, with a fair-usage rate limit, so
+// transient drops show up in the browser as "Failed to fetch" (a network-level
+// failure with no status). We therefore: send the X-Client-Id header they ask
+// of apps, apply a timeout, and retry a couple of times with backoff so a brief
+// blip doesn't surface as a hard error to the user.
 async function fetchIsochrone(lng, lat, mode, minutes) {
   const body = {
     locations: [{ lat, lon: lng }],
@@ -4865,14 +4933,53 @@ async function fetchIsochrone(lng, lat, mode, minutes) {
   };
   const url = "https://valhalla1.openstreetmap.de/isochrone?json=" +
     encodeURIComponent(JSON.stringify(body));
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`Valhalla HTTP ${r.status}`);
-  const gj = r.json ? await r.json() : null;
-  // Valhalla returns a FeatureCollection of contour polygons/linestrings.
-  const feats = (gj && gj.features) || [];
-  const poly = feats.find(f => f.geometry &&
-    (f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon"));
-  return poly || null;
+
+  const attempts = 3;
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    // Per-attempt timeout so a hung request doesn't block forever.
+    const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 12000) : null;
+    try {
+      const r = await fetch(url, {
+        headers: { "X-Client-Id": "mastermapper.github" },
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+      if (timer) clearTimeout(timer);
+      if (r.status === 429) throw new Error("rate-limited");   // back off and retry
+      if (!r.ok) throw new Error(`Valhalla HTTP ${r.status}`);
+      const gj = r.json ? await r.json() : null;
+      const feats = (gj && gj.features) || [];
+      const poly = feats.find(f => f.geometry &&
+        (f.geometry.type === "Polygon" || f.geometry.type === "MultiPolygon"));
+      return poly || null;
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      lastErr = e;
+      dbg("isochrone attempt", i + 1, "failed:", e.message);
+      // Don't retry a clear client error (4xx other than 429).
+      if (/HTTP 4(?!29)/.test(e.message)) break;
+      if (i < attempts - 1) await sleep(700 * (i + 1));   // 0.7s, 1.4s backoff
+    }
+  }
+  // Normalise the common opaque network error into something friendlier.
+  const msg = lastErr && /Failed to fetch|NetworkError|aborted|rate-limited/i.test(lastErr.message)
+    ? "routing service busy" : (lastErr ? lastErr.message : "unknown error");
+  const err = new Error(msg);
+  err.canFallback = true;   // signal callers that a circular approximation is possible
+  throw err;
+}
+
+// Last-resort fallback when the routing service can't be reached: a straight-
+// line circular catchment using an average walk speed (~4.8 km/h => 80 m/min).
+// Clearly an approximation (ignores the street network), but lets analysis
+// proceed rather than dead-ending. Returns a GeoJSON polygon Feature or null.
+function circularCatchment(lng, lat, minutes) {
+  if (!window.turf) return null;
+  const radiusKm = (minutes * 80) / 1000;   // metres → km
+  try {
+    return turf.circle([lng, lat], radiusKm, { units: "kilometers", steps: 48 });
+  } catch (_) { return null; }
 }
 
 // Given the defining geometry (point or plot) and the iso settings, build the
@@ -4897,7 +5004,7 @@ async function runPlotDeepDive() {
   try {
     catchment = await fetchIsochrone(lng, lat, plot.mode, plot.minutes);
   } catch (e) {
-    setPlotStatus(`Couldn't build isochrone (${e.message}). Try again or a different point.`);
+    setPlotStatus(`Couldn't build isochrone — ${e.message}. The free routing service may be busy; wait a few seconds and try again.`);
     return;
   }
   if (!catchment) { setPlotStatus("No isochrone returned for that point."); return; }
