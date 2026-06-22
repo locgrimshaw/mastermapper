@@ -1287,45 +1287,124 @@ function wireInteractions() {
   // and stop. This is robust to layer ordering and to the station dots
   // coinciding with tile-based rail stops on the live map. Registered FIRST so
   // it runs before the lsoa-fill / rail-stop handlers in the same click cycle.
-  map.on("click", (e) => {
-    dbg("map click fired at", e.point && [Math.round(e.point.x), Math.round(e.point.y)],
-        "hasStations=", state.hasStations, "stationsVisible=", state.stationsVisible);
-    if (!state.hasStations || !map.getLayer("station-dot")) return;
-    if (state.stationsVisible === false) return;
-    if (state.plotPointMode) return;            // a click is meant to drop a point
-    // Query a small box around the click (not a single pixel) so taps near a
-    // station dot still register — single-pixel hit-testing misses small dots,
-    // which is why clicks were falling through to the rail-stop card.
-    // Bigger hit box on touch — a finger tap is far less precise than a mouse
-    // click, so a small station dot is easy to miss with a tight tolerance.
-    const tol = (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) ? 16 : 8;
-    const box = [
-      [e.point.x - tol, e.point.y - tol],
-      [e.point.x + tol, e.point.y + tol],
-    ];
-    let hits;
+  // --- Unified tap handling -------------------------------------------------
+  // On touch devices MapLibre often does NOT synthesise a `click` from a tap
+  // (it consumes the touch as a potential drag/pinch gesture), so relying on
+  // map.on("click") leaves mobile completely unable to select anything — even
+  // though pan/zoom work. We instead run ALL feature selection through one
+  // dispatcher, driven by map.on("click") on desktop AND by our own tap
+  // detector on the canvas for touch. The dispatcher resolves the priority
+  // chain: station dot → rail stop → LSOA zone.
+  function handleMapTap(point, lngLat) {
+    dbg("handleMapTap", [Math.round(point.x), Math.round(point.y)]);
+    if (state.plotPointMode) return false;       // taps are for dropping a point
     try {
-      hits = map.queryRenderedFeatures(box, { layers: ["station-dot"] });
-    } catch (_) { hits = null; }
-    if (hits && hits.length) {
-      // Pick the station nearest the actual click point (box may catch a few).
+      const m = draw.getMode && draw.getMode();
+      if (m && m !== "simple_select" && m !== "static") return false;  // mid-draw
+    } catch (_) {}
+
+    const coarse = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+    const tol = coarse ? 16 : 8;
+    const box = [[point.x - tol, point.y - tol], [point.x + tol, point.y + tol]];
+    const nearest = (hits) => {
       let best = hits[0], bestD = Infinity;
       for (const h of hits) {
         const c = h.geometry && h.geometry.coordinates;
         if (!c) continue;
         const p = map.project(c);
-        const d = (p.x - e.point.x) ** 2 + (p.y - e.point.y) ** 2;
+        const d = (p.x - point.x) ** 2 + (p.y - point.y) ** 2;
         if (d < bestD) { bestD = d; best = h; }
       }
-      window._stopClickGuard = true;            // suppress the lsoa-fill handler
-      inspectStation(best.properties, e.point);
-      setDrawer(false);
-      // The lsoa-fill handler consumes the guard in the same click cycle; if no
-      // LSOA is under the click (data edge), clear it next tick so it can't
-      // swallow a later, legitimate click.
-      setTimeout(() => { window._stopClickGuard = false; }, 0);
+      return best;
+    };
+
+    // 1. Station dot (rich card) — highest priority.
+    if (state.hasStations && state.stationsVisible !== false && map.getLayer("station-dot")) {
+      let hits = null;
+      try { hits = map.queryRenderedFeatures(box, { layers: ["station-dot"] }); } catch (_) {}
+      if (hits && hits.length) {
+        dbg("tap → station", hits.length);
+        inspectStation(nearest(hits).properties, point);
+        setDrawer(false);
+        return true;
+      }
     }
+
+    // 2. Rail stop — upgrade to station card if we can match it, else stop card.
+    if (state.hasRail && map.getLayer("rail-stop")) {
+      let hits = null;
+      try { hits = map.queryRenderedFeatures(box, { layers: ["rail-stop"] }); } catch (_) {}
+      if (hits && hits.length) {
+        const props = nearest(hits).properties;
+        dbg("tap → rail-stop", props.name);
+        if (state.hasStations) {
+          const station = findStationForStop(props);
+          if (station) { inspectStation(station.properties, point); setDrawer(false); return true; }
+        }
+        inspectStop(props, point);
+        setDrawer(false);
+        return true;
+      }
+    }
+
+    // 3. LSOA zone — unless a deep dive is open (you're working inside one).
+    if (!deep.active && map.getLayer("lsoa-fill")) {
+      let hits = null;
+      try { hits = map.queryRenderedFeatures(box, { layers: ["lsoa-fill"] }); } catch (_) {}
+      if (hits && hits.length) {
+        dbg("tap → lsoa zone");
+        inspectLSOA(hits[0].properties, point);
+        setDrawer(false);
+        return true;
+      }
+    }
+    dbg("tap → nothing hit");
+    return false;
+  }
+
+  // Desktop: MapLibre's click works fine, route it through the dispatcher.
+  map.on("click", (e) => {
+    dbg("map click fired");
+    handleMapTap(e.point, e.lngLat);
   });
+
+  // Touch: detect a genuine tap (touchstart→touchend with little movement and
+  // a single finger) directly on the canvas, since MapLibre may not emit click.
+  (function wireTouchTap() {
+    const canvas = map.getCanvas();
+    let sx = 0, sy = 0, st = 0, moved = false, multi = false;
+    canvas.addEventListener("touchstart", (ev) => {
+      if (ev.touches.length > 1) { multi = true; return; }
+      multi = false; moved = false;
+      const t = ev.touches[0];
+      sx = t.clientX; sy = t.clientY; st = Date.now();
+    }, { passive: true });
+    canvas.addEventListener("touchmove", (ev) => {
+      if (multi) return;
+      const t = ev.touches[0];
+      if (Math.abs(t.clientX - sx) > 12 || Math.abs(t.clientY - sy) > 12) moved = true;
+    }, { passive: true });
+    canvas.addEventListener("touchend", (ev) => {
+      if (multi || moved) return;                 // a drag/pinch, not a tap
+      if (Date.now() - st > 700) return;          // a long-press, not a tap
+      const rect = canvas.getBoundingClientRect();
+      // Use the changedTouch position (the finger that lifted).
+      const ct = ev.changedTouches && ev.changedTouches[0];
+      const cx = (ct ? ct.clientX : sx) - rect.left;
+      const cy = (ct ? ct.clientY : sy) - rect.top;
+      const point = { x: cx, y: cy };
+      let lngLat = null;
+      try { lngLat = map.unproject([cx, cy]); } catch (_) {}
+      dbg("touch tap detected", [Math.round(cx), Math.round(cy)]);
+      // Plot-point mode: drop the point here (the click-based handler won't
+      // fire on touch). Mirror the desktop behaviour.
+      if (state.plotPointMode && lngLat) {
+        dropPlotPoint(lngLat);
+        return;
+      }
+      handleMapTap(point, lngLat);
+    }, { passive: true });
+  })();
 
   const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
   map.on("mousemove", "lsoa-fill", (e) => {
@@ -1344,23 +1423,7 @@ function wireInteractions() {
     popup.remove();
   });
 
-  // Click a single area to pin its full breakdown. Several cases must NOT open
-  // the zone panel:
-  //   - a deep dive is open (you're working inside a catchment, not picking a zone)
-  //   - we're dropping a point or drawing a plot (clicks are for that)
-  //   - the draw tool is in any non-simple mode (mid-draw)
-  //   - the same tap also hit a rail stop (stop panel wins)
-  map.on("click", "lsoa-fill", (e) => {
-    if (window._stopClickGuard) { window._stopClickGuard = false; return; }
-    if (deep.active) return;
-    if (state.plotPointMode) return;
-    try {
-      const m = draw.getMode && draw.getMode();
-      if (m && m !== "simple_select" && m !== "static") return;
-    } catch (_) {}
-    inspectLSOA(e.features[0].properties, e.point);
-    setDrawer(false);   // on mobile, reveal the map result
-  });
+  // (LSOA zone clicks are handled by the unified handleMapTap dispatcher above.)
 
   map.on("draw.create", onDrawChange);
   map.on("draw.update", onDrawChange);
@@ -1389,30 +1452,7 @@ function wireInteractions() {
       map.getCanvas().style.cursor = "";
       stopPopup.remove();
     });
-
-    // Click a stop -> pin its details. But if the station-usage layer is on and
-    // a station dot sits under the same click (heavy-rail stops coincide with
-    // station dots), let the station card win — it has usage + the profile
-    // button. We check by querying station-dot features at the click point.
-    map.on("click", "rail-stop", (e) => {
-      const props = e.features[0].properties;
-      // If we have station-usage data, a click on a heavy-rail stop should show
-      // the RICH station card, not the plain stop card. Try to match the stop
-      // to a station by CRS (the reliable key) or by name, and upgrade.
-      if (state.hasStations) {
-        const station = findStationForStop(props);
-        if (station) {
-          window._stopClickGuard = true;
-          inspectStation(station.properties, e.point);
-          setDrawer(false);
-          setTimeout(() => { window._stopClickGuard = false; }, 0);
-          return;
-        }
-      }
-      window._stopClickGuard = true;
-      inspectStop(e.features[0].properties, e.point);
-      setDrawer(false);
-    });
+    // (Rail-stop clicks are handled by the unified handleMapTap dispatcher.)
   }
 }
 
@@ -4878,6 +4918,24 @@ function setPlotStatus(msg) {
   if (el) el.textContent = msg || "";
 }
 
+// Set the plot origin point at a lng/lat. Shared by the desktop click handler
+// and the touch-tap handler (MapLibre's click doesn't fire on touch).
+function dropPlotPoint(lngLat) {
+  state.plotPointMode = false;
+  map.getCanvas().style.cursor = "";
+  plot.geometry = { type: "Point", coordinates: [lngLat.lng, lngLat.lat] };
+  const data = { type: "FeatureCollection", features: [{ type: "Feature", geometry: plot.geometry, properties: {} }] };
+  if (map.getSource("plot-point-src")) map.getSource("plot-point-src").setData(data);
+  else {
+    map.addSource("plot-point-src", { type: "geojson", data });
+    map.addLayer({
+      id: "plot-point-dot", type: "circle", source: "plot-point-src",
+      paint: { "circle-radius": 7, "circle-color": "#111", "circle-stroke-color": "#fff", "circle-stroke-width": 2 },
+    });
+  }
+  setPlotStatus("Point set. Choose mode/time, then build the catchment.");
+}
+
 // ---- Boot -----------------------------------------------------------------
 
 // Reflect the default theme onto <body> immediately so the UI starts in the
@@ -4943,19 +5001,7 @@ function setDrawer(open) {
 
   map.on("click", (e) => {
     if (!state.plotPointMode) return;
-    state.plotPointMode = false;
-    map.getCanvas().style.cursor = "";
-    plot.geometry = { type: "Point", coordinates: [e.lngLat.lng, e.lngLat.lat] };
-    const data = { type: "FeatureCollection", features: [{ type: "Feature", geometry: plot.geometry, properties: {} }] };
-    if (map.getSource("plot-point-src")) map.getSource("plot-point-src").setData(data);
-    else {
-      map.addSource("plot-point-src", { type: "geojson", data });
-      map.addLayer({
-        id: "plot-point-dot", type: "circle", source: "plot-point-src",
-        paint: { "circle-radius": 7, "circle-color": "#111", "circle-stroke-color": "#fff", "circle-stroke-width": 2 },
-      });
-    }
-    setPlotStatus("Point set. Choose mode/time, then build the catchment.");
+    dropPlotPoint(e.lngLat);
   });
 
   // Draw a plot: clear any existing, then start the polygon tool.
