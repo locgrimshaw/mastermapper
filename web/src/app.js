@@ -157,6 +157,12 @@ const state = {
   stationsVisible: true, // whether the station layer is shown
   stationsMeta: null,    // { latest_year, count, ... } from stations.geojson
   selectedStation: null, // station props pinned in the floating card
+  // Catchment method for station/plot deep dives:
+  //   "circle"    — instant straight-line approximation (no network). DEFAULT,
+  //                 because the public Valhalla routing server is unreliable.
+  //   "isochrone" — accurate street-network walk time via Valhalla (slower,
+  //                 depends on the free service being up).
+  catchmentMethod: "circle",
 };
 
 // Heavy-rail station layer styling. Distinct from the transit-overlay rail
@@ -767,6 +773,25 @@ function setRailModeVisibility(kind, mode, on) {
 
 // Station controls: a typeahead search over the loaded stations + a show/hide
 // toggle. Selecting a result flies to the station and opens its inspect card.
+// Switch the catchment method (circle vs walk-time isochrone) and reflect it in
+// the segmented toggle. Circle is instant + offline; isochrone needs the free
+// Valhalla routing service (currently unreliable, hence circle is the default).
+function setCatchmentMethod(method, silent) {
+  state.catchmentMethod = (method === "isochrone") ? "isochrone" : "circle";
+  const seg = document.getElementById("catch-method-seg");
+  if (seg) {
+    seg.querySelectorAll("button").forEach(b =>
+      b.classList.toggle("active", b.dataset.method === state.catchmentMethod));
+  }
+  const note = document.getElementById("catch-method-note");
+  if (note) {
+    note.textContent = state.catchmentMethod === "circle"
+      ? "Instant. Straight-line approx."
+      : "Accurate street network. Needs the routing service (may be slow/unavailable).";
+  }
+  if (!silent) dbg("catchment method →", state.catchmentMethod);
+}
+
 function buildStationControls() {
   const block = document.getElementById("station-block");
   if (!block) return;
@@ -790,6 +815,16 @@ function buildStationControls() {
   if (batchBtn && !batchBtn._wired) {
     batchBtn._wired = true;
     batchBtn.addEventListener("click", openBatchSetup);
+  }
+
+  const methodSeg = document.getElementById("catch-method-seg");
+  if (methodSeg && !methodSeg._wired) {
+    methodSeg._wired = true;
+    methodSeg.querySelectorAll("button").forEach(btn => {
+      btn.addEventListener("click", () => setCatchmentMethod(btn.dataset.method));
+    });
+    // Reflect the default state on first build.
+    setCatchmentMethod(state.catchmentMethod, true);
   }
 
   if (input && results) {
@@ -1799,7 +1834,7 @@ async function profileStation(p, point) {
     alert("No catchment returned for that station.");
     return;
   }
-  const approx = !!(catchment.properties && catchment.properties._approx);
+  const circle = !!(catchment.properties && (catchment.properties._circle || catchment.properties._approx));
 
   // Remember the origin so "nearest access" routes from the station itself.
   plot.geometry = { type: "Point", coordinates: coords };
@@ -1813,7 +1848,7 @@ async function profileStation(p, point) {
   runDeepDive(catchment, {
     eyebrow: "Station profile",
     title: station.name || "Station",
-    subtitle: `${minutes}-min ${approx ? "circular (approx.)" : "walk"} catchment${parts ? ` · ${parts} LSOA${parts === 1 ? "" : "s"}` : ""}`,
+    subtitle: `${minutes}-min ${circle ? "circular" : "walk"} catchment${parts ? ` · ${parts} LSOA${parts === 1 ? "" : "s"}` : ""}`,
     domains,
     scoreCaption: "Catchment deprivation · weighted",
     station: {
@@ -4915,6 +4950,14 @@ function combinedScoreFromDomains(domains, weights) {
 // the analysis always proceeds — the returned feature is tagged
 // properties._approx = true so the UI can flag it as approximate.
 async function fetchIsochrone(lng, lat, mode, minutes) {
+  // Circle method selected (the default): skip the network entirely and return
+  // an instant straight-line catchment. Tagged _circle so the UI can label it.
+  if (state.catchmentMethod === "circle") {
+    const circ = circularCatchment(lng, lat, minutes);
+    if (circ) { circ.properties = circ.properties || {}; circ.properties._circle = true; return circ; }
+    // If turf somehow isn't available, fall through to the network path.
+  }
+
   const body = {
     locations: [{ lat, lon: lng }],
     costing: mode,
@@ -5002,14 +5045,15 @@ async function runPlotDeepDive() {
     setPlotStatus(`Couldn't build isochrone — ${e.message}. The free routing service may be busy; wait a few seconds and try again.`);
     return;
   }
-  if (!catchment) { setPlotStatus("No isochrone returned for that point."); return; }
-  const approx = !!(catchment.properties && catchment.properties._approx);
-  setPlotStatus(approx ? "Routing busy — used an approximate circular catchment." : "");
+  if (!catchment) { setPlotStatus("No catchment returned for that point."); return; }
+  const circle = !!(catchment.properties && (catchment.properties._circle || catchment.properties._approx));
+  const fellBack = !!(catchment.properties && catchment.properties._approx);
+  setPlotStatus(fellBack ? "Routing busy — used an approximate circular catchment." : "");
 
   const { domains, parts } = areaWeightedScore(catchment);
   runDeepDive(catchment, {
-    eyebrow: "Isochrone deep dive",
-    title: `${plot.minutes}-min ${modeLabel.toLowerCase()}${approx ? " (approx.)" : ""}`,
+    eyebrow: circle ? "Circular catchment" : "Isochrone deep dive",
+    title: `${plot.minutes}-min ${circle ? "circular" : modeLabel.toLowerCase()}`,
     subtitle: parts ? `Area-weighted across ${parts} LSOA${parts === 1 ? "" : "s"}` : "Catchment analysis",
     domains,                      // per-domain averages → live re-weighting + breakdown
     scoreCaption: "Area-weighted deprivation · weighted",
