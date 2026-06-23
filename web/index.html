@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws4-iso-fallback" />
+  <link rel="stylesheet" href="src/styles.css?v=ws4-circle-default" />
 </head>
 <body>
   <div id="app">
@@ -87,6 +87,14 @@
           <span class="dd-label">Show stations on map</span>
           <span class="dd-stat" id="station-count-stat"></span>
         </label>
+        <div class="catch-method">
+          <span class="catch-method-label">Catchment</span>
+          <div class="catch-seg" id="catch-method-seg">
+            <button type="button" data-method="circle" class="active">Circle</button>
+            <button type="button" data-method="isochrone">Walk-time</button>
+          </div>
+          <span class="catch-method-note" id="catch-method-note">Instant. Straight-line approx.</span>
+        </div>
         <button type="button" id="batch-open-btn" class="batch-cta">⚡ Batch / pipeline analysis →</button>
       </section>
 
@@ -195,6 +203,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws4-iso-fallback"></script>
+  <script type="module" src="src/app.js?v=ws4-circle-default"></script>
 </body>
 </html>
