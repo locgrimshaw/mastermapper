@@ -73,6 +73,22 @@ POP_COUNT_CANDIDATES = [
     "Mid-2022 population", "Mid-year population", "Observation",
 ]
 
+# Existing households (≈ occupied dwellings) per LSOA. Source: ONS Census 2021
+# table TS041 "Number of households", at 2021 LSOA level (England & Wales, OGL).
+# Optional, like population: if absent the build runs without a households field
+# and the app hides the "existing homes" stats gracefully.
+HH_FILENAME = "lsoa_households.csv"
+HH_CODE_CANDIDATES = [
+    "LSOA 2021 Code", "LSOA code (2021)", "LSOA21CD", "lsoa_code", "Area code",
+    "geography code", "Geography code", "mnemonic",
+]
+HH_COUNT_CANDIDATES = [
+    # TS041 publishes a single observation column. The exact header varies by
+    # how it's exported (Nomis vs ONS table tool); accept the common spellings.
+    "Number of households", "Household count", "Households",
+    "Observation", "Count", "Value", "households", "household",
+]
+
 
 def district_from_lsoa_name(name):
     """LSOA names look like 'Camden 001A' — the district is everything before
@@ -151,6 +167,66 @@ def load_population(raw_dir: Path) -> pd.DataFrame | None:
     out["population"] = out["population"].round().astype(int)
     print(f"  population for {len(out)} LSOAs "
           f"(total {out['population'].sum():,})")
+    return out
+
+
+def load_households(raw_dir: Path) -> "pd.DataFrame | None":
+    """Load existing households (≈ occupied dwellings) by LSOA, if present.
+
+    Returns a DataFrame ['lsoa_code', 'households'] or None when the file is
+    absent. Mirrors load_population: sniffs the header row (Census/Nomis exports
+    often carry preamble rows) and accepts the common code/count spellings.
+    """
+    hh_path = raw_dir / HH_FILENAME
+    if not hh_path.exists():
+        print(f"  (no {HH_FILENAME} — building without households)")
+        return None
+
+    print(f"Reading household counts ({HH_FILENAME})...")
+
+    def _pick(cols, candidates):
+        lower = {c.lower().strip(): c for c in cols}
+        for cand in candidates:
+            if cand.lower() in lower:
+                return lower[cand.lower()]
+        return None
+
+    df = pd.read_csv(hh_path, dtype=str)
+    code_col = _pick(df.columns, HH_CODE_CANDIDATES)
+    count_col = _pick(df.columns, HH_COUNT_CANDIDATES)
+    if code_col is None or count_col is None:
+        for skip in range(1, 12):
+            try:
+                trial = pd.read_csv(hh_path, dtype=str, skiprows=skip)
+            except Exception:
+                continue
+            code_col = _pick(trial.columns, HH_CODE_CANDIDATES)
+            count_col = _pick(trial.columns, HH_COUNT_CANDIDATES)
+            if code_col and count_col:
+                df = trial
+                break
+
+    if code_col is None or count_col is None:
+        print("  WARNING: couldn't find LSOA-code / households columns in "
+              f"{HH_FILENAME}. Columns seen:\n   " + "\n   ".join(df.columns))
+        print("  Building without households.")
+        return None
+
+    out = df[[code_col, count_col]].rename(
+        columns={code_col: "lsoa_code", count_col: "households"}
+    )
+    out["lsoa_code"] = out["lsoa_code"].str.strip()
+    out["households"] = (
+        out["households"].astype(str).str.replace(",", "", regex=False)
+    )
+    out["households"] = pd.to_numeric(out["households"], errors="coerce")
+    out = out.dropna(subset=["lsoa_code", "households"])
+    out["households"] = out["households"].round().astype(int)
+    # Guard against a totals row (a national/regional aggregate sometimes rides
+    # along) by keeping only genuine LSOA codes (England 2021 LSOAs start E01).
+    out = out[out["lsoa_code"].str.match(r"^[EW]01", na=False)]
+    print(f"  households for {len(out)} LSOAs "
+          f"(total {out['households'].sum():,})")
     return out
 
 
@@ -309,6 +385,15 @@ def main() -> int:
         print(f"  population present on {n_pop}/{len(merged)} LSOAs")
         # GeoJSON/JS prefer a real number or null over NaN.
         merged["population"] = merged["population"].astype("Int64")
+
+    # Existing households (≈ occupied dwellings), optional layer. Left-join so
+    # LSOAs without a match carry null, which the frontend handles gracefully.
+    hh = load_households(RAW)
+    if hh is not None:
+        merged = merged.merge(hh, on="lsoa_code", how="left")
+        n_hh = merged["households"].notna().sum()
+        print(f"  households present on {n_hh}/{len(merged)} LSOAs")
+        merged["households"] = merged["households"].astype("Int64")
 
     # Keep close-up detail. Tiles (tippecanoe) already simplify per zoom level —
     # they keep full detail at the deepest zoom and simplify only the zoomed-out
