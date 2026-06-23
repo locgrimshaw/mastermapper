@@ -2638,6 +2638,12 @@ function exitDeepDive() {
   if (deep.prevView) {
     map.easeTo({ center: deep.prevView.center, zoom: deep.prevView.zoom, duration: 500 });
   }
+  // If we drilled in from a batch run, return to that dashboard instead of
+  // leaving the user stranded (they'd otherwise have to re-run the whole batch).
+  if (batch.returnAfterDeepDive) {
+    batch.returnAfterDeepDive = false;
+    reopenBatchResults();
+  }
 }
 
 // Remove EVERY map artifact a deep dive can create — amenity layers/sources,
@@ -3929,6 +3935,8 @@ const batch = {
   cancel: false,
   results: [],          // array of snapshot objects (same shape as shortlist)
   errors: [],           // { name, crs, reason }
+  scored: null,         // last ranked results (cached so the dashboard can reopen)
+  returnAfterDeepDive: false,  // true while drilled into a station FROM the batch
 };
 
 // --- Entry: open the setup sheet with three ways to choose stations ---------
@@ -4261,7 +4269,15 @@ function renderBatchProgress(done, total, currentName) {
 }
 
 // --- The results dashboard (the showpiece) ----------------------------------
-function renderBatchResults(results, errors) {
+// Reopen the dashboard from the cached scored results (no recompute). Used when
+// returning from a station drill-down so the batch isn't lost.
+function reopenBatchResults() {
+  if (batch.scored && batch.scored.length) {
+    renderBatchResults(batch.results, batch.errors, batch.scored);
+  }
+}
+
+function renderBatchResults(results, errors, preScored) {
   const el = document.getElementById("batch-results");
   if (!el) return;
   el.hidden = false;
@@ -4281,7 +4297,8 @@ function renderBatchResults(results, errors) {
   // only — the three signals stay separate in the display). Normalises each
   // signal 0-1 and weights need & supply highest (social-value lens), usage as
   // a supporting factor. Under-used + deprived + supply rises to the top.
-  const scored = results.map(r => {
+  // Reuse the cached scoring when reopening, so order/values stay identical.
+  const scored = preScored || results.map(r => {
     const needN = r.need == null ? 0 : clamp01(r.need / 100);
     const supplyN = r.supplyHomes == null ? 0 : clamp01(r.supplyHomes / SUPPLY_REF_HOMES);
     // Usage contributes INVERSELY for the "latent opportunity" reading: an
@@ -4290,6 +4307,7 @@ function renderBatchResults(results, errors) {
     const opp = Math.round((0.45 * needN + 0.40 * supplyN + 0.15 * usageHeadroom) * 100);
     return { ...r, opp, needN, supplyN, usageHeadroom };
   }).sort((a, b) => b.opp - a.opp);
+  batch.scored = scored;   // cache for reopening after a drill-down
 
   // Aggregate headline numbers.
   const totalHomes = scored.reduce((s, r) => s + (r.supplyHomes || 0), 0);
@@ -4374,15 +4392,23 @@ function renderBatchResults(results, errors) {
     el.querySelector("#batch-shortlist-all").textContent = `★ Added ${added}`;
   });
 
-  // Row click → close dash, fly to station, open its full deep dive.
+  // Drilling into a station from the batch: remember we came from the batch so
+  // the deep dive can offer "← Back to results" and reopen the dashboard on exit.
+  const drillInto = (key, name) => {
+    close();
+    batch.returnAfterDeepDive = true;
+    const feats = (state.stationsData && state.stationsData.features) || [];
+    const hit = feats.find(f => ((f.properties.crs || "").toUpperCase() === key) || f.properties.name === name);
+    if (hit) { state.selectedStation = hit.properties; profileStation(hit.properties, null); }
+    else { batch.returnAfterDeepDive = false; }
+  };
+
+  // Row click → open that station's full deep dive (keeps the batch to return to).
   el.querySelectorAll(".bl-row").forEach(row => {
     row.addEventListener("click", () => {
       const r = scored.find(x => x.key === row.dataset.key);
       if (!r) return;
-      close();
-      const feats = (state.stationsData && state.stationsData.features) || [];
-      const hit = feats.find(f => ((f.properties.crs || "").toUpperCase() === r.key) || f.properties.name === r.name);
-      if (hit) { state.selectedStation = hit.properties; profileStation(hit.properties, null); }
+      drillInto(r.key, r.name);
     });
   });
   el.querySelectorAll(".bl-row .bl-quad-dot, .batch-quad [data-key]").forEach(d => {
@@ -4390,10 +4416,7 @@ function renderBatchResults(results, errors) {
       ev.stopPropagation();
       const k = d.getAttribute("data-key");
       const r = scored.find(x => x.key === k); if (!r) return;
-      close();
-      const feats = (state.stationsData && state.stationsData.features) || [];
-      const hit = feats.find(f => ((f.properties.crs || "").toUpperCase() === k) || f.properties.name === r.name);
-      if (hit) { state.selectedStation = hit.properties; profileStation(hit.properties, null); }
+      drillInto(k, r.name);
     });
   });
 
@@ -4535,7 +4558,9 @@ function buildDeepDivePanel(meta) {
     `<p class="hint" style="margin-top:10px">Connect Supabase (see config.js) to load amenity layers.</p>`;
 
   const panel = document.getElementById("deepdive-panel");
+  const fromBatch = batch.returnAfterDeepDive;
   panel.innerHTML = `
+    ${fromBatch ? `<button class="dd-back" id="dd-back-batch" type="button">← Back to batch results</button>` : ""}
     <div class="dd-head">
       <div>
         <div class="dd-eyebrow">${meta.eyebrow || "Deep dive"}</div>
@@ -4664,6 +4689,8 @@ function buildDeepDivePanel(meta) {
 
   setDeepPanelOpen(true);
   panel.querySelector(".dd-close").addEventListener("click", exitDeepDive);
+  const backBtn = panel.querySelector("#dd-back-batch");
+  if (backBtn) backBtn.addEventListener("click", exitDeepDive);
   panel.querySelectorAll(".dd-block-head").forEach(head => {
     head.addEventListener("click", (e) => {
       if (e.target.closest(".dd-show-toggle")) return;
