@@ -825,6 +825,23 @@ footer {
 }
 .dd-close:hover { color: var(--text); background: var(--ink-line); }
 
+.dd-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent-dim, rgba(224,133,58,0.14));
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.dd-back:hover { background: var(--accent); color: #fff; }
+
 .dd-body {
   overflow-y: auto;
   padding: 4px 20px 24px;
