@@ -1690,3 +1690,46 @@ footer {
 .batch-quad-key { font-size: 11px; color: var(--text-dim); line-height: 1.45; margin: 10px 2px 0; }
 .batch-quad-key em { color: var(--accent); font-style: normal; }
 .batch-errs { margin-top: 16px; font-size: 11.5px; color: var(--text-dim); }
+
+/* ---- Catchment method toggle (circle vs walk-time isochrone) ------------- */
+.catch-method {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.catch-method-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.catch-seg {
+  display: inline-flex;
+  border: 1px solid var(--ink-line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ink-2);
+}
+.catch-seg button {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.catch-seg button + button { border-left: 1px solid var(--ink-line); }
+.catch-seg button.active {
+  background: var(--accent);
+  color: #fff;
+}
+.catch-seg button:not(.active):hover { color: var(--text); background: var(--ink-1); }
+.catch-method-note {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
