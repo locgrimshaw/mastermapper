@@ -2029,6 +2029,7 @@ const deep = {
   crimeVisible: true,    // whether crime layers are shown
   crimeData: null,       // cached 12-month crime array
   population: null,      // estimated resident population of the catchment
+  households: null,      // estimated existing households (≈ occupied dwellings)
   area_km2: null,        // catchment area in km²
   popPartial: false,    // true if some overlapping LSOAs lacked population
   counts: {},           // kind -> latest count in catchment (for density)
@@ -2149,12 +2150,16 @@ function buildStationSnapshot() {
     supplyHomes, supplySites, supplyPublic,
     // Context
     population: deep.population,
+    households: deep.households,            // existing homes baseline
     area_km2: deep.area_km2,
     interchanges: st.interchanges ?? null,
     season_share: st.season_share ?? null,
     usagePerResident: (usage != null && deep.population) ? usage / deep.population : null,
     upliftPeople,
     upliftPct: (upliftPeople != null && deep.population) ? (upliftPeople / deep.population) * 100 : null,
+    // Brownfield capacity as a % uplift on EXISTING homes — a stronger
+    // regeneration framing than population alone.
+    homesUpliftPct: (supplyHomes != null && deep.households) ? (supplyHomes / deep.households) * 100 : null,
     domains: deep.domains ? { ...deep.domains } : null,
     capturedAt: new Date().toISOString(),
   };
@@ -2228,6 +2233,7 @@ function runDeepDive(catchment, meta) {
   deep.crimeVisible = true;
   deep.crimeData = null;
   deep.population = null;
+  deep.households = null;
   deep.area_km2 = null;
   deep.popPartial = false;
   deep.counts = {};
@@ -2293,6 +2299,7 @@ async function autoLoadStationSupply() {
 function computeCatchmentPopulation() {
   const res = areaWeightedPopulation(deep.catchment);
   deep.population = res.population;
+  deep.households = res.households;
   deep.area_km2 = res.area_km2;
   deep.popPartial = res.partial;
   renderCatchmentStats();
@@ -2329,6 +2336,11 @@ function renderCatchmentStats() {
 
   popEl.textContent = deep.population == null ? "—" : fmtCount(deep.population);
   popEl.title = deep.population == null ? "" : deep.population.toLocaleString() + " residents (est.)";
+  const homesEl = document.getElementById("dd-homes-value");
+  if (homesEl) {
+    homesEl.textContent = deep.households == null ? "—" : fmtCount(deep.households);
+    homesEl.title = deep.households == null ? "" : deep.households.toLocaleString() + " existing households (est.)";
+  }
   if (areaEl) areaEl.textContent = fmtArea(deep.area_km2);
   const dens = densityPerKm2(deep.population, deep.area_km2);
   if (densEl) densEl.textContent = dens == null ? "—" : fmtCount(dens);
@@ -3581,8 +3593,13 @@ function renderStationSynthesis() {
     <div class="dd-eyebrow" style="margin-bottom:6px">Opportunity synthesis</div>
     <p class="syn-headline">${synthesisSentence(snap)}</p>
     ${triadHTML(snap)}
+    ${snap.households != null ? `
+      <p class="syn-uplift">This catchment has ~<strong>${snap.households.toLocaleString()}</strong> existing homes.
+        ${snap.supplyHomes ? `Brownfield capacity (~${snap.supplyHomes.toLocaleString()} homes) would be
+        ${snap.homesUpliftPct != null ? `a <strong>${snap.homesUpliftPct.toFixed(0)}%</strong> increase` : "an increase"}
+        on that stock.` : ""}</p>` : ""}
     ${snap.upliftPeople != null ? `
-      <p class="syn-uplift">Developing the catchment's brownfield capacity could add
+      <p class="syn-uplift">That capacity could add
         ~<strong>${snap.upliftPeople.toLocaleString()}</strong> residents
         ${snap.upliftPct != null ? `(<strong>${snap.upliftPct.toFixed(0)}%</strong> on current population)` : ""}
         at ${PEOPLE_PER_HOME} people/home.</p>` : ""}
@@ -3910,6 +3927,7 @@ function reportProfilePage(i, rank, esc) {
 
     <div class="p-grid">
       <div class="p-stat"><div class="p-stat-v">${i.population != null ? fmtCount(i.population) : "—"}</div><div class="p-stat-l">Catchment population</div></div>
+      <div class="p-stat"><div class="p-stat-v">${i.households != null ? fmtCount(i.households) : "—"}</div><div class="p-stat-l">Existing homes</div></div>
       <div class="p-stat"><div class="p-stat-v">${i.area_km2 != null ? i.area_km2.toFixed(2) + " km²" : "—"}</div><div class="p-stat-l">Catchment area</div></div>
       <div class="p-stat"><div class="p-stat-v">${i.usagePerResident != null ? i.usagePerResident.toFixed(0) : "—"}</div><div class="p-stat-l">Usage per resident</div></div>
       <div class="p-stat"><div class="p-stat-v">${i.season_share != null ? Math.round(i.season_share * 100) + "%" : "—"}</div><div class="p-stat-l">Season-ticket share</div></div>
@@ -4181,6 +4199,7 @@ async function profileStationHeadless(feature) {
   const supplyHomes = supply ? (Number(supply.dwellings_max_total) || 0) : null;
   const upliftPeople = supplyHomes != null ? Math.round(supplyHomes * PEOPLE_PER_HOME) : null;
   const population = popRes.population;
+  const households = popRes.households;
 
   return {
     key: (props.crs && props.crs.toUpperCase()) || props.name,
@@ -4197,6 +4216,7 @@ async function profileStationHeadless(feature) {
     supplySites: supply ? (Number(supply.n_sites) || 0) : null,
     supplyPublic: supply ? (Number(supply.n_public) || 0) : null,
     population,
+    households,
     area_km2: popRes.area_km2,
     parts,
     interchanges: props.interchanges != null && props.interchanges !== "" ? Number(props.interchanges) : null,
@@ -4204,6 +4224,7 @@ async function profileStationHeadless(feature) {
     usagePerResident: (usage != null && population) ? usage / population : null,
     upliftPeople,
     upliftPct: (upliftPeople != null && population) ? (upliftPeople / population) * 100 : null,
+    homesUpliftPct: (supplyHomes != null && households) ? (supplyHomes / households) * 100 : null,
     domains: domains ? { ...domains } : null,
     capturedAt: new Date().toISOString(),
   };
@@ -4600,6 +4621,10 @@ function buildDeepDivePanel(meta) {
               <div class="dd-stat-cap">Est. population</div>
             </div>
             <div class="dd-stat-cell">
+              <div class="dd-stat-num" id="dd-homes-value">—</div>
+              <div class="dd-stat-cap">Existing homes</div>
+            </div>
+            <div class="dd-stat-cell">
               <div class="dd-stat-num" id="dd-area-value">—</div>
               <div class="dd-stat-cap">Area</div>
             </div>
@@ -4891,7 +4916,7 @@ function areaWeightedScore(catchment) {
 // partial } where `partial` flags that some overlapping LSOAs lacked a
 // population value (so the figure is a floor, not exact).
 function areaWeightedPopulation(catchment) {
-  const out = { population: null, area_km2: null, parts: 0, partial: false };
+  const out = { population: null, households: null, area_km2: null, parts: 0, partial: false };
   if (!window.turf) return out;
 
   let area_m2 = 0;
@@ -4903,8 +4928,10 @@ function areaWeightedPopulation(catchment) {
 
   const seen = new Set();
   let pop = 0;
+  let hh = 0;
   let counted = 0;
   let missing = 0;
+  let hhCounted = 0;
   for (const f of feats) {
     const props = f.properties || {};
     const code = props.lsoa_code;
@@ -4928,6 +4955,11 @@ function areaWeightedPopulation(catchment) {
     if (lsoaPop == null || isNaN(lsoaPop)) { missing++; continue; }
     pop += Number(lsoaPop) * share;
     counted++;
+
+    // Existing households (same areal-weighting). Independent of population
+    // availability — an LSOA may carry one but not the other.
+    const lsoaHh = props.households;
+    if (lsoaHh != null && !isNaN(lsoaHh)) { hh += Number(lsoaHh) * share; hhCounted++; }
   }
 
   out.parts = counted + missing;
@@ -4935,6 +4967,7 @@ function areaWeightedPopulation(catchment) {
     out.population = Math.round(pop);
     out.partial = missing > 0;
   }
+  if (hhCounted > 0) out.households = Math.round(hh);
   return out;
 }
 
