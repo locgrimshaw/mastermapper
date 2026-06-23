@@ -73,6 +73,11 @@ def main():
             # dev (the choropleth cells here are equal-area, so population alone
             # drives the per-km² and per-1,000 figures).
             props["population"] = int(1100 + smooth_field(c, r, seed=400) * 2200)
+            # Synthetic existing households (≈ occupied dwellings). Real LSOAs
+            # average ~2.3 people per household, so derive from population with a
+            # little smooth variation in household size.
+            _hh_size = 2.1 + smooth_field(c, r, seed=450) * 0.5
+            props["households"] = int(props["population"] / _hh_size)
             features.append({
                 "type": "Feature",
                 "properties": props,
