@@ -42,6 +42,7 @@ KEEP_ATTRS = [
     "crime_norm", "housing_norm", "environment_norm",
     "price_norm", "price_median", "price_count",
     "population",   # resident population — drives catchment population + density
+    "households",   # existing households (≈ occupied dwellings) — existing-homes baseline
 ]
 
 
