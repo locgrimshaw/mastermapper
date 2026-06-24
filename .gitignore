@@ -53,4 +53,5 @@ venv/
 
 # Supabase loaders: large optional postcode-centroid lookup (download locally;
 # the loader also falls back to the postcodes.io API if this is absent).
-data/raw/postcodes.csv
+data/raw/postcodes.csvnode_modules/
+node_modules/
