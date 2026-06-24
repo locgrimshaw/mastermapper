@@ -1,0 +1,14 @@
+{
+  "name": "mastermapper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Social-value-led planning / site-identification map.",
+  "scripts": {
+    "start": "http-server web -p 8000 --cors -c-1",
+    "preview": "http-server web -p 8000 --cors -c-1",
+    "check": "node --check web/src/app.js"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}
