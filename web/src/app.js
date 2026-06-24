@@ -271,6 +271,7 @@ const map = new maplibregl.Map({
   // 8px is comfortable for fingers without making real drags feel sticky.
   clickTolerance: 8,
 });
+window.map = map;   // dev: expose for console debugging
 
 // --- Touch fix for mapbox-gl-draw on MapLibre --------------------------------
 // @mapbox/mapbox-gl-draw registers some listeners with a { passive: true }
@@ -537,8 +538,10 @@ async function loadData() {
 // the objects the station-led workflow profiles, so they're clickable and sit
 // above the transit overlay.
 function addStationLayer() {
-  if (map.getSource("stations")) return;
-  map.addSource("stations", { type: "geojson", data: state.stationsData });
+  if (map.getLayer("station-dot")) return;  // layers already present; nothing to do
+  if (!map.getSource("stations")) {
+    map.addSource("stations", { type: "geojson", data: state.stationsData });
+  }
 
   // Usage drives the radius. We interpolate on a sqrt-like set of stops so a
   // 10M-entry hub doesn't dwarf a 100k station into invisibility. Stations with
@@ -549,14 +552,23 @@ function addStationLayer() {
     "interpolate", ["linear"], ["coalesce", ["get", "usage"], 0],
     0, 3.4, 250000, 5, 1000000, 6.5, 5000000, 9, 20000000, 13,
   ];
-  const zoomFactor = ["interpolate", ["linear"], ["zoom"], 5, 0.6, 11, 1, 14, 1.25];
+  // NOTE: a ["zoom"] expression must be the TOP-LEVEL interpolate; it cannot be
+  // nested inside a ["*"] multiply. So zoom is the outer interpolate and each
+  // stop multiplies the usage curve (which keys on "usage", legal to nest) by a
+  // constant zoom factor.
+  const circleRadius = [
+    "interpolate", ["linear"], ["zoom"],
+    5,  ["*", usageRadius, 0.6],
+    11, ["*", usageRadius, 1.0],
+    14, ["*", usageRadius, 1.25],
+  ];
   map.addLayer({
     id: "station-dot",
     type: "circle",
     source: "stations",
     layout: { visibility: state.stationsVisible ? "visible" : "none" },
     paint: {
-      "circle-radius": ["*", usageRadius, zoomFactor],
+      "circle-radius": circleRadius,
       "circle-color": STATION_COLOR,
       "circle-opacity": 0.9,
       "circle-stroke-color": "#ffffff",
