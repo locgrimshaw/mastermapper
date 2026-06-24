@@ -1,0 +1,37 @@
+{
+  "name": "MasterMapper",
+  // Microsoft's universal image already includes Python 3, Node, and git, so
+  // the Codespace comes up fast and we don't maintain a custom Dockerfile.
+  "image": "mcr.microsoft.com/devcontainers/universal:2-linux",
+
+  "features": {
+    // Pin a modern Python; the universal image has it but this keeps it stable.
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    }
+  },
+
+  // Runs once when the Codespace is first created. Installs pandas first (fast,
+  // needed by most scripts), then the full requirements. The '|| true' means a
+  // geopandas wheel hiccup won't leave the Codespace in a failed state — you
+  // can finish the install manually if needed (see .devcontainer notes).
+  "postCreateCommand": "pip install --upgrade pip && pip install pandas && (pip install -r pipeline/requirements.txt || echo 'NOTE: full requirements install had an issue — run: pip install -r pipeline/requirements.txt')",
+
+  // Auto-forward the local preview server port and open it when it starts.
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "MasterMapper preview",
+      "onAutoForward": "openPreview"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  }
+}
