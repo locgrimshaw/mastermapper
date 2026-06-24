@@ -143,6 +143,16 @@ def make_sample_stations():
                 "region": regions[i % 4],
                 "quality": None,
                 "adjusted": (i % 5 == 0),
+                # Synthetic connectivity: trains/day loosely tracks usage so the
+                # dev Connectivity block + banding have plausible numbers.
+                "trains_per_day": int(20 + smooth_field(c, r, seed=800 + i) * 160),
+                "peak_trains": int(4 + smooth_field(c, r, seed=820 + i) * 30),
+                "first_dep": "05:%02d" % (10 + i % 40),
+                "last_dep": "23:%02d" % (10 + i % 45),
+                "direct_destinations": int(6 + smooth_field(c, r, seed=840 + i) * 60),
+                "key_cities_count": int(smooth_field(c, r, seed=860 + i) * 4),
+                "key_cities": (["London", "Birmingham", "Manchester", "Leeds"]
+                               [:int(smooth_field(c, r, seed=860 + i) * 4)]),
             },
         })
         rail_stops.append({
@@ -155,6 +165,10 @@ def make_sample_stations():
     ordered = sorted(stations, key=lambda f: f["properties"]["usage"])
     for rank, f in enumerate(ordered):
         f["properties"]["usage_pctile"] = round(rank / max(1, len(ordered) - 1) * 100, 1)
+    # Connectivity percentile (mirrors the real build) for banding.
+    ordered_c = sorted(stations, key=lambda f: f["properties"]["trains_per_day"])
+    for rank, f in enumerate(ordered_c):
+        f["properties"]["connectivity_pctile"] = round(rank / max(1, len(ordered_c) - 1) * 100, 1)
 
     stations_fc = {
         "type": "FeatureCollection",

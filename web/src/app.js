@@ -1512,7 +1512,7 @@ function wireInteractions() {
     map.getCanvas().style.cursor = "pointer";
     const detail = state.layer === "price"
       ? (p.price_median != null ? priceFmt(p.price_median) + " median" : "no sales")
-      : "combined " + p._combined.toFixed(0);
+      : "combined " + combinedScore(p, state.weights).toFixed(0);
     popup.setLngLat(e.lngLat)
       .setHTML(`${p.lsoa_code} · ${detail} · click to inspect`)
       .addTo(map);
@@ -1860,6 +1860,17 @@ async function profileStation(p, point) {
       region: station.region || null,
       quality: station.quality || null,
       adjusted: station.adjusted === true || station.adjusted === "true",
+      // Connectivity (GTFS-derived) — carried through so buildStationSnapshot
+      // can populate the Connectivity block. Coerce numeric fields from tile
+      // strings; key_cities may be an array or a "|"-joined string.
+      trains_per_day: station.trains_per_day != null && station.trains_per_day !== "" ? Number(station.trains_per_day) : null,
+      peak_trains: station.peak_trains != null && station.peak_trains !== "" ? Number(station.peak_trains) : null,
+      first_dep: station.first_dep || null,
+      last_dep: station.last_dep || null,
+      direct_destinations: station.direct_destinations != null && station.direct_destinations !== "" ? Number(station.direct_destinations) : null,
+      key_cities_count: station.key_cities_count != null && station.key_cities_count !== "" ? Number(station.key_cities_count) : null,
+      key_cities: Array.isArray(station.key_cities) ? station.key_cities : (station.key_cities ? String(station.key_cities).split("|") : []),
+      connectivity_pctile: station.connectivity_pctile != null && station.connectivity_pctile !== "" ? Number(station.connectivity_pctile) : null,
     },
   });
 }
@@ -2108,6 +2119,7 @@ const REPORT_CSS = `
   .p-domain-bar i { display: block; height: 100%; background: #d9772f; }
   .p-domain-v { text-align: right; font-variant-numeric: tabular-nums; color: #5d6b80; }
   .p-synth { font-size: 13px; line-height: 1.6; color: #2a3645; background: #f0ede5; border-left: 3px solid #b5613a; padding: 12px 16px; margin-top: 22px; border-radius: 0 6px 6px 0; }
+  .p-conn { font-size: 12px; line-height: 1.55; color: #3a4658; margin-top: 14px; }
   .report-footer { padding: 28px 56px 56px; font-size: 10.5px; color: #8a93a3; line-height: 1.5; }
   @media print { .cover { padding-top: 48px; } .profile { padding-top: 36px; } body { background: #fff; } }
 `;
@@ -2154,6 +2166,15 @@ function buildStationSnapshot() {
     area_km2: deep.area_km2,
     interchanges: st.interchanges ?? null,
     season_share: st.season_share ?? null,
+    // Connectivity (GTFS-derived). Null-safe; band derived in connectivityBand().
+    trainsPerDay: st.trains_per_day ?? null,
+    peakTrains: st.peak_trains ?? null,
+    firstDep: st.first_dep ?? null,
+    lastDep: st.last_dep ?? null,
+    directDestinations: st.direct_destinations ?? null,
+    keyCitiesCount: st.key_cities_count ?? null,
+    keyCities: Array.isArray(st.key_cities) ? st.key_cities : (st.key_cities ? String(st.key_cities).split("|") : []),
+    connectivityPctile: st.connectivity_pctile ?? null,
     usagePerResident: (usage != null && deep.population) ? usage / deep.population : null,
     upliftPeople,
     upliftPct: (upliftPeople != null && deep.population) ? (upliftPeople / deep.population) * 100 : null,
@@ -2180,6 +2201,78 @@ function triadBars(snap) {
   return { needPct, usagePct, supplyPct };
 }
 function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+// Connectivity band — a transparent good/moderate/limited read, used for
+// FILTERING and FRAMING only (never folded into the opportunity score, since
+// the response to poor connectivity is "invest in the railway", not
+// "deprioritise the site"). Based on the national trains-per-day percentile,
+// nudged up when there's a direct link to a major city. Returns null if we have
+// no connectivity data for the station.
+function connectivityBand(snap) {
+  const pct = snap.connectivityPctile;
+  const tpd = snap.trainsPerDay;
+  if (pct == null && tpd == null) return null;
+  // Primary signal: national percentile of service frequency.
+  let level = "limited";
+  if (pct != null) {
+    if (pct >= 66) level = "good";
+    else if (pct >= 33) level = "moderate";
+  } else {
+    // No percentile (e.g. partial data) — fall back to absolute trains/day.
+    if (tpd >= 100) level = "good";
+    else if (tpd >= 40) level = "moderate";
+  }
+  // A direct major-city link lifts a "limited" to "moderate" — a one-seat ride
+  // to a city is materially better connectivity than frequency alone implies.
+  if (level === "limited" && (snap.keyCitiesCount || 0) >= 1) level = "moderate";
+  const label = level === "good" ? "Well connected"
+    : level === "moderate" ? "Moderately connected" : "Limited connectivity";
+  return { level, label };
+}
+
+// The Connectivity block for the station synthesis: a band chip + a worded
+// summary + a compact stat strip. Connectivity is shown as its OWN read,
+// alongside need/supply/usage — deliberately not blended into the score.
+function connectivityHTML(snap) {
+  const band = connectivityBand(snap);
+  if (!band) return "";   // no connectivity data — hide the block entirely
+  const tpd = snap.trainsPerDay;
+  const dd = snap.directDestinations;
+  const cities = (snap.keyCities || []).filter(Boolean);
+
+  // Worded summary that strengthens or tempers the growth story.
+  let words;
+  if (band.level === "good") {
+    words = `Growth here is well supported by existing service`;
+  } else if (band.level === "moderate") {
+    words = `Reasonable service; larger growth may need timetable investment`;
+  } else {
+    words = `Limited service — significant growth would likely need investment`;
+  }
+  const cityLine = cities.length
+    ? `Direct trains to ${cities.slice(0, 4).join(", ")}${cities.length > 4 ? "…" : ""}.`
+    : (dd != null ? `${dd} direct destination${dd === 1 ? "" : "s"}, no major city by one-seat ride.` : "");
+
+  const chip = (label, value) => value == null || value === "" ? "" :
+    `<div class="conn-stat"><div class="conn-stat-v">${value}</div><div class="conn-stat-l">${label}</div></div>`;
+  const span = (snap.firstDep && snap.lastDep) ? `${snap.firstDep}–${snap.lastDep}` : null;
+
+  return `
+    <div class="conn-block">
+      <div class="conn-head">
+        <span class="conn-band conn-${band.level}">${band.label}</span>
+        <span class="conn-words">${words}.</span>
+      </div>
+      <div class="conn-strip">
+        ${chip("trains/day", tpd != null ? tpd.toLocaleString() : null)}
+        ${chip("in AM peak", snap.peakTrains != null ? snap.peakTrains : null)}
+        ${chip("direct dests", dd != null ? dd : null)}
+        ${chip("service span", span)}
+      </div>
+      ${cityLine ? `<p class="conn-cities">${cityLine}</p>` : ""}
+      <p class="conn-note">Scheduled weekday service (GTFS timetable). Connectivity is reported separately and does not change the opportunity score.</p>
+    </div>`;
+}
 
 
 async function enterDeepDive(p) {
@@ -3603,6 +3696,7 @@ function renderStationSynthesis() {
         ~<strong>${snap.upliftPeople.toLocaleString()}</strong> residents
         ${snap.upliftPct != null ? `(<strong>${snap.upliftPct.toFixed(0)}%</strong> on current population)` : ""}
         at ${PEOPLE_PER_HOME} people/home.</p>` : ""}
+    ${connectivityHTML(snap)}
     <div class="syn-actions">
       <button class="syn-btn" id="syn-pin-btn" type="button"></button>
       <button class="syn-btn syn-btn-ghost" id="syn-compare-btn" type="button">Shortlist & compare →</button>
@@ -3932,8 +4026,13 @@ function reportProfilePage(i, rank, esc) {
       <div class="p-stat"><div class="p-stat-v">${i.usagePerResident != null ? i.usagePerResident.toFixed(0) : "—"}</div><div class="p-stat-l">Usage per resident</div></div>
       <div class="p-stat"><div class="p-stat-v">${i.season_share != null ? Math.round(i.season_share * 100) + "%" : "—"}</div><div class="p-stat-l">Season-ticket share</div></div>
       <div class="p-stat"><div class="p-stat-v">${i.interchanges != null ? fmtCount(i.interchanges) : "—"}</div><div class="p-stat-l">Interchanges</div></div>
+      <div class="p-stat"><div class="p-stat-v">${i.trainsPerDay != null ? fmtCount(i.trainsPerDay) : "—"}</div><div class="p-stat-l">Trains/day (scheduled)</div></div>
+      <div class="p-stat"><div class="p-stat-v">${i.directDestinations != null ? i.directDestinations : "—"}</div><div class="p-stat-l">Direct destinations</div></div>
       <div class="p-stat"><div class="p-stat-v">${i.upliftPeople != null ? "+" + fmtCount(i.upliftPeople) : "—"}</div><div class="p-stat-l">Modelled uplift${i.upliftPct != null ? " (" + i.upliftPct.toFixed(0) + "%)" : ""}</div></div>
     </div>
+
+    ${(() => { const b = connectivityBand(i); if (!b) return ""; const cities = (i.keyCities || []).filter(Boolean);
+      return `<p class="p-conn"><strong>${b.label}.</strong> ${i.trainsPerDay != null ? fmtCount(i.trainsPerDay) + " scheduled weekday trains" : ""}${cities.length ? `, with direct services to ${esc(cities.slice(0,4).join(", "))}` : ""}. Connectivity is reported separately and does not affect the opportunity ranking.</p>`; })()}
 
     ${domainRows ? `<div class="p-domains"><h3>Deprivation by domain</h3>${domainRows}</div>` : ""}
 
@@ -4221,6 +4320,14 @@ async function profileStationHeadless(feature) {
     parts,
     interchanges: props.interchanges != null && props.interchanges !== "" ? Number(props.interchanges) : null,
     season_share: props.season_share != null && props.season_share !== "" ? Number(props.season_share) : null,
+    trainsPerDay: props.trains_per_day != null && props.trains_per_day !== "" ? Number(props.trains_per_day) : null,
+    peakTrains: props.peak_trains != null && props.peak_trains !== "" ? Number(props.peak_trains) : null,
+    firstDep: props.first_dep || null,
+    lastDep: props.last_dep || null,
+    directDestinations: props.direct_destinations != null && props.direct_destinations !== "" ? Number(props.direct_destinations) : null,
+    keyCitiesCount: props.key_cities_count != null && props.key_cities_count !== "" ? Number(props.key_cities_count) : null,
+    keyCities: Array.isArray(props.key_cities) ? props.key_cities : (props.key_cities ? String(props.key_cities).split("|") : []),
+    connectivityPctile: props.connectivity_pctile != null && props.connectivity_pctile !== "" ? Number(props.connectivity_pctile) : null,
     usagePerResident: (usage != null && population) ? usage / population : null,
     upliftPeople,
     upliftPct: (upliftPeople != null && population) ? (upliftPeople / population) * 100 : null,
@@ -4353,6 +4460,7 @@ function renderBatchResults(results, errors, preScored) {
           <span class="bl-sig-bar" title="Usage pct ${r.usagePctile == null ? "n/a" : Math.round(r.usagePctile)}"><i style="width:0%;--w:${bars.usagePct || 0}%;background:#7a3ea8"></i></span>
         </span>
         <span class="bl-homes">${r.supplyHomes != null ? r.supplyHomes.toLocaleString() : "—"}<small>homes</small></span>
+        ${(() => { const b = connectivityBand(r); return `<span class="bl-conn bl-conn-${b ? b.level : "none"}" title="${b ? b.label : "connectivity unknown"}${r.trainsPerDay != null ? " · " + r.trainsPerDay + " trains/day" : ""}">${b ? (b.level === "good" ? "●●●" : b.level === "moderate" ? "●●○" : "●○○") : "—"}</span>`; })()}
       </button>`;
   }).join("");
 

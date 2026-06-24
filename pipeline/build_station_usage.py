@@ -78,6 +78,11 @@ TREND_CSV_CANDIDATES = [
 ]
 OUT = ROOT / "web" / "data" / "stations.geojson"
 
+# Optional connectivity metrics (output of build_connectivity.py), merged by
+# CRS. Carries trains_per_day, peak_trains, first/last departure, direct
+# destinations and key-cities. Absent => stations simply carry null connectivity.
+CONNECTIVITY_CSV = RAW / "station_connectivity.csv"
+
 
 def _first_existing(paths):
     return next((p for p in paths if p.exists()), None)
@@ -491,6 +496,41 @@ def load_station_points():
     return pts
 
 
+def load_connectivity():
+    """Load per-CRS connectivity metrics if build_connectivity.py has produced
+    them. Returns {crs -> dict} or {} when the file is absent (optional layer).
+    """
+    if not CONNECTIVITY_CSV.exists():
+        print("  (no station_connectivity.csv — building without connectivity)")
+        return {}
+    print(f"Reading connectivity ({CONNECTIVITY_CSV.name})...")
+    out = {}
+    with CONNECTIVITY_CSV.open(encoding="utf-8-sig", newline="") as fh:
+        for r in csv.DictReader(fh):
+            crs = (r.get("crs") or "").strip().upper()
+            if not crs:
+                continue
+
+            def _int(v):
+                try:
+                    return int(float(v))
+                except (TypeError, ValueError):
+                    return None
+
+            cities = (r.get("key_cities") or "").strip()
+            out[crs] = {
+                "trains_per_day": _int(r.get("trains_per_day")),
+                "peak_trains": _int(r.get("peak_trains")),
+                "first_dep": (r.get("first_dep") or "").strip() or None,
+                "last_dep": (r.get("last_dep") or "").strip() or None,
+                "direct_destinations": _int(r.get("direct_destinations")),
+                "key_cities_count": _int(r.get("key_cities_count")),
+                "key_cities": cities.split("|") if cities else [],
+            }
+    print(f"  connectivity for {len(out)} stations")
+    return out
+
+
 def main() -> int:
     print("Building station-usage layer (England heavy rail)...")
     points = load_station_points()
@@ -501,6 +541,8 @@ def main() -> int:
     by_crs, by_name, meta = load_usage()
     # Optional richer trend from a Table 1415 time-series file, merged by CRS.
     trend_by_crs, trend_by_name = load_trend()
+    # Optional connectivity metrics (GTFS-derived), merged by CRS.
+    conn_by_crs = load_connectivity()
 
     feats = []
     matched_crs = matched_name = unmatched = 0
@@ -540,6 +582,17 @@ def main() -> int:
             "quality": rec.get("quality") if rec else None,
             "adjusted": rec.get("adjusted") if rec else False,
         }
+        # Connectivity (optional). Null-safe: stations without a match carry
+        # nulls and the app hides the Connectivity block gracefully.
+        conn = conn_by_crs.get(s["crs"]) if s["crs"] else None
+        if conn:
+            props["trains_per_day"] = conn["trains_per_day"]
+            props["peak_trains"] = conn["peak_trains"]
+            props["first_dep"] = conn["first_dep"]
+            props["last_dep"] = conn["last_dep"]
+            props["direct_destinations"] = conn["direct_destinations"]
+            props["key_cities_count"] = conn["key_cities_count"]
+            props["key_cities"] = conn["key_cities"]
         feats.append({
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [round(s["lng"], 5), round(s["lat"], 5)]},
@@ -558,6 +611,18 @@ def main() -> int:
     for f in feats:
         f["properties"].setdefault("usage_pctile", None)
 
+    # National connectivity percentile from trains-per-day (0-100), so the app
+    # can band good/moderate/limited relative to the network rather than with
+    # arbitrary absolute cutoffs. Stations without service get null.
+    with_tpd = sorted((f for f in feats
+                       if f["properties"].get("trains_per_day") is not None),
+                      key=lambda f: f["properties"]["trains_per_day"])
+    ntpd = len(with_tpd)
+    for i, f in enumerate(with_tpd):
+        f["properties"]["connectivity_pctile"] = round(i / ntpd * 100, 1) if ntpd > 1 else 50.0
+    for f in feats:
+        f["properties"].setdefault("connectivity_pctile", None)
+
     fc = {
         "type": "FeatureCollection",
         "metadata": {
@@ -567,7 +632,9 @@ def main() -> int:
             "matched_name": matched_name,
             "unmatched": unmatched,
             "attribution": "Station usage: Office of Rail and Road (OGL). "
-                           "Locations: OpenStreetMap / Trainline (ODbL).",
+                           "Locations: OpenStreetMap / Trainline (ODbL). "
+                           "Connectivity: GTFS timetable (RDG/DfT, OGL); "
+                           "NaPTAN (OGL).",
         },
         "features": feats,
     }

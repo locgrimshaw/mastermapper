@@ -1676,7 +1676,7 @@ footer {
 /* League table */
 .batch-league { display: flex; flex-direction: column; gap: 6px; }
 .bl-row {
-  display: grid; grid-template-columns: 30px 1fr 76px 120px 64px; align-items: center; gap: 12px;
+  display: grid; grid-template-columns: 30px 1fr 76px 120px 64px 40px; align-items: center; gap: 12px;
   background: var(--ink-2); border: 1px solid var(--ink-line); border-radius: 10px;
   padding: 10px 14px; cursor: pointer; text-align: left; width: 100%;
   animation: blin 0.45s ease backwards; animation-delay: var(--delay, 0ms);
@@ -1750,3 +1750,35 @@ footer {
   color: var(--text-dim);
   line-height: 1.4;
 }
+
+/* ---- Connectivity (synthesis block + batch league dots) ----------------- */
+.conn-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ink-line);
+}
+.conn-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.conn-band {
+  font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+}
+.conn-good { background: rgba(63,155,94,0.18); color: #57c07c; }
+.conn-moderate { background: rgba(224,163,46,0.18); color: #e0a32e; }
+.conn-limited { background: rgba(200,72,72,0.18); color: #e07a7a; }
+.conn-words { font-size: 12px; color: var(--text-dim); }
+.conn-strip { display: flex; gap: 8px; flex-wrap: wrap; }
+.conn-stat {
+  flex: 1; min-width: 60px; background: var(--ink-2); border: 1px solid var(--ink-line);
+  border-radius: 8px; padding: 8px 10px; text-align: center;
+}
+.conn-stat-v { font-family: var(--font-data); font-size: 15px; font-weight: 700; color: var(--text); }
+.conn-stat-l { font-size: 9.5px; color: var(--text-dim); margin-top: 2px; }
+.conn-cities { font-size: 11.5px; color: var(--text); margin: 10px 0 0; }
+.conn-note { font-size: 10.5px; color: var(--text-dim); line-height: 1.45; margin: 8px 0 0; }
+
+/* Batch league connectivity dots */
+.bl-conn { font-size: 11px; letter-spacing: 1px; text-align: right; white-space: nowrap; }
+.bl-conn-good { color: #57c07c; }
+.bl-conn-moderate { color: #e0a32e; }
+.bl-conn-limited { color: #e07a7a; }
+.bl-conn-none { color: var(--text-dim); }
