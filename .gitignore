@@ -55,3 +55,9 @@ venv/
 # the loader also falls back to the postcodes.io API if this is absent).
 data/raw/postcodes.csvnode_modules/
 node_modules/
+
+# NPPF well-connected: connectivity + TTWA-GVA build inputs/outputs (small, kept for reproducibility)
+!data/raw/station_connectivity.csv
+!data/raw/ttwa_top60.csv
+!data/raw/ttwa_2011.geojson
+!data/raw/ttwa_gva.xlsx
