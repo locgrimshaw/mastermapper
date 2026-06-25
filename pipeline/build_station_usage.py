@@ -517,6 +517,12 @@ def load_connectivity():
                 except (TypeError, ValueError):
                     return None
 
+            def _flt(v):
+                try:
+                    return round(float(v), 1)
+                except (TypeError, ValueError):
+                    return None
+
             cities = (r.get("key_cities") or "").strip()
             out[crs] = {
                 "trains_per_day": _int(r.get("trains_per_day")),
@@ -528,6 +534,11 @@ def load_connectivity():
                 "direct_destinations": _int(r.get("direct_destinations")),
                 "key_cities_count": _int(r.get("key_cities_count")),
                 "key_cities": cities.split("|") if cities else [],
+                "sustained_tph": _flt(r.get("sustained_tph")),
+                "sustained_tph_per_dir": _flt(r.get("sustained_tph_per_dir")),
+                "meets_4tph": _int(r.get("meets_4tph")),
+                "meets_2tph_per_dir": _int(r.get("meets_2tph_per_dir")),
+                "meets_frequency": _int(r.get("meets_frequency")),
             }
     print(f"  connectivity for {len(out)} stations")
     return out
@@ -597,6 +608,11 @@ def main() -> int:
             props["direct_destinations"] = conn["direct_destinations"]
             props["key_cities_count"] = conn["key_cities_count"]
             props["key_cities"] = conn["key_cities"]
+            props["sustained_tph"] = conn["sustained_tph"]
+            props["sustained_tph_per_dir"] = conn["sustained_tph_per_dir"]
+            props["meets_4tph"] = conn["meets_4tph"]
+            props["meets_2tph_per_dir"] = conn["meets_2tph_per_dir"]
+            props["meets_frequency"] = conn["meets_frequency"]
         feats.append({
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [round(s["lng"], 5), round(s["lat"], 5)]},

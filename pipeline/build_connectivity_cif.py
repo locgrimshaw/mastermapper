@@ -102,11 +102,12 @@ def ensure_extracted() -> tuple[Path, Path] | None:
 
 # ---- MSN: TIPLOC -> CRS crosswalk ------------------------------------------
 
-def load_crosswalk(msn_path: Path) -> tuple[dict, dict]:
+def load_crosswalk(msn_path: Path) -> tuple[dict, dict, dict]:
     """Parse the Master Station Names file. 'A' records carry station name,
-    TIPLOC (cols 37-43, 1-based) and CRS (cols 44-46). Returns
-    (tiploc->crs, crs->name)."""
-    tiploc_to_crs, crs_to_name = {}, {}
+    TIPLOC (cols 37-43, 1-based), CRS (cols 44-46), and OS grid easting
+    (cols 47-51) / northing (cols 53-57) in units of 100m. Returns
+    (tiploc->crs, crs->name, tiploc->(easting,northing))."""
+    tiploc_to_crs, crs_to_name, tiploc_to_xy = {}, {}, {}
     with msn_path.open(encoding="latin-1") as fh:
         for line in fh:
             if not line.startswith("A"):
@@ -121,7 +122,17 @@ def load_crosswalk(msn_path: Path) -> tuple[dict, dict]:
                 continue
             tiploc_to_crs[tiploc] = crs
             crs_to_name.setdefault(crs, name.title())
-    return tiploc_to_crs, crs_to_name
+            # Grid refs: easting cols 53-57, northing cols 59-63 (1-based),
+            # in units of 100m. (Verified against the Luton MSN record.)
+            try:
+                east = int(line[52:57].strip())
+                north = int(line[58:63].strip())
+                if east and north:
+                    tiploc_to_xy[tiploc] = (east, north)
+            except (ValueError, IndexError):
+                pass
+    return tiploc_to_crs, crs_to_name, tiploc_to_xy
+
 
 
 # ---- MCA helpers ------------------------------------------------------------
@@ -151,6 +162,83 @@ def hhmm_to_int(s: str) -> int | None:
 def hhmm_to_minutes(v: int) -> int:
     """2347 -> 1427 (minutes since midnight)."""
     return (v // 100) * 60 + (v % 100)
+
+
+# --- NPPF frequency test helpers --------------------------------------------
+# Draft NPPF "well-connected": served throughout the daytime by >=4 trains/hr
+# overall, OR >=2 trains/hr in any one direction. We test sustained frequency
+# across a core daytime window, not just the peak.
+DAYTIME_START_H, DAYTIME_END_H = 7, 18   # 07:00..18:59 inclusive (12 clock hours)
+
+
+def sustained_tph(dep_hhmm: list[int]) -> tuple[float, int]:
+    """Given departure times (HHMM ints), return (sustained_tph, busiest_clock_hr).
+    sustained_tph = the MINIMUM departures-per-clock-hour across the daytime
+    window — i.e. the level maintained 'throughout the daytime'. A station that
+    does 8/hr at peak but 1/hr midday has sustained_tph = 1."""
+    if not dep_hhmm:
+        return 0.0, 0
+    buckets = {h: 0 for h in range(DAYTIME_START_H, DAYTIME_END_H + 1)}
+    for v in dep_hhmm:
+        h = v // 100
+        if DAYTIME_START_H <= h <= DAYTIME_END_H:
+            buckets[h] += 1
+    counts = list(buckets.values())
+    if not counts:
+        return 0.0, 0
+    sustained = min(counts)
+    busiest = max(buckets, key=buckets.get)
+    return float(sustained), busiest
+
+
+def bearing_group(station_xy, term_xy) -> str | None:
+    """Classify a departure's direction as one of two opposing groups by the
+    bearing from the station to the train's terminus. Returns 'A' or 'B' (the
+    two dominant directions along the line's axis), or None if unknown.
+    We split the compass into two halves; the axis is chosen per-station later,
+    so here we just return the raw bearing in degrees as a float."""
+    if not station_xy or not term_xy:
+        return None
+    dx = term_xy[0] - station_xy[0]
+    dy = term_xy[1] - station_xy[1]
+    if dx == 0 and dy == 0:
+        return None
+    import math
+    # bearing 0=N, 90=E, 180=S, 270=W
+    ang = (math.degrees(math.atan2(dx, dy))) % 360
+    return ang  # caller bins into two opposing groups
+
+
+def directional_sustained(dep_with_bearing: list[tuple[int, float]]) -> float:
+    """Given [(dep_hhmm, bearing_deg), ...], split into two opposing directional
+    groups along the line's dominant axis and return the WORSE direction's
+    sustained tph (so 'both directions sustain >=2' == result >=2).
+
+    Method: find the dominant axis by the circular mean of bearings, split
+    departures into the two half-planes around the perpendicular, then take the
+    min of each group's sustained_tph."""
+    pts = [(t, b) for (t, b) in dep_with_bearing if b is not None]
+    if len(pts) < 2:
+        return 0.0
+    import math
+    # Dominant axis via doubled-angle mean (axis, not direction).
+    sx = sum(math.cos(math.radians(2 * b)) for _, b in pts)
+    sy = sum(math.sin(math.radians(2 * b)) for _, b in pts)
+    axis = (math.degrees(math.atan2(sy, sx)) / 2) % 180  # 0..180 axis
+    # Split: a departure is group A if its bearing is within 90deg of `axis`,
+    # else group B (the opposite half).
+    def side(b):
+        d = (b - axis) % 360
+        return "A" if d < 90 or d >= 270 else "B"
+    grp = {"A": [], "B": []}
+    for t, b in pts:
+        grp[side(b)].append(t)
+    a, _ = sustained_tph(grp["A"])
+    b_, _ = sustained_tph(grp["B"])
+    # If one side has no trains, it's not a two-way service on this axis.
+    if not grp["A"] or not grp["B"]:
+        return 0.0
+    return min(a, b_)
 
 
 def busiest_hour(dep_times: list[int]) -> tuple[int, int]:
@@ -196,8 +284,9 @@ def pick_sample_date(today: dt.date) -> dt.date:
 # ---- Main parse -------------------------------------------------------------
 
 def build(msn_path: Path, mca_path: Path) -> dict:
-    tiploc_to_crs, _crs_to_name = load_crosswalk(msn_path)
-    print(f"  crosswalk: {len(tiploc_to_crs)} TIPLOCs -> CRS")
+    tiploc_to_crs, _crs_to_name, tiploc_to_xy = load_crosswalk(msn_path)
+    print(f"  crosswalk: {len(tiploc_to_crs)} TIPLOCs -> CRS "
+          f"({len(tiploc_to_xy)} with coords)")
 
     sample_date = pick_sample_date(dt.date.today())
     print(f"  sample weekday date: {sample_date} (weekday {SAMPLE_WEEKDAY})")
@@ -209,19 +298,23 @@ def build(msn_path: Path, mca_path: Path) -> dict:
         return stats.setdefault(crs, {
             "dep": 0, "peak": 0, "first": None, "last": None,
             "dests": set(), "cities": set(), "dep_times": [],
+            # (dep_hhmm, bearing_to_terminus) for the per-direction test:
+            "dep_dir": [],
         })
 
     # Current schedule being read.
     keep = False
-    calls = []   # list of (crs, public_time_int, is_departure)
+    calls = []   # list of (crs, tiploc, public_time_int, is_departure)
 
     def flush_schedule():
         """Apply the finished schedule's call points to the per-CRS stats."""
         if not keep or len(calls) < 2:
             return
-        # All CRS in order, for onward-destination sets.
-        crs_seq = [c for (c, _t, _d) in calls]
-        for idx, (crs, t, is_dep) in enumerate(calls):
+        crs_seq = [c for (c, _tip, _t, _d) in calls]
+        # The train's terminus TIPLOC = the last call point (for direction).
+        term_tip = calls[-1][1]
+        term_xy = tiploc_to_xy.get(term_tip)
+        for idx, (crs, tip, t, is_dep) in enumerate(calls):
             s = acc(crs)
             # Service span: any public time at the station counts.
             if t is not None:
@@ -236,6 +329,10 @@ def build(msn_path: Path, mca_path: Path) -> dict:
                 s["dep_times"].append(t)
                 if PEAK_START <= t <= PEAK_END:
                     s["peak"] += 1
+                # Directional capture: bearing from this station to the terminus.
+                st_xy = tiploc_to_xy.get(tip)
+                brg = bearing_group(st_xy, term_xy)
+                s["dep_dir"].append((t, brg))
             # Onward one-seat destinations: every later call point.
             for onward in crs_seq[idx + 1:]:
                 if onward != crs:
@@ -270,7 +367,7 @@ def build(msn_path: Path, mca_path: Path) -> dict:
                 crs = tiploc_to_crs.get(tip)
                 dep = hhmm_to_int(line[15:19])      # public departure
                 if crs:
-                    calls.append((crs, dep, True))
+                    calls.append((crs, tip, dep, True))
             elif rt == "LI":
                 tip = line[2:9].strip()
                 crs = tiploc_to_crs.get(tip)
@@ -282,13 +379,13 @@ def build(msn_path: Path, mca_path: Path) -> dict:
                 if parr is None and pdep is None:
                     continue
                 t = pdep if pdep is not None else parr
-                calls.append((crs, t, pdep is not None))
+                calls.append((crs, tip, t, pdep is not None))
             elif rt == "LT":
                 tip = line[2:9].strip()
                 crs = tiploc_to_crs.get(tip)
                 parr = hhmm_to_int(line[15:19])     # public arrival
                 if crs:
-                    calls.append((crs, parr, False))
+                    calls.append((crs, tip, parr, False))
         flush_schedule()  # last schedule in file
 
     print(f"  read {n_lines:,} MCA lines · {n_sched:,} schedules · "
@@ -306,6 +403,12 @@ def build(msn_path: Path, mca_path: Path) -> dict:
             continue
         cities = sorted(s["cities"])
         peak_hr_count, peak_hr_start = busiest_hour(s["dep_times"])
+        # NPPF "well-connected" frequency test (the rail-service limb).
+        sustained_overall, _busiest_h = sustained_tph(s["dep_times"])
+        sustained_per_dir = directional_sustained(s["dep_dir"])
+        meets_4tph = sustained_overall >= 4
+        meets_2tph_dir = sustained_per_dir >= 2
+        meets_frequency = meets_4tph or meets_2tph_dir
         out[crs] = {
             "crs": crs,
             "trains_per_day": s["dep"],
@@ -317,6 +420,12 @@ def build(msn_path: Path, mca_path: Path) -> dict:
             "direct_destinations": len(s["dests"]),
             "key_cities_count": len(cities),
             "key_cities": "|".join(cities),
+            # NPPF frequency limb (the TTWA-GVA limb is added by a later step):
+            "sustained_tph": round(sustained_overall, 1),
+            "sustained_tph_per_dir": round(sustained_per_dir, 1),
+            "meets_4tph": int(meets_4tph),
+            "meets_2tph_per_dir": int(meets_2tph_dir),
+            "meets_frequency": int(meets_frequency),
         }
     return out
 
@@ -339,7 +448,9 @@ def main() -> int:
 
     fields = ["crs", "trains_per_day", "peak_trains", "peak_hour_count",
               "peak_hour_start", "first_dep", "last_dep",
-              "direct_destinations", "key_cities_count", "key_cities"]
+              "direct_destinations", "key_cities_count", "key_cities",
+              "sustained_tph", "sustained_tph_per_dir",
+              "meets_4tph", "meets_2tph_per_dir", "meets_frequency"]
     with OUT_CSV.open("w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()
@@ -348,12 +459,18 @@ def main() -> int:
 
     # Quick sanity summary.
     busiest = sorted(out.values(), key=lambda r: r["trains_per_day"], reverse=True)[:5]
+    n_freq = sum(1 for r in out.values() if r["meets_frequency"])
+    n_4tph = sum(1 for r in out.values() if r["meets_4tph"])
+    n_2dir = sum(1 for r in out.values() if r["meets_2tph_per_dir"])
     print(f"  wrote {OUT_CSV.name}: {len(out)} stations")
+    print(f"  NPPF frequency limb: {n_freq} stations meet it "
+          f"({n_4tph} via 4/hr overall, {n_2dir} via 2/hr per direction)")
     print("  busiest by trains/day:")
     for r in busiest:
         print(f"    {r['crs']}: {r['trains_per_day']} trains, "
-              f"{r['direct_destinations']} direct dests, "
-              f"cities: {r['key_cities'] or '-'}")
+              f"sustained {r['sustained_tph']}/hr overall, "
+              f"{r['sustained_tph_per_dir']}/hr per dir, "
+              f"freq-pass={'Y' if r['meets_frequency'] else 'N'}")
     return 0
 
 
