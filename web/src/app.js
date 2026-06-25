@@ -1877,6 +1877,8 @@ async function profileStation(p, point) {
       // strings; key_cities may be an array or a "|"-joined string.
       trains_per_day: station.trains_per_day != null && station.trains_per_day !== "" ? Number(station.trains_per_day) : null,
       peak_trains: station.peak_trains != null && station.peak_trains !== "" ? Number(station.peak_trains) : null,
+      peak_hour_count: station.peak_hour_count != null && station.peak_hour_count !== "" ? Number(station.peak_hour_count) : null,
+      peak_hour_start: station.peak_hour_start || null,
       first_dep: station.first_dep || null,
       last_dep: station.last_dep || null,
       direct_destinations: station.direct_destinations != null && station.direct_destinations !== "" ? Number(station.direct_destinations) : null,
@@ -2181,6 +2183,8 @@ function buildStationSnapshot() {
     // Connectivity (GTFS-derived). Null-safe; band derived in connectivityBand().
     trainsPerDay: st.trains_per_day ?? null,
     peakTrains: st.peak_trains ?? null,
+    peakHourCount: st.peak_hour_count ?? null,
+    peakHourStart: st.peak_hour_start ?? null,
     firstDep: st.first_dep ?? null,
     lastDep: st.last_dep ?? null,
     directDestinations: st.direct_destinations ?? null,
@@ -2278,6 +2282,7 @@ function connectivityHTML(snap) {
       <div class="conn-strip">
         ${chip("trains/day", tpd != null ? tpd.toLocaleString() : null)}
         ${chip("in AM peak", snap.peakTrains != null ? snap.peakTrains : null)}
+        ${chip("busiest hour", snap.peakHourCount != null ? (snap.peakHourStart ? `${snap.peakHourCount} (from ${snap.peakHourStart})` : snap.peakHourCount) : null)}
         ${chip("direct dests", dd != null ? dd : null)}
         ${chip("service span", span)}
       </div>
@@ -4334,6 +4339,8 @@ async function profileStationHeadless(feature) {
     season_share: props.season_share != null && props.season_share !== "" ? Number(props.season_share) : null,
     trainsPerDay: props.trains_per_day != null && props.trains_per_day !== "" ? Number(props.trains_per_day) : null,
     peakTrains: props.peak_trains != null && props.peak_trains !== "" ? Number(props.peak_trains) : null,
+    peakHourCount: props.peak_hour_count != null && props.peak_hour_count !== "" ? Number(props.peak_hour_count) : null,
+    peakHourStart: props.peak_hour_start || null,
     firstDep: props.first_dep || null,
     lastDep: props.last_dep || null,
     directDestinations: props.direct_destinations != null && props.direct_destinations !== "" ? Number(props.direct_destinations) : null,

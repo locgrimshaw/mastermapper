@@ -521,6 +521,8 @@ def load_connectivity():
             out[crs] = {
                 "trains_per_day": _int(r.get("trains_per_day")),
                 "peak_trains": _int(r.get("peak_trains")),
+                "peak_hour_count": _int(r.get("peak_hour_count")),
+                "peak_hour_start": (r.get("peak_hour_start") or "").strip() or None,
                 "first_dep": (r.get("first_dep") or "").strip() or None,
                 "last_dep": (r.get("last_dep") or "").strip() or None,
                 "direct_destinations": _int(r.get("direct_destinations")),
@@ -588,6 +590,8 @@ def main() -> int:
         if conn:
             props["trains_per_day"] = conn["trains_per_day"]
             props["peak_trains"] = conn["peak_trains"]
+            props["peak_hour_count"] = conn["peak_hour_count"]
+            props["peak_hour_start"] = conn["peak_hour_start"]
             props["first_dep"] = conn["first_dep"]
             props["last_dep"] = conn["last_dep"]
             props["direct_destinations"] = conn["direct_destinations"]
