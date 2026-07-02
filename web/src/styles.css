@@ -239,6 +239,7 @@ html, body {
 .sift-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
 .sift-actions .ghost { padding: 3px 8px; font-size: 11px; }
 .sift-short-count { font-size: 11px; color: var(--text-dim); margin-right: auto; font-variant-numeric: tabular-nums; }
+.sift-help { color: var(--text-dim); cursor: help; font-size: 10px; vertical-align: super; }
 .sift-star { cursor: pointer; text-align: center; color: var(--text-dim); user-select: none; width: 18px; }
 .sift-star.on { color: #e0853a; }
 .sift-star:hover { color: #e0853a; }

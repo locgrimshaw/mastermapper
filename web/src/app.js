@@ -6317,7 +6317,7 @@ const SIFT = {
   step: 0,             // current wizard step (index into SIFT_STEPS)
   crit: { requireFrequency: true, requireWellConnected: false, exemptInSettlement: true,
           tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
-          maxFriction: 1, minBenefit: 0, minViability: 0, minDeliverability: 0 },
+          maxFriction: 1, minBenefit: 0, minProfitOnCost: -30, minDeliverability: 0 },
   sort: "composite",   // yield | benefit | viability | deliverability | composite
   weights: { benefit: 1, viability: 1, deliverability: 1 },
   assumptions: Object.assign({}, VIABILITY_DEFAULTS),
@@ -6487,7 +6487,11 @@ const SIFT_STEPS = [
   { key: "benefit", title: "5 · Socio-economic benefit",
     pred: (r, c) => r.benefit == null || r.benefit >= (c.minBenefit || 0) },
   { key: "viability", title: "6 · Viability",
-    pred: (r, c) => r._viab.score >= (c.minViability || 0) },
+    // Filter on profit on cost %. A null appraisal (no dwelling yield) only passes
+    // when the floor is effectively off (≤ -100).
+    pred: (r, c) => c.minProfitOnCost == null ? true
+      : (r._viab.profitOnCost == null ? c.minProfitOnCost <= -100
+        : r._viab.profitOnCost >= c.minProfitOnCost) },
   { key: "deliverability", title: "7 · Deliverability",
     pred: (r, c) => r._deliv >= (c.minDeliverability || 0) },
   { key: "ranking", title: "8 · Rank & shortlist", pred: () => true },
@@ -6521,8 +6525,10 @@ function siftFunnelCounts() {
   return SIFT_STEPS.map(s => { pool = pool.filter(r => s.pred(r, c)); return pool.length; });
 }
 
-function siftNumField(id, label, val, step) {
-  return `<label class="sift-field"><span>${label}</span>` +
+function siftNumField(id, label, val, step, tip) {
+  const t = tip ? ` title="${tip.replace(/"/g, "&quot;")}"` : "";
+  const help = tip ? ` <span class="sift-help" title="${tip.replace(/"/g, "&quot;")}">ⓘ</span>` : "";
+  return `<label class="sift-field"${t}><span>${label}${help}</span>` +
     `<input type="number" id="${id}" step="${step}" value="${val}"></label>`;
 }
 
@@ -6553,24 +6559,37 @@ function siftStepControlsHTML(key) {
       return `<p class="hint">Benefit (0–100) = regeneration (catchment deprivation) + sustainable access (amenities + rail connectivity) + housing contribution (yield percentile), equally weighted.</p>` +
         `<label class="sift-field"><span>Min benefit <b id="sift-benefit-val">${C.minBenefit || 0}</b></span><input type="range" id="sift-minbenefit" min="0" max="100" step="1" value="${C.minBenefit || 0}"></label>`;
     case "viability":
-      return `<p class="hint">Residual appraisal → profit on cost. Sales value scales by region off the base £/ft². All assumptions are yours to set.</p>` +
-        siftNumField("v-sales", "Sales £/ft² (base)", A.salesPsf, 10) +
-        siftNumField("v-build", "Build £/ft²", A.buildPsf, 10) +
-        siftNumField("v-unit", "Avg unit ft²", A.unitSizeFt2, 25) +
-        siftNumField("v-soft", "Soft costs %", A.softCostPct, 1) +
-        siftNumField("v-aff", "Affordable %", A.affordablePct, 5) +
-        siftNumField("v-blv", "Land £000/unit", A.blvPerUnit, 5) +
-        siftNumField("v-target", "Profit target %", A.profitTargetPct, 0.5) +
-        `<label class="sift-field"><span>Min viability <b id="v-minval">${C.minViability || 0}</b></span><input type="range" id="v-min" min="0" max="100" step="1" value="${C.minViability || 0}"></label>`;
+      return `<p class="hint"><strong>Viability</strong> runs a simple residual appraisal for each station's scheme: <em>Gross Development Value − (build + soft costs + land)</em>, expressed as <strong>profit on cost %</strong>. GDV = dwellings × avg unit size × sales £/ft², with affordable homes valued lower. Sales value scales by region off your base £/ft². All assumptions below are yours to set.</p>` +
+        siftNumField("v-sales", "Sales £/ft² (base)", A.salesPsf, 10,
+          "Base new-build sales value per square foot, multiplied by a regional factor (London ~1.9× … North East ~0.8×) so GDV varies by location. This is the biggest driver of viability.") +
+        siftNumField("v-build", "Build £/ft²", A.buildPsf, 10,
+          "All-in construction cost per square foot (BCIS-style). Higher build cost lowers profit on cost.") +
+        siftNumField("v-unit", "Avg unit ft²", A.unitSizeFt2, 25,
+          "Average saleable floor area per dwelling. Converts the dwelling count into saleable area for GDV and into build cost.") +
+        siftNumField("v-soft", "Soft costs %", A.softCostPct, 1,
+          "Professional fees, finance, contingency and marketing, as a % of build cost (typically 25–35%).") +
+        siftNumField("v-aff", "Affordable %", A.affordablePct, 5,
+          "Share of homes delivered as affordable. Affordable units are valued at ~55% of market value, so a higher % reduces GDV.") +
+        siftNumField("v-blv", "Land £000/unit", A.blvPerUnit, 5,
+          "Benchmark land value / existing-use value paid to the landowner, in £000s per dwelling. A cost in the appraisal.") +
+        siftNumField("v-target", "Profit target %", A.profitTargetPct, 0.5,
+          "Your required profit on cost. Schemes at/above this are 'viable' (green), down to half of it 'marginal' (amber), below that 'unviable' (red) in the results table.") +
+        siftNumField("v-minpoc", "Min profit on cost %", C.minProfitOnCost, 1,
+          "FILTER: only keep stations whose scheme achieves at least this profit on cost. Set it to your profit target to keep only viable schemes, or leave low (e.g. -30) to keep everything and just rank by viability.");
     case "deliverability":
-      return `<p class="hint">Friction-driven; a permitted Tier-B Green Belt site scores a bonus. LA land-supply &amp; ownership drivers are parameterised placeholders pending data.</p>` +
-        siftNumField("d-gb", "Tier-B Green Belt bonus", A.gbTierBBonus, 1) +
-        `<label class="sift-field"><span>Min deliverability <b id="d-minval">${C.minDeliverability || 0}</b></span><input type="range" id="d-min" min="0" max="100" step="1" value="${C.minDeliverability || 0}"></label>`;
+      return `<p class="hint"><strong>Deliverability (0–100)</strong> = how buildable the site is in practice. It starts from 100 and is reduced by residual soft-constraint friction (conservation areas, AONB, parks &amp; gardens, listed-building settings covering the developable land); a permitted Tier-B Green Belt site gets a bonus, a Tier-A Green Belt overlap a small penalty. LA land-supply &amp; land-ownership drivers are placeholders pending data.</p>` +
+        siftNumField("d-gb", "Tier-B Green Belt bonus", A.gbTierBBonus, 1,
+          "Points added to deliverability for a well-connected (Tier B) station whose developable land is in the Green Belt — the draft NPPF gives these a 'default yes'.") +
+        siftNumField("d-min", "Min deliverability", C.minDeliverability || 0, 1,
+          "FILTER: only keep stations scoring at least this on deliverability (0–100). Leave at 0 to keep everything and just rank by it.");
     case "ranking":
-      return `<p class="hint">Weight the three scored axes and rank the survivors. Click a row to profile that station.</p>` +
-        siftNumField("w-ben", "Benefit weight", W.benefit, 0.5) +
-        siftNumField("w-via", "Viability weight", W.viability, 0.5) +
-        siftNumField("w-del", "Deliverability weight", W.deliverability, 0.5) +
+      return `<p class="hint">The final ranking blends the three scored axes — <strong>Benefit × Viability × Deliverability</strong> — into a 0–100 composite using the weights below. Click a row to profile that station.</p>` +
+        siftNumField("w-ben", "Benefit weight", W.benefit, 0.5,
+          "Relative weight of the socio-economic benefit score in the composite.") +
+        siftNumField("w-via", "Viability weight", W.viability, 0.5,
+          "Relative weight of viability (profit on cost, scored 0–100) in the composite.") +
+        siftNumField("w-del", "Deliverability weight", W.deliverability, 0.5,
+          "Relative weight of deliverability in the composite.") +
         `<label class="sift-field"><span>Rank by</span><select id="sift-sort">` +
         ["composite:3-axis composite", "yield:Dwelling yield", "benefit:Benefit",
          "viability:Viability", "deliverability:Deliverability"]
@@ -6596,7 +6615,7 @@ function readSiftControls() {
   if (g("sift-minyield")) C.minYield = numv("sift-minyield", 0);
   if (g("sift-maxfric")) C.maxFriction = numv("sift-maxfric", 1);
   if (g("sift-minbenefit")) C.minBenefit = numv("sift-minbenefit", 0);
-  if (g("v-min")) C.minViability = numv("v-min", 0);
+  if (g("v-minpoc")) C.minProfitOnCost = numv("v-minpoc", -30);
   if (g("d-min")) C.minDeliverability = numv("d-min", 0);
   [["v-sales", "salesPsf"], ["v-build", "buildPsf"], ["v-unit", "unitSizeFt2"],
    ["v-soft", "softCostPct"], ["v-aff", "affordablePct"], ["v-blv", "blvPerUnit"],
@@ -6611,8 +6630,6 @@ function readSiftControls() {
   const lbl = (id, v) => { const el = g(id); if (el) el.textContent = v; };
   if (g("sift-maxfric")) lbl("sift-fric-val", C.maxFriction.toFixed(2));
   if (g("sift-minbenefit")) lbl("sift-benefit-val", String(C.minBenefit));
-  if (g("v-min")) lbl("v-minval", String(C.minViability));
-  if (g("d-min")) lbl("d-minval", String(C.minDeliverability));
   persistSiftConfig();   // remember the configuration across reloads
 }
 
