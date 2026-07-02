@@ -62,9 +62,9 @@ jobs:
             curl -fL --retry 3 --retry-delay 5 -o data/raw/lsoa_median_price.csv \
               "${{ inputs.median_price_url }}" || echo "::warning::median-price download failed"
           fi
-          echo "=== files ==="; find data/raw -type f | head -40
-          echo "=== CSV headers + first row ==="
-          for f in $(find data/raw -iname '*.csv' | head -6); do
+          echo "=== hpm files ==="; find data/raw/hpm -type f | head -20
+          echo "=== hpm CSV header + first row ==="
+          for f in $(find data/raw/hpm -iname '*.csv' | head -2); do
             echo "--- $f"; head -2 "$f"; echo;
           done
 

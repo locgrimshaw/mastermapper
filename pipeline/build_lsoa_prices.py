@@ -57,10 +57,13 @@ LA_NAME_COLS = ["lad21nm", "lad22nm", "lad23nm", "ladnm", "lad_name", "la_name",
                 "geography", "geography_name"]
 PPM2_COLS = ["price_per_m2", "price_per_sqm", "ppsqm", "price_per_square_metre",
              "pricepersqm", "median_price_per_sqm", "price_paid_per_sqm",
-             "median_ppsqm", "ppm2"]
+             "median_ppsqm", "ppm2", "priceper", "ppsm", "price_per_floor_area",
+             "pricepersquaremetre"]
 MEDIAN_COLS = ["median_price", "median", "median_price_paid", "price_paid_median",
-               "medianprice"]
-YEAR_COLS = ["year", "period", "date"]
+               "medianprice", "price_paid", "pricepaid", "price"]
+YEAR_COLS = ["year", "period", "deed_date", "date_of_transfer", "transfer_date", "date"]
+# Aggregate only recent-enough transactions (the linked file spans 1995–2024).
+MIN_YEAR = 2019
 
 
 def _norm(s):
@@ -75,11 +78,20 @@ def _find(headers, cands):
     return None
 
 
-def _read_price_csv(path):
-    """Read one CSV. Detect its geography (LSOA code, else LA code/name) and the
-    £/m² and/or median-price columns, keeping the latest year per area. Returns
-    (level, ppm2_map, median_map) where level is 'lsoa' | 'la' | None and the maps
-    are keyed by LSOA code (level='lsoa') or normalised LA name (level='la')."""
+def _median(vals):
+    s = sorted(vals)
+    n = len(s)
+    if n == 0:
+        return None
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
+
+
+def _read_price_csv(path, agg_ppm2, agg_med):
+    """Accumulate one CSV's £/m² and price values into the aggregation dicts
+    (keyed area -> list of values), from which the caller takes medians. Works for
+    both aggregated files (one row per area) and transaction-level files (many rows
+    per area — e.g. the linked PPD×EPC 'hpm' files). Returns the detected level
+    ('lsoa' | 'la' | None). Transactions are filtered to recent years."""
     try:
         with path.open(newline="", encoding="utf-8-sig", errors="replace") as fh:
             reader = csv.DictReader(fh)
@@ -91,48 +103,47 @@ def _read_price_csv(path):
             med_col = _find(headers, MEDIAN_COLS)
             year_col = _find(headers, YEAR_COLS)
             if not (ppm2_col or med_col):
-                return (None, {}, {})
+                return None
             if lsoa_col:
                 level, key_col = "lsoa", lsoa_col
             elif la_name_col or la_code_col:
                 level, key_col = "la", (la_name_col or la_code_col)
             else:
-                return (None, {}, {})
+                return None
 
-            ppm2, median, years = {}, {}, {}
+            def num(col):
+                v = (row.get(col) or "").strip().replace(",", "").replace("£", "")
+                try:
+                    f = float(v)
+                    return f if f > 0 else None
+                except ValueError:
+                    return None
+
+            n_p = n_m = 0
             for row in reader:
                 raw_key = (row.get(key_col) or "").strip()
                 if not raw_key:
                     continue
                 key = raw_key if level == "lsoa" else _norm(raw_key)
-                yr = 0
                 if year_col:
                     m = re.search(r"(\d{4})", str(row.get(year_col) or ""))
-                    yr = int(m.group(1)) if m else 0
-                if yr < years.get(key, -1):
-                    continue
-                years[key] = yr
-
-                def num(col):
-                    v = (row.get(col) or "").strip().replace(",", "").replace("£", "")
-                    try:
-                        f = float(v)
-                        return f if f > 0 else None
-                    except ValueError:
-                        return None
-                if ppm2_col and num(ppm2_col) is not None:
-                    ppm2[key] = num(ppm2_col)
-                if med_col and num(med_col) is not None:
-                    median[key] = num(med_col)
-            print(f"  [{path.name}] level={level} · {len(ppm2)} £/m² · {len(median)} median "
-                  f"(key '{key_col}'"
-                  + (f", ppm2 '{ppm2_col}'" if ppm2_col else "")
-                  + (f", median '{med_col}'" if med_col else "")
-                  + (f", latest by '{year_col}'" if year_col else "") + ")")
-            return (level, ppm2, median)
+                    if m and int(m.group(1)) < MIN_YEAR:
+                        continue
+                pm = num(ppm2_col) if ppm2_col else None
+                mp = num(med_col) if med_col else None
+                if pm is not None:
+                    agg_ppm2[(level, key)].append(pm); n_p += 1
+                if mp is not None:
+                    agg_med[(level, key)].append(mp); n_m += 1
+            if n_p or n_m:
+                print(f"  [{path.name}] level={level} · +{n_p} £/m² · +{n_m} price "
+                      f"(key '{key_col}'"
+                      + (f", ppm2 '{ppm2_col}'" if ppm2_col else "")
+                      + (f", price '{med_col}'" if med_col else "") + ")")
+            return level
     except Exception as exc:
         print(f"  [{path.name}] read failed: {exc}")
-        return (None, {}, {})
+        return None
 
 
 def _iter_sources():
@@ -161,19 +172,22 @@ def main() -> int:
         print(f"ERROR: {POINTS} not found — run build_lsoa_imd_points.py first.")
         return 1
 
-    lsoa_ppm2, lsoa_med = {}, {}
-    la_ppm2, la_med = {}, {}
+    from collections import defaultdict
+    agg_ppm2, agg_med = defaultdict(list), defaultdict(list)
+    n_files = 0
     for f in _iter_sources():
-        level, ppm2, median = _read_price_csv(f)
-        if level == "lsoa":
-            lsoa_ppm2.update(ppm2); lsoa_med.update(median)
-        elif level == "la":
-            la_ppm2.update(ppm2); la_med.update(median)
-    if not (lsoa_ppm2 or lsoa_med or la_ppm2 or la_med):
+        if _read_price_csv(f, agg_ppm2, agg_med) is not None:
+            n_files += 1
+    if not (agg_ppm2 or agg_med):
         print("No usable price source found (see the module docstring). Nothing to do.")
         return 1
-    print(f"Loaded LSOA: {len(lsoa_ppm2)} £/m², {len(lsoa_med)} median · "
-          f"LA: {len(la_ppm2)} £/m², {len(la_med)} median")
+    # Median per area from the accumulated values.
+    lsoa_ppm2 = {k[1]: _median(v) for k, v in agg_ppm2.items() if k[0] == "lsoa"}
+    la_ppm2   = {k[1]: _median(v) for k, v in agg_ppm2.items() if k[0] == "la"}
+    lsoa_med  = {k[1]: _median(v) for k, v in agg_med.items()  if k[0] == "lsoa"}
+    la_med    = {k[1]: _median(v) for k, v in agg_med.items()  if k[0] == "la"}
+    print(f"Aggregated {n_files} file(s) → LSOA: {len(lsoa_ppm2)} £/m², {len(lsoa_med)} price · "
+          f"LA: {len(la_ppm2)} £/m², {len(la_med)} price")
 
     with POINTS.open(encoding="utf-8") as fh:
         data = json.load(fh)
