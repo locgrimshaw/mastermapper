@@ -76,10 +76,15 @@ jobs:
           }
           osdl BuiltUpAreas   BUILT_LAND_SRC
           osdl OpenGreenspace GREEN_SPACE_SRC
-          osdl OpenMapLocal   TRANSPORT_ROAD_SRC
-          # OpenMap Local carries both Road + RailwayTrack layers in one gpkg.
-          rd=$(find data/raw/os/OpenMapLocal -iname '*.gpkg' 2>/dev/null | head -1)
-          if [ -n "$rd" ]; then echo "TRANSPORT_RAIL_SRC=$rd" >> "$GITHUB_ENV"; fi
+          # OpenMap Local is a 3.3 GB GeoPackage — only fetch it when 'transport'
+          # is explicitly requested via the kinds input (keeps default runs fast).
+          if echo "${{ inputs.kinds }}" | grep -q transport; then
+            osdl OpenMapLocal TRANSPORT_ROAD_SRC
+            rd=$(find data/raw/os/OpenMapLocal -iname '*.gpkg' 2>/dev/null | head -1)
+            if [ -n "$rd" ]; then echo "TRANSPORT_RAIL_SRC=$rd" >> "$GITHUB_ENV"; fi
+          else
+            echo "transport not in kinds -> skipping the 3.3 GB OpenMap Local download."
+          fi
           # --- EA Flood Map for Planning Flood Zones (best effort) ------------
           # The Defra DSP national download is not a stable unauthenticated URL;
           # if this fails, commit data/raw/ea_flood_zones.gpkg manually. Flood
@@ -88,19 +93,18 @@ jobs:
 
       - name: Check at least one source download is present
         run: |
-          if ! ls data/raw/os_open_built_up_areas.* \
-                  data/raw/os_open_greenspace.* \
-                  data/raw/os_openmap_local.* \
-                  data/raw/ea_flood_zone_2.* data/raw/ea_flood_zone_3.* \
-                  data/raw/ea_flood_zones.* \
-                  data/raw/green-belt.* data/raw/green_belt.* >/dev/null 2>&1; then
-            echo "::error::No constraint source files found under data/raw/."
-            echo "::error::Commit at least one (see this workflow's header) or add"
-            echo "::error::a download step. See docs/DATASETS.md for the URLs."
+          # Robust check: pass if green-belt downloaded OR any OS source env var
+          # points at a real file (set by the download step via $GITHUB_ENV).
+          ok=0
+          [ -f data/raw/green-belt.geojson ] && ok=1
+          for v in "$BUILT_LAND_SRC" "$GREEN_SPACE_SRC" "$TRANSPORT_ROAD_SRC"; do
+            [ -n "$v" ] && [ -f "$v" ] && ok=1
+          done
+          if [ "$ok" -eq 0 ]; then
+            echo "::error::No constraint sources downloaded — see the download step logs."
             exit 1
           fi
-          echo "Source files present:"
-          ls -lh data/raw/ || true
+          echo "At least one constraint source is present — proceeding."
 
       - name: Build the constraints import CSV
         env:
