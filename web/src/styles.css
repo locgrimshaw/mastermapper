@@ -167,6 +167,55 @@ html, body {
 .block.collapsed > .block-head .block-caret { transform: rotate(-90deg); }
 .block.collapsed > .block-content { display: none; }
 
+/* Mode switch (Explore / Site sift) */
+.mode-switch {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 2px;
+  background: var(--ink-line);
+  border-radius: 8px;
+  padding: 3px;
+}
+.mode-switch .mode-btn {
+  flex: 1;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font: 600 12px/1 var(--font-ui);
+  cursor: pointer;
+}
+.mode-switch .mode-btn.active {
+  background: var(--panel, #fff);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.12);
+}
+
+/* Site sift panel */
+.sift-stage { margin: 10px 0; }
+.sift-stage-h {
+  font: 600 11px/1.3 var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.sift-field { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 5px 0; font-size: 13px; }
+.sift-field input { width: 90px; }
+.sift-summary { margin: 10px 0 6px; font-size: 13px; }
+.sift-results { max-height: 46vh; overflow: auto; }
+.sift-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sift-table th { text-align: left; color: var(--text-dim); font-weight: 600; padding: 4px 6px; position: sticky; top: 0; background: var(--panel, #fff); }
+.sift-table td { padding: 4px 6px; border-top: 1px solid var(--ink-line); vertical-align: top; }
+.sift-table td small { display: block; color: var(--text-dim); font-size: 10px; }
+.sift-table tr[data-crs] { cursor: pointer; }
+.sift-table tr[data-crs]:hover td { background: var(--ink-line); }
+.sift-tier { display: inline-block; min-width: 16px; text-align: center; border-radius: 4px; padding: 1px 5px; font-weight: 700; font-size: 11px; }
+.sift-tier-A { background: #2f9e44; color: #fff; }
+.sift-tier-B { background: #e0853a; color: #fff; }
+.sift-tier-ineligible { background: var(--ink-line); color: var(--text-dim); }
+
 .block h2 {
   margin: 0 0 6px;
   font-size: 12px;

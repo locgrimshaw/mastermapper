@@ -225,6 +225,9 @@ const state = {
   //   "isochrone" — accurate street-network walk time via Valhalla (slower,
   //                 depends on the free service being up).
   catchmentMethod: "circle",
+  // Top-level app mode: "explore" (free map + station deep dives) or "sift"
+  // (the NPPF station funnel over the precomputed station_assessments).
+  mode: "explore",
 };
 
 // Heavy-rail station layer styling. Distinct from the transit-overlay rail
@@ -6007,10 +6010,176 @@ function setDrawer(open) {
   });
 })();
 
+// ============================================================================
+// Mode switch (Explore vs Site sift) + the NPPF station sift (Phase 1: Gates 1-2
+// over the precomputed public.station_assessments). Later phases add Gate 3
+// constraints friction and Scores 4-6.
+// ============================================================================
+function wireModeSwitch() {
+  const sw = document.getElementById("mode-switch");
+  if (sw) sw.querySelectorAll(".mode-btn").forEach(b =>
+    b.addEventListener("click", () => setMode(b.dataset.mode)));
+  applyModeVisibility();
+}
+
+function setMode(mode) {
+  if (mode !== "explore" && mode !== "sift") return;
+  state.mode = mode;
+  const sw = document.getElementById("mode-switch");
+  if (sw) sw.querySelectorAll(".mode-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.mode === mode));
+  applyModeVisibility();
+  if (mode === "sift") enterSiftMode();
+  else exitSiftMode();
+}
+
+// Explore-only left-panel blocks (hidden in sift mode). Data-gated blocks keep
+// their own `hidden` attribute; we only toggle an inline display override, so
+// returning to explore restores whatever their data state dictated.
+const EXPLORE_BLOCKS = ["weighting-block", "context-block", "plot-block",
+                        "station-block", "rail-block", "overlay-block"];
+
+function applyModeVisibility() {
+  const sift = state.mode === "sift";
+  EXPLORE_BLOCKS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = sift ? "none" : "";
+  });
+  const siftBlock = document.getElementById("sift-block");
+  if (siftBlock) siftBlock.hidden = !sift;
+}
+
+const SIFT = {
+  loaded: false,
+  rows: [],
+  crit: { tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0 },
+};
+
+async function enterSiftMode() {
+  buildSiftCriteria();
+  if (!SIFT.loaded) {
+    const summary = document.getElementById("sift-summary");
+    if (summary) summary.textContent = "Loading station assessments…";
+    await loadSiftData();
+  }
+  renderSift();
+}
+
+function exitSiftMode() {
+  if (map.getLayer("station-dot")) { try { map.setFilter("station-dot", null); } catch (_) {} }
+}
+
+async function loadSiftData() {
+  const sb = (typeof getSupabase === "function") ? getSupabase() : null;
+  if (!sb) { SIFT.rows = []; SIFT.loaded = false; return; }
+  try {
+    const { data, error } = await sb
+      .from("station_assessments")
+      .select("crs, tier, density_floor, developable_ha, dwelling_yield, stations(name, region, ttwa_name)")
+      .order("dwelling_yield", { ascending: false });
+    if (error) throw error;
+    SIFT.rows = (data || []).map(r => ({
+      crs: r.crs, tier: r.tier, densityFloor: r.density_floor,
+      developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
+      name: (r.stations && r.stations.name) || r.crs,
+      region: (r.stations && r.stations.region) || "",
+      ttwa: (r.stations && r.stations.ttwa_name) || "",
+    }));
+    SIFT.loaded = true;
+  } catch (e) {
+    console.error("sift load failed", e);
+    SIFT.rows = []; SIFT.loaded = false;
+  }
+}
+
+function siftSurvivors() {
+  const c = SIFT.crit;
+  return SIFT.rows.filter(r =>
+    ((r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
+     (r.tier === "ineligible" && c.ineligible)) &&
+    r.developableHa >= c.minDevHa && r.yield >= c.minYield);
+}
+
+function buildSiftCriteria() {
+  const el = document.getElementById("sift-criteria");
+  if (!el || el.dataset.built) return;
+  el.dataset.built = "1";
+  el.innerHTML =
+    `<div class="sift-stage"><div class="sift-stage-h">1 · Station eligibility (tier)</div>` +
+    `<label class="dd-row"><input type="checkbox" id="sift-tierA" checked> <span>Tier A · in-settlement (40 dph)</span></label>` +
+    `<label class="dd-row"><input type="checkbox" id="sift-tierB" checked> <span>Tier B · well-connected, out-of-settlement (50 dph)</span></label>` +
+    `<label class="dd-row"><input type="checkbox" id="sift-inelig"> <span>Include ineligible</span></label></div>` +
+    `<div class="sift-stage"><div class="sift-stage-h">2 · Developable land</div>` +
+    `<label class="sift-field"><span>Min developable ha</span><input type="number" id="sift-minha" min="0" step="1" value="0"></label>` +
+    `<label class="sift-field"><span>Min dwelling yield</span><input type="number" id="sift-minyield" min="0" step="50" value="0"></label></div>`;
+  const upd = () => {
+    SIFT.crit = {
+      tierA: el.querySelector("#sift-tierA").checked,
+      tierB: el.querySelector("#sift-tierB").checked,
+      ineligible: el.querySelector("#sift-inelig").checked,
+      minDevHa: parseFloat(el.querySelector("#sift-minha").value) || 0,
+      minYield: parseFloat(el.querySelector("#sift-minyield").value) || 0,
+    };
+    renderSift();
+  };
+  el.querySelectorAll("input").forEach(i => i.addEventListener("input", upd));
+}
+
+function escapeSift(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function renderSift() {
+  const summary = document.getElementById("sift-summary");
+  const results = document.getElementById("sift-results");
+  if (!summary || !results) return;
+  if (!SIFT.loaded) {
+    summary.textContent = "Station assessments unavailable (database not reachable).";
+    results.innerHTML = ""; return;
+  }
+  const surv = siftSurvivors();
+  const totalYield = surv.reduce((s, r) => s + (r.yield || 0), 0);
+  summary.innerHTML =
+    `<strong>${surv.length.toLocaleString()}</strong> of ${SIFT.rows.length.toLocaleString()} stations pass` +
+    ` · ~<strong>${totalYield.toLocaleString()}</strong> dwellings capacity`;
+  const top = surv.slice(0, 100);
+  results.innerHTML =
+    `<table class="sift-table"><thead><tr><th>#</th><th>Station</th><th>Tier</th><th>Dev. ha</th><th>Yield</th></tr></thead><tbody>` +
+    top.map((r, i) =>
+      `<tr data-crs="${escapeSift(r.crs)}"><td>${i + 1}</td>` +
+      `<td>${escapeSift(r.name)}<small>${escapeSift(r.region || r.ttwa)}</small></td>` +
+      `<td><span class="sift-tier sift-tier-${r.tier}">${r.tier === "ineligible" ? "—" : r.tier}</span></td>` +
+      `<td>${r.developableHa.toFixed(1)}</td><td>${(r.yield || 0).toLocaleString()}</td></tr>`
+    ).join("") +
+    `</tbody></table>` +
+    (surv.length > 100 ? `<p class="hint">Showing the top 100 by yield of ${surv.length.toLocaleString()}.</p>` : "");
+  results.querySelectorAll("tr[data-crs]").forEach(tr =>
+    tr.addEventListener("click", () => siftDrillTo(tr.dataset.crs)));
+  highlightSiftSurvivors(surv);
+}
+
+function siftDrillTo(crs) {
+  const feat = ((state.stationsData && state.stationsData.features) || [])
+    .find(f => f.properties.crs === crs);
+  if (!feat) return;
+  const c = feat.geometry.coordinates;
+  map.flyTo({ center: [c[0], c[1]], zoom: 13 });
+  if (typeof profileStation === "function") profileStation(feat.properties, null);
+}
+
+function highlightSiftSurvivors(surv) {
+  if (!map.getLayer("station-dot")) return;
+  try {
+    map.setFilter("station-dot", ["in", ["get", "crs"], ["literal", surv.map(r => r.crs)]]);
+  } catch (_) { /* filter unsupported — leave all stations shown */ }
+}
+
 buildSliders();
 buildLegend();
 wireImdToggle();          // IMD choropleth is a context layer, OFF by default
 wireCollapsibleBlocks();  // weighting block ships collapsed
+wireModeSwitch();         // Explore / Site-sift mode switch
 
 map.on("load", async () => {
   try {

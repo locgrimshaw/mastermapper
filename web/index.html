@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws10-station-report" />
+  <link rel="stylesheet" href="src/styles.css?v=ws11-sift" />
 </head>
 <body>
   <div id="app">
@@ -24,9 +24,21 @@
     <aside id="panel">
       <header>
         <h1>MasterMapper</h1>
-        <p class="tagline">England · socio-economic context for site appraisal</p>
+        <p class="tagline">England · NPPF station site appraisal</p>
+        <div class="mode-switch" id="mode-switch" role="tablist">
+          <button type="button" class="mode-btn active" data-mode="explore">Explore</button>
+          <button type="button" class="mode-btn" data-mode="sift">Site sift</button>
+        </div>
         <div id="layer-toggle" class="layer-toggle"></div>
       </header>
+
+      <section class="block" id="sift-block" hidden>
+        <h2>Site sift · NPPF station funnel</h2>
+        <p class="hint">Sift every rail station through the eligibility gates, then rank by capacity. Adjust the criteria — the list updates live. Click a row to profile that station.</p>
+        <div id="sift-criteria"></div>
+        <div id="sift-summary" class="sift-summary"></div>
+        <div id="sift-results" class="sift-results"></div>
+      </section>
 
       <section class="block collapsible collapsed" id="weighting-block">
         <button type="button" class="block-head" aria-expanded="false">
@@ -41,7 +53,7 @@
         </div>
       </section>
 
-      <section class="block">
+      <section class="block" id="context-block">
         <h2>Site context</h2>
         <p class="hint" id="draw-hint">Tap any area to see its details. Use the draw tool (top-right) to outline a plot and get an aggregated report here.</p>
         <div id="report"><p class="empty">No site selected yet.</p></div>
@@ -222,6 +234,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws10-station-report"></script>
+  <script type="module" src="src/app.js?v=ws11-sift"></script>
 </body>
 </html>
