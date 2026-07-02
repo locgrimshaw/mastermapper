@@ -215,6 +215,18 @@ html, body {
 .sift-tier-A { background: #2f9e44; color: #fff; }
 .sift-tier-B { background: #e0853a; color: #fff; }
 .sift-tier-ineligible { background: var(--ink-line); color: var(--text-dim); }
+.sift-gb { color: #2b8a3e; font-weight: 700; }
+
+/* Gate-3 soft-constraint friction read-out in the developable summary. */
+.dd-fric { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 6px 8px; border-radius: 6px; font-size: 12px;
+  background: var(--ink-line); border-left: 3px solid var(--text-dim); }
+.dd-fric-h { font-weight: 600; }
+.dd-fric-val { font-variant-numeric: tabular-nums; }
+.dd-fric-gb { color: #2b8a3e; font-weight: 600; margin-left: auto; }
+.dd-fric-low  { border-left-color: #2f9e44; }
+.dd-fric-mid  { border-left-color: #e0853a; }
+.dd-fric-high { border-left-color: #c0392b; }
 
 .block h2 {
   margin: 0 0 6px;

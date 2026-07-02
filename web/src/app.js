@@ -135,6 +135,14 @@ const DEVELOPABLE_SUBTRACT_KINDS = [
   { key: "flood_zone_3", label: "Flood zone 3",   on: true  },
   { key: "flood_zone_2", label: "Flood zone 2",   on: false },
   { key: "green_belt",   label: "Green belt",     on: false },
+  // Gate-3 hard environmental exclusions (statutory designations). On by default
+  // so single-station detail matches the sift's default erase set.
+  { key: "sssi",               label: "SSSI",               on: true },
+  { key: "sac",                label: "Special Area of Conservation", on: true },
+  { key: "spa",                label: "Special Protection Area",      on: true },
+  { key: "ramsar",             label: "Ramsar wetland",     on: true },
+  { key: "ancient_woodland",   label: "Ancient woodland",   on: true },
+  { key: "scheduled_monument", label: "Scheduled monument", on: true },
 ];
 
 // Fill/outline colours: green for the developable land kept, muted red for the
@@ -3807,7 +3815,36 @@ function renderDevelopableSummary() {
       ${card("suburban", "Suburban", dw.suburban)}
       ${card("urban", "Urban", dw.urban)}
     </div>
-    <p class="hint" style="margin-top:6px">Potential dwellings by density regime (✓ = selected). Urban applies ${deep.developableDph.urbanInner} dph within ${deep.developable.inner_radius_m} m of the station and ${deep.developableDph.urbanOuter} dph beyond.</p>`;
+    <p class="hint" style="margin-top:6px">Potential dwellings by density regime (✓ = selected). Urban applies ${deep.developableDph.urbanInner} dph within ${deep.developable.inner_radius_m} m of the station and ${deep.developableDph.urbanOuter} dph beyond.</p>
+    ${developableConstraintsHTML(r)}`;
+}
+
+// Gate-3 read-out for the developable summary: the hard designations are already
+// erased from `devHa` above; here we report residual soft-constraint friction (a
+// 0–1 weighted coverage of the developable land) and the Green Belt overlap
+// (permitted for Tier-B out-of-settlement schemes, a soft constraint for Tier A).
+function developableConstraintsHTML(r) {
+  if (!r) return "";
+  const fr = r.friction == null ? null : Number(r.friction);
+  const gb = Number(r.green_belt_ha) || 0;
+  const soft = r.soft_cover || {};
+  const SOFT_LABELS = {
+    conservation_area: "Conservation area", aonb: "AONB / National Landscape",
+    park_garden: "Registered park/garden", listed_building: "Listed-building setting",
+  };
+  const parts = Object.keys(soft)
+    .filter(k => Number(soft[k]) > 0)
+    .sort((a, b) => Number(soft[b]) - Number(soft[a]))
+    .map(k => `${SOFT_LABELS[k] || k} ${(Number(soft[k]) * 100).toFixed(0)}%`);
+  if (fr == null && gb <= 0 && !parts.length) return "";
+  const rag = fr == null ? "" : fr < 0.15 ? "dd-fric-low" : fr < 0.4 ? "dd-fric-mid" : "dd-fric-high";
+  return `
+    <div class="dd-fric ${rag}" style="margin-top:8px">
+      <span class="dd-fric-h">NPPF soft constraints</span>
+      <span class="dd-fric-val">${fr == null ? "n/a" : "friction " + fr.toFixed(2)}</span>
+      ${gb > 0 ? `<span class="dd-fric-gb" title="Developable land within Green Belt">⬡ ${gb.toFixed(1)} ha Green Belt</span>` : ""}
+    </div>
+    ${parts.length ? `<p class="hint" style="margin-top:4px">Covering the developable land: ${parts.join(" · ")}.</p>` : `<p class="hint" style="margin-top:4px">No soft designations overlap the developable land.</p>`}`;
 }
 
 // The developable section markup, built once per station deep dive. Reads the
@@ -6052,7 +6089,8 @@ function applyModeVisibility() {
 const SIFT = {
   loaded: false,
   rows: [],
-  crit: { tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0 },
+  crit: { tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
+          maxFriction: 1 },
 };
 
 async function enterSiftMode() {
@@ -6075,12 +6113,15 @@ async function loadSiftData() {
   try {
     const { data, error } = await sb
       .from("station_assessments")
-      .select("crs, tier, density_floor, developable_ha, dwelling_yield, stations(name, region, ttwa_name)")
+      .select("crs, tier, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, stations(name, region, ttwa_name)")
       .order("dwelling_yield", { ascending: false });
     if (error) throw error;
     SIFT.rows = (data || []).map(r => ({
       crs: r.crs, tier: r.tier, densityFloor: r.density_floor,
       developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
+      friction: r.constraint_friction == null ? null : Number(r.constraint_friction),
+      greenBeltHa: Number(r.green_belt_ha) || 0,
+      softCover: r.soft_cover || {},
       name: (r.stations && r.stations.name) || r.crs,
       region: (r.stations && r.stations.region) || "",
       ttwa: (r.stations && r.stations.ttwa_name) || "",
@@ -6097,7 +6138,10 @@ function siftSurvivors() {
   return SIFT.rows.filter(r =>
     ((r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
      (r.tier === "ineligible" && c.ineligible)) &&
-    r.developableHa >= c.minDevHa && r.yield >= c.minYield);
+    r.developableHa >= c.minDevHa && r.yield >= c.minYield &&
+    // Gate 3 friction: null friction (not yet computed) passes; otherwise it must
+    // sit at or below the cap. maxFriction 1 admits everything.
+    (r.friction == null || r.friction <= c.maxFriction));
 }
 
 function buildSiftCriteria() {
@@ -6111,14 +6155,22 @@ function buildSiftCriteria() {
     `<label class="dd-row"><input type="checkbox" id="sift-inelig"> <span>Include ineligible</span></label></div>` +
     `<div class="sift-stage"><div class="sift-stage-h">2 · Developable land</div>` +
     `<label class="sift-field"><span>Min developable ha</span><input type="number" id="sift-minha" min="0" step="1" value="0"></label>` +
-    `<label class="sift-field"><span>Min dwelling yield</span><input type="number" id="sift-minyield" min="0" step="50" value="0"></label></div>`;
+    `<label class="sift-field"><span>Min dwelling yield</span><input type="number" id="sift-minyield" min="0" step="50" value="0"></label></div>` +
+    `<div class="sift-stage"><div class="sift-stage-h">3 · NPPF constraints</div>` +
+    `<p class="hint">Hard environmental designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased from the developable land above. This caps the remaining <em>soft</em>-constraint friction (conservation areas, AONB, parks &amp; gardens, listed-building settings).</p>` +
+    `<label class="sift-field"><span>Max soft friction <b id="sift-fric-val">1.00</b></span><input type="range" id="sift-maxfric" min="0" max="1" step="0.05" value="1"></label></div>`;
   const upd = () => {
+    const fricEl = el.querySelector("#sift-maxfric");
+    const fricVal = parseFloat(fricEl.value);
+    const fricLbl = el.querySelector("#sift-fric-val");
+    if (fricLbl) fricLbl.textContent = fricVal.toFixed(2);
     SIFT.crit = {
       tierA: el.querySelector("#sift-tierA").checked,
       tierB: el.querySelector("#sift-tierB").checked,
       ineligible: el.querySelector("#sift-inelig").checked,
       minDevHa: parseFloat(el.querySelector("#sift-minha").value) || 0,
       minYield: parseFloat(el.querySelector("#sift-minyield").value) || 0,
+      maxFriction: isNaN(fricVal) ? 1 : fricVal,
     };
     renderSift();
   };
@@ -6145,12 +6197,14 @@ function renderSift() {
     ` · ~<strong>${totalYield.toLocaleString()}</strong> dwellings capacity`;
   const top = surv.slice(0, 100);
   results.innerHTML =
-    `<table class="sift-table"><thead><tr><th>#</th><th>Station</th><th>Tier</th><th>Dev. ha</th><th>Yield</th></tr></thead><tbody>` +
+    `<table class="sift-table"><thead><tr><th>#</th><th>Station</th><th>Tier</th><th>Dev. ha</th><th>Yield</th><th title="Soft-constraint friction 0–1; ⬡ = Green Belt overlap">Fric.</th></tr></thead><tbody>` +
     top.map((r, i) =>
       `<tr data-crs="${escapeSift(r.crs)}"><td>${i + 1}</td>` +
       `<td>${escapeSift(r.name)}<small>${escapeSift(r.region || r.ttwa)}</small></td>` +
       `<td><span class="sift-tier sift-tier-${r.tier}">${r.tier === "ineligible" ? "—" : r.tier}</span></td>` +
-      `<td>${r.developableHa.toFixed(1)}</td><td>${(r.yield || 0).toLocaleString()}</td></tr>`
+      `<td>${r.developableHa.toFixed(1)}</td><td>${(r.yield || 0).toLocaleString()}</td>` +
+      `<td>${r.friction == null ? "—" : r.friction.toFixed(2)}` +
+      `${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha of developable land in Green Belt">⬡</span>` : ""}</td></tr>`
     ).join("") +
     `</tbody></table>` +
     (surv.length > 100 ? `<p class="hint">Showing the top 100 by yield of ${surv.length.toLocaleString()}.</p>` : "");
