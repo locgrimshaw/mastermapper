@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws8-greenbelt-ruc" />
+  <link rel="stylesheet" href="src/styles.css?v=ws9-funnel-redefaults" />
 </head>
 <body>
   <div id="app">
@@ -28,12 +28,17 @@
         <div id="layer-toggle" class="layer-toggle"></div>
       </header>
 
-      <section class="block">
-        <h2>Combined score weighting</h2>
-        <p class="hint">Domains are weighted as in the official Index of Multiple Deprivation. Move a slider and the others rebalance so the total stays 100%. The map updates live.</p>
-        <div id="sliders"></div>
-        <div id="weight-total" class="weight-total">Total: 100%</div>
-        <button id="reset-weights" class="ghost">Reset to official IMD weighting</button>
+      <section class="block collapsible collapsed" id="weighting-block">
+        <button type="button" class="block-head" aria-expanded="false">
+          <h2>Combined score weighting</h2>
+          <span class="block-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="block-content">
+          <p class="hint">Domains are weighted as in the official Index of Multiple Deprivation. Move a slider and the others rebalance so the total stays 100%. The map updates live (turn on the Deprivation layer to see it).</p>
+          <div id="sliders"></div>
+          <div id="weight-total" class="weight-total">Total: 100%</div>
+          <button id="reset-weights" class="ghost">Reset to official IMD weighting</button>
+        </div>
       </section>
 
       <section class="block">
@@ -108,10 +113,14 @@
         <div id="rail-toggle" class="rail-toggle"></div>
       </section>
 
-      <section class="block" id="overlay-block" hidden>
-        <h2>Planning overlays</h2>
-        <p class="hint">National planning-constraint layers drawn over the map for context.</p>
+      <section class="block" id="overlay-block">
+        <h2>Map layers</h2>
+        <p class="hint">Context layers drawn over the map. The deprivation choropleth is off by default.</p>
         <label class="dd-row">
+          <input type="checkbox" id="imd-show" />
+          <span class="dd-label">Deprivation (IMD)</span>
+        </label>
+        <label class="dd-row" id="greenbelt-row" hidden>
           <input type="checkbox" id="greenbelt-show" />
           <span class="dd-label">Green Belt</span>
           <span class="dd-stat" id="greenbelt-count"></span>
@@ -213,6 +222,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws8-greenbelt-ruc"></script>
+  <script type="module" src="src/app.js?v=ws9-funnel-redefaults"></script>
 </body>
 </html>

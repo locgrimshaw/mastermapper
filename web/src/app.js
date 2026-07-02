@@ -202,6 +202,12 @@ const state = {
   layer: "deprivation",  // "deprivation" | "price"
   hasPrice: false,       // whether the loaded data includes price fields
   colourMode: "single",  // "single" | "spectrum"
+  // The IMD/price choropleth is now context, OFF by default (the app leads with
+  // the site-appraisal funnel, not deprivation colours). Toggled from the
+  // "Map layers" block. lsoa-fill stays rendered at opacity 0 when off so
+  // click-to-inspect and draw-a-plot (which queryRenderedFeatures on it) keep
+  // working — visibility:none would break those.
+  imdOn: false,
   fillOpacity: 0.85,     // choropleth opacity (slider fades to basemap)
   theme: "light",        // "dark" | "light"
   hasRail: false,        // whether the tiles include the rail overlay
@@ -471,7 +477,9 @@ async function loadData() {
     "source-layer": SOURCE_LAYER,
     paint: {
       "fill-color": fillColorExpression(),
-      "fill-opacity": state.fillOpacity,
+      // OFF by default (opacity 0) — kept rendered so queryRenderedFeatures
+      // interactions still work. setImdVisible() flips this.
+      "fill-opacity": state.imdOn ? state.fillOpacity : 0,
       // Paint each polygon's own outline in its own fill colour. Because
       // tippecanoe simplifies shared borders slightly differently per
       // polygon, adjacent LSOAs can leave hairline gaps that show the bright
@@ -489,6 +497,7 @@ async function loadData() {
     type: "line",
     source: "lsoa",
     "source-layer": SOURCE_LAYER,
+    layout: { visibility: state.imdOn ? "visible" : "none" },
     paint: {
       "line-color": LINE_COLOR(),
       "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0, 11, 0.4, 14, 0.7, 17, 1.2],
@@ -776,12 +785,13 @@ async function loadGreenbelt() {
   }
 }
 
-// Reveal the "Planning overlays" block and wire the Green Belt checkbox.
+// Reveal the Green Belt row (inside the always-visible "Map layers" block) and
+// wire its checkbox.
 function buildGreenbeltToggle(count) {
-  const block = document.getElementById("overlay-block");
+  const row = document.getElementById("greenbelt-row");
   const cb = document.getElementById("greenbelt-show");
-  if (!block || !cb) return;
-  block.hidden = false;
+  if (!row || !cb) return;
+  row.hidden = false;
   const cnt = document.getElementById("greenbelt-count");
   if (cnt && count) cnt.textContent = `${count.toLocaleString()} areas`;
   cb.addEventListener("change", (e) => {
@@ -790,6 +800,45 @@ function buildGreenbeltToggle(count) {
     greenbeltAttributionShown = e.target.checked;
     updateDataSourceNote();
   });
+}
+
+// Master toggle for the IMD/price choropleth (now a context layer, OFF by
+// default). lsoa-fill stays rendered at opacity 0 when off so click-to-inspect
+// and draw-a-plot (which queryRenderedFeatures on it) keep working — hence we
+// flip opacity, not visibility. The boundary line and legend follow.
+function setImdVisible(on) {
+  state.imdOn = on;
+  if (map.getLayer("lsoa-fill"))
+    map.setPaintProperty("lsoa-fill", "fill-opacity", on ? state.fillOpacity : 0);
+  if (map.getLayer("lsoa-line"))
+    map.setLayoutProperty("lsoa-line", "visibility", on ? "visible" : "none");
+  const legend = document.getElementById("legend");
+  if (legend) legend.style.display = on ? "" : "none";
+}
+
+// Wire any collapsible left-panel .block (accordion header toggles .collapsed).
+// The weighting block ships collapsed by default (funnel-first UI).
+function wireCollapsibleBlocks() {
+  document.querySelectorAll(".block.collapsible > .block-head").forEach(head => {
+    head.addEventListener("click", () => {
+      const block = head.closest(".block");
+      const collapsed = block.classList.toggle("collapsed");
+      head.setAttribute("aria-expanded", String(!collapsed));
+    });
+  });
+}
+
+// Wire the "Deprivation (IMD)" checkbox in the Map layers block and reflect the
+// initial (off) state on the legend. Safe to call at init before the map loads
+// — setImdVisible only runs on user change, by which time the layers exist.
+function wireImdToggle() {
+  const cb = document.getElementById("imd-show");
+  if (cb) {
+    cb.checked = state.imdOn;
+    cb.addEventListener("change", (e) => setImdVisible(e.target.checked));
+  }
+  const legend = document.getElementById("legend");
+  if (legend) legend.style.display = state.imdOn ? "" : "none";
 }
 
 // ---- Choropleth restyle on weight change ----------------------------------
@@ -2517,7 +2566,7 @@ function runDeepDive(catchment, meta) {
   // The mask dims everything outside the catchment, so we keep the choropleth
   // reasonably visible (it shows through inside the catchment) rather than
   // dimming it everywhere.
-  if (map.getLayer("lsoa-fill")) map.setPaintProperty("lsoa-fill", "fill-opacity", 0.6);
+  if (state.imdOn && map.getLayer("lsoa-fill")) map.setPaintProperty("lsoa-fill", "fill-opacity", 0.6);
   closeDetail();
   const bbox = turf.bbox(deep.catchment);
   const rightPad = window.innerWidth <= 720 ? 40 : 420;
@@ -2530,9 +2579,10 @@ function runDeepDive(catchment, meta) {
   // Estimate the catchment's resident population + area, then fill the stat row.
   computeCatchmentPopulation();
 
-  // Auto-activate every amenity layer so the user immediately sees what's in the
-  // catchment, and compute nearest-distance stats. Done after the panel exists.
-  autoEnableAmenities();
+  // Amenities are now OFF by default in a deep dive — the user enables them
+  // per-layer from the Amenities block (keeps the catchment view clean and
+  // funnel-focused). We still compute the nearest-access distance stats so the
+  // access panel populates without turning the dots on.
   computeNearestDistances();
 
   // For a STATION profile, fetch the brownfield SUPPLY summary automatically
@@ -2914,7 +2964,7 @@ function exitDeepDive() {
   deep.active = false;
   clearDeepDiveMapArtifacts();
   if (map.getLayer("lsoa-fill"))
-    map.setPaintProperty("lsoa-fill", "fill-opacity", state.fillOpacity);
+    map.setPaintProperty("lsoa-fill", "fill-opacity", state.imdOn ? state.fillOpacity : 0);
   setDeepPanelOpen(false);
   const panel = document.getElementById("deepdive-panel");
   if (panel) panel.innerHTML = "";
@@ -5350,7 +5400,7 @@ function buildDeepDivePanel(meta) {
         </button>
         <div class="dd-block-content">
           <label class="dd-row dd-row-all">
-            <input type="checkbox" class="enable" id="dd-all-amenities" checked />
+            <input type="checkbox" class="enable" id="dd-all-amenities" />
             <span class="dd-label"><strong>All amenities</strong></span>
             <span class="dd-stat" id="dd-stat-all"></span>
           </label>
@@ -5942,6 +5992,8 @@ function setDrawer(open) {
 
 buildSliders();
 buildLegend();
+wireImdToggle();          // IMD choropleth is a context layer, OFF by default
+wireCollapsibleBlocks();  // weighting block ships collapsed
 
 map.on("load", async () => {
   try {

@@ -145,6 +145,28 @@ html, body {
   border-bottom: 1px solid var(--ink-line);
 }
 
+/* Collapsible left-panel block (mirrors the deep-dive .dd-block accordion). */
+.block.collapsible > .block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  text-align: left;
+}
+.block.collapsible > .block-head h2 { margin: 0; }
+.block-caret {
+  color: var(--text-dim);
+  font-size: 11px;
+  transition: transform 0.18s ease;
+}
+.block.collapsed > .block-head .block-caret { transform: rotate(-90deg); }
+.block.collapsed > .block-content { display: none; }
+
 .block h2 {
   margin: 0 0 6px;
   font-size: 12px;
