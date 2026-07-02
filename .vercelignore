@@ -1,0 +1,9 @@
+# Only the static `web/` directory is served (see outputDirectory in vercel.json).
+# Keep these build-time / data-pipeline inputs out of the deployment upload.
+data/
+pipeline/
+supabase/
+docs/
+github/
+.devcontainer/
+.github/
