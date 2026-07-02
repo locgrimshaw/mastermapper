@@ -5567,6 +5567,7 @@ function buildDeepDivePanel(meta) {
       </section>
 
       ${meta.station ? developableSectionHTML(meta.station) : ""}
+      ${meta.station ? benefitSectionHTML(meta.station) : ""}
 
       <section class="dd-block" data-section="amenities">
         <button class="dd-block-head" type="button" aria-expanded="true">
@@ -5663,6 +5664,67 @@ function buildDeepDivePanel(meta) {
 
   // Fill the deprivation headline, breakdown bars and plain-English summary.
   renderDeprivationScore();
+  // Fetch + render our precomputed socio-economic benefit score (Assessment 4).
+  if (meta.station && meta.station.crs) loadStationBenefit(meta.station.crs);
+}
+
+// Assessment-4 benefit section for the deep dive: a placeholder filled async by
+// loadStationBenefit from the precomputed station_assessments row.
+function benefitSectionHTML(station) {
+  return `
+      <section class="dd-block" data-section="benefit">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Socio-economic benefit · Assessment 4</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <div id="dd-benefit-body"><p class="hint">Loading benefit score…</p></div>
+        </div>
+      </section>`;
+}
+
+// A labelled 0–100 bar with a hover tooltip explaining that component.
+function benefitBar(label, val, color, tip) {
+  const v = val == null ? null : Math.max(0, Math.min(100, Number(val)));
+  return `<div class="dd-benefit-bar" title="${tip.replace(/"/g, "&quot;")}">
+    <div class="dd-bb-top"><span>${label}</span><span>${v == null ? "—" : Math.round(v)}</span></div>
+    <div class="dd-bb-track"><div class="dd-bb-fill" style="width:${v == null ? 0 : v}%;background:${color}"></div></div>
+  </div>`;
+}
+
+async function loadStationBenefit(crs) {
+  const body = document.getElementById("dd-benefit-body");
+  if (!body) return;
+  const sb = (typeof getSupabase === "function") ? getSupabase() : null;
+  if (!sb) { body.innerHTML = `<p class="hint">Benefit score needs the database (see config.js).</p>`; return; }
+  try {
+    const { data, error } = await sb.from("station_assessments")
+      .select("benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, gp_ct, school_ct, pharmacy_ct, nursery_ct, bus_ct, dwelling_yield")
+      .eq("crs", crs).single();
+    if (error) throw error;
+    if (!data) { body.innerHTML = `<p class="hint">No benefit score for this station.</p>`; return; }
+    const r = data;
+    const amen = `${r.gp_ct ?? 0} GP · ${r.pharmacy_ct ?? 0} pharmacy · ${r.school_ct ?? 0} school · ${r.nursery_ct ?? 0} nursery · ${(r.bus_ct ?? 0).toLocaleString()} bus stops`;
+    body.innerHTML = `
+      <div class="dd-benefit-head">
+        <div class="dd-score-big">${r.benefit_score == null ? "—" : Math.round(r.benefit_score)}<span>/100</span></div>
+        <div class="dd-score-cap">Socio-economic benefit<br><small>equal-weighted mean of the three components below</small></div>
+      </div>
+      ${benefitBar("Regeneration", r.regen_score, "#c0392b",
+        "Regeneration need. The population-weighted average deprivation of the LSOAs whose centroid falls within the 800 m catchment. Higher = more deprived = more regeneration benefit from new homes. Source: English Indices of Deprivation 2019 (MHCLG), LSOA overall score, normalised 0–100.")}
+      ${benefitBar("Sustainable access", r.access_score, "#1c7ed6",
+        "Sustainable access = 0.6 × local amenity completeness + 0.4 × rail-connectivity percentile. Amenity completeness gives 20 points each for a GP, pharmacy, school and nursery within 800 m, plus up to 20 for bus-stop density (20 at 10+ stops). Sources: NHS ODS (GPs, pharmacies), DfE Get Information About Schools (schools, nurseries), NaPTAN/DfT (bus stops); rail connectivity from the National Rail timetable.")}
+      ${benefitBar("Housing contribution", r.housing_score, "#2f9e44",
+        "Housing contribution = this station's dwelling-yield percentile across all 2,019 England stations. Yield = net developable hectares × NPPF density floor (50 dph if well-connected, else 40 dph).")}
+      <div class="dd-benefit-facts">
+        <span>Catchment IMD <b>${r.catchment_imd ?? "—"}</b>/100</span>
+        <span>Catchment pop <b>${(r.catchment_pop ?? 0).toLocaleString()}</b></span>
+      </div>
+      <p class="hint" style="margin-top:6px">Amenities within 800 m: ${amen}.</p>
+      <p class="hint" style="margin-top:6px"><strong>How this is built:</strong> benefit = mean(regeneration, access, housing), each scored 0–100. It is regeneration-led (rewards deprived, well-served catchments with real housing capacity), not a property-value score. Sources: MHCLG English Indices of Deprivation 2019; NHS ODS; DfE GIAS; DfT NaPTAN; National Rail timetable; ONS LSOA populations. All Open Government Licence v3.0.</p>`;
+  } catch (err) {
+    console.error("benefit load failed", err);
+    body.innerHTML = `<p class="hint">Couldn't load the benefit score for this station.</p>`;
+  }
 }
 
 // DOMAINS labelled for the breakdown (shorter labels than the slider names).
