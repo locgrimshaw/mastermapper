@@ -40,6 +40,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r pipeline/requirements.txt
 
+      - name: Download source datasets
+        run: |
+          mkdir -p data/raw
+          # planning.data.gov.uk green belt (OGL v3.0, already 4326) — reliable.
+          echo "green-belt..."
+          curl -fL --retry 3 --retry-delay 5 -o data/raw/green-belt.geojson \
+            "https://files.planning.data.gov.uk/dataset/green-belt.geojson" \
+            || echo "::warning::green-belt download failed (display layer will skip)"
+          # ONS Rural-Urban Classification 2011 (LSOA, England & Wales): no stable
+          # unauthenticated bulk URL. If data/raw/ruc_lsoa.csv is committed it is
+          # used; otherwise the station RUC step skips and the frontend falls back
+          # to population-density bands.
+          ls -lh data/raw/ || true
+
       - name: Build green-belt display layer
         run: |
           if [ -f data/raw/green-belt.geojson ] || [ -n "${GREEN_BELT_SRC}" ]; then

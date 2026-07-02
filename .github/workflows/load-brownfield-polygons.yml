@@ -52,13 +52,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r pipeline/requirements.txt
 
-      # OPTIONAL: fetch source downloads here instead of committing them. CI has
-      # open internet. Example (uncomment + adjust):
-      # - name: Download brownfield-site GeoJSON
-      #   run: |
-      #     mkdir -p data/raw
-      #     curl -L -o data/raw/brownfield-site.geojson \
-      #       "https://www.planning.data.gov.uk/entity.geojson?dataset=brownfield-site&limit=..."
+      - name: Download source datasets (planning.data.gov.uk, OGL v3.0)
+        run: |
+          mkdir -p data/raw
+          echo "Downloading brownfield-site polygons (PART A)..."
+          curl -fL --retry 3 --retry-delay 5 -o data/raw/brownfield-site.geojson \
+            "https://files.planning.data.gov.uk/dataset/brownfield-site.geojson" \
+            || echo "::warning::brownfield-site download failed (PART A will skip)"
+          echo "Downloading brownfield-land points (PART B point set)..."
+          curl -fL --retry 3 --retry-delay 5 -o data/raw/brownfield-land.csv \
+            "https://files.planning.data.gov.uk/dataset/brownfield-land.csv" \
+            || echo "::warning::brownfield-land download failed (PART B will skip)"
+          # PART B boundaries (INSPIRE) are per-LPA + licence-restricted; commit
+          # them to data/raw/inspire/ manually if wanted (PART B skips otherwise).
+          echo "Downloaded:"; ls -lh data/raw/ || true
 
       - name: Check at least one source is present
         run: |

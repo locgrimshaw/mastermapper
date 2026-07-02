@@ -52,16 +52,39 @@ jobs:
       - name: Install dependencies
         run: pip install -r pipeline/requirements.txt
 
-      # OPTIONAL: fetch the raw source downloads here instead of committing them.
-      # CI has open internet. Example (uncomment + fill in real URLs):
-      # - name: Download source datasets
-      #   run: |
-      #     mkdir -p data/raw
-      #     curl -L -o data/raw/green-belt.geojson \
-      #       "https://www.planning.data.gov.uk/entity.geojson?dataset=green-belt&limit=..."
-      #     # OS Open Built Up Areas / Greenspace / OpenMap Local and the EA
-      #     # Flood Zones are large GeoPackages from osdatahub.os.uk and
-      #     # environment.data.gov.uk — add curl/unzip steps as needed.
+      - name: Download constraint sources (best effort; missing ones skip)
+        run: |
+          mkdir -p data/raw data/raw/os
+          # --- planning.data.gov.uk green belt (OGL v3.0, already 4326) --------
+          echo "green-belt..."
+          curl -fL --retry 3 --retry-delay 5 -o data/raw/green-belt.geojson \
+            "https://files.planning.data.gov.uk/dataset/green-belt.geojson" \
+            || echo "::warning::green-belt download failed"
+          # --- OS OpenData via the OS Data Hub Downloads API (no key needed) ---
+          # Delivered as a zip; we unzip, find the .gpkg, and point the builder's
+          # env var at it. Best effort — a failure just skips that kind.
+          osdl() {
+            prod="$1"; var="$2"
+            echo "OS $prod..."
+            if curl -fL --retry 2 --retry-delay 5 -o "data/raw/os/$prod.zip" \
+                 "https://api.os.uk/downloads/v1/products/$prod/downloads?area=GB&format=GeoPackage&redirect"; then
+              unzip -o -q "data/raw/os/$prod.zip" -d "data/raw/os/$prod" || true
+              gpkg=$(find "data/raw/os/$prod" -iname '*.gpkg' | head -1)
+              if [ -n "$gpkg" ]; then echo "$var=$gpkg" >> "$GITHUB_ENV"; echo "  -> $gpkg"; \
+                else echo "::warning::no .gpkg inside $prod.zip"; fi
+            else echo "::warning::OS $prod download failed"; fi
+          }
+          osdl BuiltUpAreas   BUILT_LAND_SRC
+          osdl OpenGreenspace GREEN_SPACE_SRC
+          osdl OpenMapLocal   TRANSPORT_ROAD_SRC
+          # OpenMap Local carries both Road + RailwayTrack layers in one gpkg.
+          rd=$(find data/raw/os/OpenMapLocal -iname '*.gpkg' 2>/dev/null | head -1)
+          if [ -n "$rd" ]; then echo "TRANSPORT_RAIL_SRC=$rd" >> "$GITHUB_ENV"; fi
+          # --- EA Flood Map for Planning Flood Zones (best effort) ------------
+          # The Defra DSP national download is not a stable unauthenticated URL;
+          # if this fails, commit data/raw/ea_flood_zones.gpkg manually. Flood
+          # zones then simply aren't subtracted until provided.
+          echo "Downloaded so far:"; ls -lhR data/raw | head -40 || true
 
       - name: Check at least one source download is present
         run: |
