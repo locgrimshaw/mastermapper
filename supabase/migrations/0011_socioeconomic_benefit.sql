@@ -94,6 +94,19 @@ begin
       on st_dwithin(l.geom::geography, st_makepoint(s.lng, s.lat)::geography, radius_m)
     group by s.crs
   ),
+  -- Fallback for isolated stations whose catchment catches no LSOA centroid
+  -- (large rural LSOAs): use the single nearest LSOA so regen is never a false 0.
+  nearest as (
+    select s.crs, nl.population, nl.overall_norm, nl.income_norm,
+           nl.health_norm, nl.education_norm
+    from public.stations s
+    cross join lateral (
+      select l.population, l.overall_norm, l.income_norm, l.health_norm, l.education_norm
+      from public.lsoa_imd l
+      order by l.geom <-> st_setsrid(st_makepoint(s.lng, s.lat), 4326)
+      limit 1
+    ) nl
+  ),
   amen as (
     select s.crs,
            count(*) filter (where a.kind = 'gp')       as gp_ct,
@@ -108,7 +121,11 @@ begin
   ),
   comp as (
     select s.crs,
-           c.pop, c.imd, c.income, c.health, c.education,
+           coalesce(c.pop, nr.population)           as pop,
+           coalesce(c.imd, nr.overall_norm)         as imd,
+           coalesce(c.income, nr.income_norm)       as income,
+           coalesce(c.health, nr.health_norm)       as health,
+           coalesce(c.education, nr.education_norm)  as education,
            coalesce(am.gp_ct, 0)       as gp_ct,
            coalesce(am.school_ct, 0)   as school_ct,
            coalesce(am.pharmacy_ct, 0) as pharmacy_ct,
@@ -125,8 +142,9 @@ begin
            coalesce(a.dwelling_yield, 0)       as dwelling_yield
     from public.stations s
     join public.station_assessments a on a.crs = s.crs
-    left join cat  c  on c.crs  = s.crs
-    left join amen am on am.crs = s.crs
+    left join cat     c  on c.crs  = s.crs
+    left join nearest nr on nr.crs = s.crs
+    left join amen    am on am.crs = s.crs
   ),
   scored as (
     select crs, pop, imd, income, health, education,
