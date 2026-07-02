@@ -282,9 +282,15 @@ def build_clip_mask():
     return mask
 
 
-def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None):
+def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None,
+            dissolve=False):
     """Shared tail: clip to the mask (EPSG:27700), simplify lightly, reproject to
-    4326, and emit one row per surviving feature. Returns a list of row dicts."""
+    4326, and emit one row per surviving feature. Returns a list of row dicts.
+
+    dissolve=True first unions everything into merged geometry and emits its
+    constituent polygons instead of one row per input feature — essential for
+    dense line layers (roads/rail) where per-segment rows would explode the row
+    count. Per-feature props are dropped when dissolving."""
     if gdf is None or gdf.empty:
         return []
     gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
@@ -309,6 +315,15 @@ def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None):
     gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
     if gdf.empty:
         return []
+
+    # Merge everything into one geometry then split back into its parts, so a
+    # dense line layer becomes a handful of connected corridors rather than
+    # hundreds of thousands of per-segment rows.
+    if dissolve:
+        merged = make_valid(unary_union(list(gdf.geometry.values)))
+        parts = list(getattr(merged, "geoms", [merged]))
+        gdf = gpd.GeoDataFrame({"geometry": parts}, geometry="geometry", crs=gdf.crs)
+        prop_cols, id_col, name_col = None, None, None
 
     if SIMPLIFY_M:
         gdf["geometry"] = gdf.geometry.simplify(SIMPLIFY_M, preserve_topology=True)
@@ -460,10 +475,17 @@ def build_transport(mask_27700, mask_geom_27700):
         rlayer = _pick_layer(road_path, ["Road", "road", "OpenMapLocal_Road",
                                          "Roads"])
         roads = _to_27700(_read_source(road_path, rlayer, mask_geom_27700))
+        # MAJOR roads only (motorway + A-road). Minor/residential streets aren't
+        # meaningful barriers to development and their volume (hundreds of
+        # thousands of segments near stations) makes the build intractable.
+        cls_col = _find_col(roads, CLASS_CANDIDATES)
+        if cls_col is not None:
+            low = roads[cls_col].astype(str).str.lower()
+            roads = roads[low.str.contains("motorway|a road|primary|trunk", na=False)]
+            print(f"    kept {len(roads)} major-road features")
         roads = _buffer_transport_layer(roads, is_rail=False)
-        rows += _finish(roads, "transport", mask_27700,
-                        prop_cols=["constraint_type", "road_class",
-                                   "half_width_m"])
+        # dissolve=True: merge buffered roads into corridors (few rows, not 100k+).
+        rows += _finish(roads, "transport", mask_27700, dissolve=True)
     if rail_path:
         print(f"  [transport] reading railway from {rail_path.name} ...")
         elayer = _pick_layer(rail_path, ["RailwayTrack", "Railway",
@@ -471,9 +493,7 @@ def build_transport(mask_27700, mask_geom_27700):
                                          "Rail"])
         rail = _to_27700(_read_source(rail_path, elayer, mask_geom_27700))
         rail = _buffer_transport_layer(rail, is_rail=True)
-        rows += _finish(rail, "transport", mask_27700,
-                        prop_cols=["constraint_type", "road_class",
-                                   "half_width_m"])
+        rows += _finish(rail, "transport", mask_27700, dissolve=True)
     return rows
 
 
