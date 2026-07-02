@@ -142,6 +142,40 @@ National Grid) and is reprojected to 4326 by the pipeline.
 | `flood_zone_3` | EA Flood Map for Planning (Rivers and Sea) — Flood Zone 3 | https://environment.data.gov.uk/ (Defra Data Services Platform) | `data/raw/ea_flood_zone_3.gpkg` | 27700 |
 | `green_belt` | planning.data.gov.uk green-belt (polygon) | https://www.planning.data.gov.uk/dataset/green-belt | `data/raw/green-belt.geojson` | **4326** (no reprojection) |
 
+**Gate-3 heritage/environmental designations** (Assessment 3). All from
+planning.data.gov.uk, all OGL v3.0, all already **EPSG:4326** GeoJSON at
+`https://files.planning.data.gov.uk/dataset/<slug>.geojson`, all built by the one
+generic `build_planning_data` builder (see `PLANNING_DATA_KINDS` in
+`pipeline/build_constraints.py`). Fetched by the **Load constraints** workflow
+only when the kind is named in its `kinds` input. Split into two buckets:
+
+*Hard exclusions* (removed from developable land — folded into the RPC's default
+`subtract` set):
+
+| kind | dataset slug |
+|------|--------------|
+| `sssi` | `site-of-special-scientific-interest` |
+| `sac` | `special-area-of-conservation` |
+| `spa` | `special-protection-area` |
+| `ramsar` | `ramsar` |
+| `ancient_woodland` | `ancient-woodland` |
+| `scheduled_monument` | `scheduled-monument` |
+
+*Soft constraints* (land retained; feed the 0–1 friction score in the RPC and
+`station_assessments.constraint_friction` / `soft_cover`):
+
+| kind | dataset slug |
+|------|--------------|
+| `conservation_area` | `conservation-area` |
+| `aonb` | `area-of-outstanding-natural-beauty` (National Landscapes) |
+| `park_garden` | `park-and-garden` |
+| `listed_building` | `listed-building-outline` (polygon layer; a setting proxy) |
+
+**Green Belt is deliberately *not* a hard exclusion** — the draft NPPF permits
+development around well-connected out-of-settlement (Tier B) stations in the
+Green Belt, so the RPC returns `green_belt_ha` (an overlap flag) and the app
+applies tier-aware handling (soft constraint for Tier A, permitted for Tier B).
+
 Notes:
 - **transport half-widths** applied to line features before reprojecting
   (metres): motorway 15, A-road 9, B/minor 5, local/residential 4, rail 6. Road
