@@ -89,7 +89,26 @@ def read_records(path: Path) -> list:
             records.append(rec)
     if skipped:
         print(f"  skipped {skipped} row(s) with no geometry/kind")
-    return records
+
+    # Belt-and-braces: collapse any duplicate (kind, source_id) pairs (keeping the
+    # last), so a single upsert batch never asks ON CONFLICT to touch the same row
+    # twice (Postgres 21000). The builder already makes ids unique; this guards
+    # against older CSVs or sources with duplicate feature ids.
+    deduped, by_key, dupes = [], {}, 0
+    for rec in records:
+        key = (rec["kind"], rec.get("source_id"))
+        if rec.get("source_id") is None:
+            deduped.append(rec)          # null id can't upsert-conflict; keep all
+            continue
+        if key in by_key:
+            deduped[by_key[key]] = rec   # replace earlier occurrence
+            dupes += 1
+        else:
+            by_key[key] = len(deduped)
+            deduped.append(rec)
+    if dupes:
+        print(f"  collapsed {dupes} duplicate (kind, source_id) row(s)")
+    return deduped
 
 
 def upsert(records: list):

@@ -366,6 +366,7 @@ def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None,
     gdf = gdf.to_crs(4326)
 
     rows = []
+    seen_ids = {}
     for _, feat in gdf.iterrows():
         mp = _to_multipolygon(feat.geometry)
         if mp is None or mp.is_empty:
@@ -375,6 +376,15 @@ def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None,
         sid = _cell(feat, id_col)
         if not sid:
             sid = _stable_id(kind, ewkt)
+        # Guarantee (kind, source_id) uniqueness within this kind. Several
+        # planning.data datasets reuse the same `reference`/`entity` across
+        # distinct features; a duplicate (kind, source_id) in one upsert batch
+        # makes Postgres reject the whole batch (21000, "ON CONFLICT DO UPDATE
+        # command cannot affect row a second time"). Suffix repeats deterministically
+        # (source feature order is stable, so re-runs still upsert the same rows).
+        seen_ids[sid] = seen_ids.get(sid, 0) + 1
+        if seen_ids[sid] > 1:
+            sid = f"{sid}-{seen_ids[sid]}"
 
         name = _cell(feat, name_col)
 
