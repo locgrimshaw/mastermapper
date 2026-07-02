@@ -217,6 +217,10 @@ html, body {
 .sift-tier-ineligible { background: var(--ink-line); color: var(--text-dim); }
 .sift-gb { color: #2b8a3e; font-weight: 700; }
 .sift-benefit { font-variant-numeric: tabular-nums; font-weight: 600; cursor: help; }
+.sift-rag { font-variant-numeric: tabular-nums; font-weight: 600; padding: 1px 5px; border-radius: 4px; cursor: help; }
+.sift-rag-viable   { background: rgba(47,158,68,0.16);  color: #1e7a34; }
+.sift-rag-marginal { background: rgba(224,133,58,0.18); color: #b5651d; }
+.sift-rag-unviable { background: rgba(192,57,43,0.15);  color: #b5342a; }
 
 /* Gate-3 soft-constraint friction read-out in the developable summary. */
 .dd-fric { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;

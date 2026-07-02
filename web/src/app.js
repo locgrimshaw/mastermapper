@@ -6087,13 +6087,104 @@ function applyModeVisibility() {
   if (siftBlock) siftBlock.hidden = !sift;
 }
 
+// ---- Assessments 5 & 6: parameterised Viability + Deliverability ------------
+// Both are transparent models computed client-side over the sift rows, so they
+// recompute instantly when the user edits an assumption (no DB round-trip). The
+// defaults are indicative national figures the user is expected to tune.
+
+// Regional sales-value multipliers applied to the base £/ft² so viability varies
+// spatially using the region we already hold (no price layer needed yet). Tunable
+// later; grounded in broad England new-build value gradients.
+const REGION_PRICE_MULT = {
+  "London": 1.9, "South East": 1.4, "East of England": 1.15, "East": 1.15,
+  "South West": 1.1, "West Midlands": 0.95, "East Midlands": 0.9,
+  "North West": 0.9, "Yorkshire and The Humber": 0.85, "Yorkshire": 0.85,
+  "North East": 0.8, "Wales": 0.85,
+};
+function regionPriceMult(region) {
+  if (!region) return 1.0;
+  if (REGION_PRICE_MULT[region] != null) return REGION_PRICE_MULT[region];
+  // loose contains-match for slightly different region strings
+  const k = Object.keys(REGION_PRICE_MULT).find(x => region.indexOf(x) !== -1);
+  return k ? REGION_PRICE_MULT[k] : 1.0;
+}
+
+const VIABILITY_DEFAULTS = {
+  unitSizeFt2: 750,    // average saleable area per dwelling
+  salesPsf: 350,       // base £/ft² sales value (× regional multiplier)
+  buildPsf: 200,       // £/ft² build cost
+  softCostPct: 30,     // fees + finance + contingency, as % of build cost
+  affordablePct: 25,   // % affordable homes
+  affordableValue: 55, // affordable unit value as % of market
+  blvPerUnit: 20,      // benchmark land value, £000s per unit
+  profitTargetPct: 17.5, // target profit on cost (viability threshold)
+  gbTierBBonus: 10,    // deliverability bonus for a permitted Tier-B Green Belt site
+};
+
 const SIFT = {
   loaded: false,
   rows: [],
   crit: { tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
-          maxFriction: 1, minBenefit: 0 },
-  sort: "yield",   // "yield" | "benefit"
+          maxFriction: 1, minBenefit: 0, minViability: 0, minDeliverability: 0 },
+  sort: "composite",   // yield | benefit | viability | deliverability | composite
+  weights: { benefit: 1, viability: 1, deliverability: 1 },
+  assumptions: Object.assign({}, VIABILITY_DEFAULTS),
 };
+
+// Residual appraisal → profit on cost (%). Transparent: GDV − (build + softs +
+// land); profit-on-cost is the headline viability metric.
+function computeViability(row) {
+  const a = SIFT.assumptions;
+  const units = row.yield || 0;
+  if (units <= 0) return { profitOnCost: null, rag: "n/a", score: 0 };
+  const area = units * a.unitSizeFt2;
+  const price = a.salesPsf * regionPriceMult(row.region);
+  const affFrac = (a.affordablePct || 0) / 100;
+  const blend = (1 - affFrac) + affFrac * ((a.affordableValue || 0) / 100);
+  const gdv = area * price * blend;
+  const build = area * a.buildPsf;
+  const softs = build * ((a.softCostPct || 0) / 100);
+  const land = units * (a.blvPerUnit || 0) * 1000;
+  const cost = build + softs + land;
+  if (cost <= 0) return { profitOnCost: null, rag: "n/a", score: 0 };
+  const poc = ((gdv - cost) / cost) * 100;
+  const target = a.profitTargetPct || 17.5;
+  const rag = poc >= target ? "viable" : poc >= target * 0.5 ? "marginal" : "unviable";
+  // 0–100 score: target maps to ~60, 2× target to 100, break-even to ~25.
+  const score = Math.max(0, Math.min(100, 25 + (poc / (2 * target)) * 55));
+  return { profitOnCost: poc, rag, score };
+}
+
+// Deliverability composite (0–100): low soft-constraint friction is the main
+// driver; a permitted Tier-B Green Belt site scores a bonus (NPPF-favoured),
+// a Tier-A Green Belt overlap a small penalty. LA land-supply / ownership drivers
+// are parameterised placeholders (neutral) until sourced — flagged in the UI.
+function computeDeliverability(row) {
+  const a = SIFT.assumptions;
+  const friction = row.friction == null ? 0 : row.friction;
+  let d = 100 * (1 - friction);
+  if (row.tier === "B" && row.greenBeltHa > 0) d += (a.gbTierBBonus || 0);
+  else if (row.tier === "A" && row.greenBeltHa > 0) d -= 5;
+  return Math.max(0, Math.min(100, d));
+}
+
+// Three-axis weighted composite (0–100) over benefit × viability × deliverability.
+function computeComposite(row) {
+  const w = SIFT.weights;
+  const sum = (w.benefit + w.viability + w.deliverability) || 1;
+  const b = row.benefit == null ? 0 : row.benefit;
+  return (w.benefit * b + w.viability * row._viab.score
+          + w.deliverability * row._deliv) / sum;
+}
+
+// Attach the computed 5/6/composite fields to every row (called before filter/sort).
+function scoreSiftRows() {
+  for (const r of SIFT.rows) {
+    r._viab = computeViability(r);
+    r._deliv = computeDeliverability(r);
+    r._composite = computeComposite(r);
+  }
+}
 
 async function enterSiftMode() {
   buildSiftCriteria();
@@ -6143,6 +6234,7 @@ async function loadSiftData() {
 
 function siftSurvivors() {
   const c = SIFT.crit;
+  scoreSiftRows();   // refresh viability/deliverability/composite from assumptions
   const out = SIFT.rows.filter(r =>
     ((r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
      (r.tier === "ineligible" && c.ineligible)) &&
@@ -6151,11 +6243,18 @@ function siftSurvivors() {
     // sit at or below the cap. maxFriction 1 admits everything.
     (r.friction == null || r.friction <= c.maxFriction) &&
     // Assessment 4 benefit: null passes; otherwise at/above the floor.
-    (r.benefit == null || r.benefit >= (c.minBenefit || 0)));
-  // Rows arrive yield-sorted; re-sort by benefit when that ranking is selected.
-  if (SIFT.sort === "benefit") {
-    out.sort((a, b) => (b.benefit || 0) - (a.benefit || 0));
-  }
+    (r.benefit == null || r.benefit >= (c.minBenefit || 0)) &&
+    // Assessments 5 & 6 floors.
+    (r._viab.score >= (c.minViability || 0)) &&
+    (r._deliv >= (c.minDeliverability || 0)));
+  const key = {
+    yield: r => r.yield || 0,
+    benefit: r => r.benefit || 0,
+    viability: r => r._viab.score,
+    deliverability: r => r._deliv,
+    composite: r => r._composite,
+  }[SIFT.sort] || (r => r.yield || 0);
+  out.sort((a, b) => key(b) - key(a));
   return out;
 }
 
@@ -6176,17 +6275,53 @@ function buildSiftCriteria() {
     `<label class="sift-field"><span>Max soft friction <b id="sift-fric-val">1.00</b></span><input type="range" id="sift-maxfric" min="0" max="1" step="0.05" value="1"></label></div>` +
     `<div class="sift-stage"><div class="sift-stage-h">4 · Socio-economic benefit</div>` +
     `<p class="hint">Benefit (0–100) = regeneration (catchment deprivation) + sustainable access (local amenities + rail connectivity) + housing contribution (dwelling-yield percentile), equally weighted.</p>` +
-    `<label class="sift-field"><span>Min benefit score <b id="sift-benefit-val">0</b></span><input type="range" id="sift-minbenefit" min="0" max="100" step="1" value="0"></label>` +
-    `<label class="sift-field"><span>Rank by</span><select id="sift-sort"><option value="yield">Dwelling yield</option><option value="benefit">Benefit score</option></select></label></div>`;
+    `<label class="sift-field"><span>Min benefit score <b id="sift-benefit-val">0</b></span><input type="range" id="sift-minbenefit" min="0" max="100" step="1" value="0"></label></div>` +
+    `<div class="sift-stage"><div class="sift-stage-h">5 · Viability (residual appraisal)</div>` +
+    `<p class="hint">Profit on cost from a residual appraisal. Sales value scales by region off the base £/ft². All assumptions are yours to set.</p>` +
+    `<label class="sift-field"><span>Sales £/ft² (base)</span><input type="number" id="v-sales" min="0" step="10" value="${VIABILITY_DEFAULTS.salesPsf}"></label>` +
+    `<label class="sift-field"><span>Build £/ft²</span><input type="number" id="v-build" min="0" step="10" value="${VIABILITY_DEFAULTS.buildPsf}"></label>` +
+    `<label class="sift-field"><span>Avg unit ft²</span><input type="number" id="v-unit" min="200" step="25" value="${VIABILITY_DEFAULTS.unitSizeFt2}"></label>` +
+    `<label class="sift-field"><span>Soft costs %</span><input type="number" id="v-soft" min="0" step="1" value="${VIABILITY_DEFAULTS.softCostPct}"></label>` +
+    `<label class="sift-field"><span>Affordable %</span><input type="number" id="v-aff" min="0" max="100" step="5" value="${VIABILITY_DEFAULTS.affordablePct}"></label>` +
+    `<label class="sift-field"><span>Land £000/unit</span><input type="number" id="v-blv" min="0" step="5" value="${VIABILITY_DEFAULTS.blvPerUnit}"></label>` +
+    `<label class="sift-field"><span>Profit target %</span><input type="number" id="v-target" min="0" step="0.5" value="${VIABILITY_DEFAULTS.profitTargetPct}"></label>` +
+    `<label class="sift-field"><span>Min viability <b id="v-minval">0</b></span><input type="range" id="v-min" min="0" max="100" step="1" value="0"></label></div>` +
+    `<div class="sift-stage"><div class="sift-stage-h">6 · Deliverability</div>` +
+    `<p class="hint">Driven by soft-constraint friction; a permitted Tier-B Green Belt site scores a bonus. LA land-supply &amp; ownership drivers are parameterised placeholders pending data.</p>` +
+    `<label class="sift-field"><span>Tier-B Green Belt bonus</span><input type="number" id="d-gb" min="0" step="1" value="${VIABILITY_DEFAULTS.gbTierBBonus}"></label>` +
+    `<label class="sift-field"><span>Min deliverability <b id="d-minval">0</b></span><input type="range" id="d-min" min="0" max="100" step="1" value="0"></label></div>` +
+    `<div class="sift-stage"><div class="sift-stage-h">Ranking · 3-axis composite</div>` +
+    `<p class="hint">Weight the three scored axes, then rank.</p>` +
+    `<label class="sift-field"><span>Benefit weight</span><input type="number" id="w-ben" min="0" step="0.5" value="1"></label>` +
+    `<label class="sift-field"><span>Viability weight</span><input type="number" id="w-via" min="0" step="0.5" value="1"></label>` +
+    `<label class="sift-field"><span>Deliverability weight</span><input type="number" id="w-del" min="0" step="0.5" value="1"></label>` +
+    `<label class="sift-field"><span>Rank by</span><select id="sift-sort">` +
+    `<option value="composite">3-axis composite</option><option value="yield">Dwelling yield</option>` +
+    `<option value="benefit">Benefit</option><option value="viability">Viability</option>` +
+    `<option value="deliverability">Deliverability</option></select></label></div>`;
+  const num = (id, d) => { const v = parseFloat(el.querySelector(id).value); return isNaN(v) ? d : v; };
   const upd = () => {
-    const fricEl = el.querySelector("#sift-maxfric");
-    const fricVal = parseFloat(fricEl.value);
+    const fricVal = parseFloat(el.querySelector("#sift-maxfric").value);
     const fricLbl = el.querySelector("#sift-fric-val");
-    if (fricLbl) fricLbl.textContent = fricVal.toFixed(2);
+    if (fricLbl) fricLbl.textContent = (isNaN(fricVal) ? 1 : fricVal).toFixed(2);
     const benVal = parseFloat(el.querySelector("#sift-minbenefit").value) || 0;
-    const benLbl = el.querySelector("#sift-benefit-val");
-    if (benLbl) benLbl.textContent = String(benVal);
+    if (el.querySelector("#sift-benefit-val")) el.querySelector("#sift-benefit-val").textContent = String(benVal);
+    const vMin = num("#v-min", 0), dMin = num("#d-min", 0);
+    if (el.querySelector("#v-minval")) el.querySelector("#v-minval").textContent = String(vMin);
+    if (el.querySelector("#d-minval")) el.querySelector("#d-minval").textContent = String(dMin);
     SIFT.sort = el.querySelector("#sift-sort").value;
+    SIFT.assumptions = {
+      unitSizeFt2: num("#v-unit", VIABILITY_DEFAULTS.unitSizeFt2),
+      salesPsf: num("#v-sales", VIABILITY_DEFAULTS.salesPsf),
+      buildPsf: num("#v-build", VIABILITY_DEFAULTS.buildPsf),
+      softCostPct: num("#v-soft", VIABILITY_DEFAULTS.softCostPct),
+      affordablePct: num("#v-aff", VIABILITY_DEFAULTS.affordablePct),
+      affordableValue: VIABILITY_DEFAULTS.affordableValue,
+      blvPerUnit: num("#v-blv", VIABILITY_DEFAULTS.blvPerUnit),
+      profitTargetPct: num("#v-target", VIABILITY_DEFAULTS.profitTargetPct),
+      gbTierBBonus: num("#d-gb", VIABILITY_DEFAULTS.gbTierBBonus),
+    };
+    SIFT.weights = { benefit: num("#w-ben", 1), viability: num("#w-via", 1), deliverability: num("#w-del", 1) };
     SIFT.crit = {
       tierA: el.querySelector("#sift-tierA").checked,
       tierB: el.querySelector("#sift-tierB").checked,
@@ -6195,6 +6330,8 @@ function buildSiftCriteria() {
       minYield: parseFloat(el.querySelector("#sift-minyield").value) || 0,
       maxFriction: isNaN(fricVal) ? 1 : fricVal,
       minBenefit: benVal,
+      minViability: vMin,
+      minDeliverability: dMin,
     };
     renderSift();
   };
@@ -6220,17 +6357,27 @@ function renderSift() {
     `<strong>${surv.length.toLocaleString()}</strong> of ${SIFT.rows.length.toLocaleString()} stations pass` +
     ` · ~<strong>${totalYield.toLocaleString()}</strong> dwellings capacity`;
   const top = surv.slice(0, 100);
-  const sortLabel = SIFT.sort === "benefit" ? "benefit" : "yield";
+  const SORT_LABELS = { yield: "dwelling yield", benefit: "benefit", viability: "viability",
+    deliverability: "deliverability", composite: "3-axis composite" };
+  const sortLabel = SORT_LABELS[SIFT.sort] || "yield";
+  const vcell = (r) => {
+    const v = r._viab;
+    if (v.profitOnCost == null) return `<td>—</td>`;
+    return `<td><span class="sift-rag sift-rag-${v.rag}" title="profit on cost; viability score ${Math.round(v.score)}">${v.profitOnCost.toFixed(0)}%</span></td>`;
+  };
   results.innerHTML =
-    `<table class="sift-table"><thead><tr><th>#</th><th>Station</th><th>Tier</th><th>Dev. ha</th><th>Yield</th><th title="Soft-constraint friction 0–1; ⬡ = Green Belt overlap">Fric.</th><th title="Socio-economic benefit 0–100">Benefit</th></tr></thead><tbody>` +
+    `<table class="sift-table"><thead><tr><th>#</th><th>Station</th><th>Tier</th><th title="Dwelling yield">Yield</th>` +
+    `<th title="Socio-economic benefit 0–100">Ben</th><th title="Viability — profit on cost">Via</th>` +
+    `<th title="Deliverability 0–100 (friction-driven; ⬡ = Green Belt)">Del</th><th title="3-axis composite 0–100">Σ</th></tr></thead><tbody>` +
     top.map((r, i) =>
       `<tr data-crs="${escapeSift(r.crs)}"><td>${i + 1}</td>` +
       `<td>${escapeSift(r.name)}<small>${escapeSift(r.region || r.ttwa)}</small></td>` +
       `<td><span class="sift-tier sift-tier-${r.tier}">${r.tier === "ineligible" ? "—" : r.tier}</span></td>` +
-      `<td>${r.developableHa.toFixed(1)}</td><td>${(r.yield || 0).toLocaleString()}</td>` +
-      `<td>${r.friction == null ? "—" : r.friction.toFixed(2)}` +
-      `${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha of developable land in Green Belt">⬡</span>` : ""}</td>` +
-      `<td>${r.benefit == null ? "—" : `<span class="sift-benefit" title="regen ${r.regen ?? "?"} · access ${r.access ?? "?"} · housing ${r.housing ?? "?"}">${Math.round(r.benefit)}</span>`}</td></tr>`
+      `<td title="${r.developableHa.toFixed(1)} developable ha">${(r.yield || 0).toLocaleString()}</td>` +
+      `<td>${r.benefit == null ? "—" : `<span class="sift-benefit" title="regen ${r.regen ?? "?"} · access ${r.access ?? "?"} · housing ${r.housing ?? "?"}">${Math.round(r.benefit)}</span>`}</td>` +
+      vcell(r) +
+      `<td>${Math.round(r._deliv)}${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha developable in Green Belt · friction ${r.friction == null ? "—" : r.friction.toFixed(2)}">⬡</span>` : ""}</td>` +
+      `<td><strong>${Math.round(r._composite)}</strong></td></tr>`
     ).join("") +
     `</tbody></table>` +
     (surv.length > 100 ? `<p class="hint">Showing the top 100 by ${sortLabel} of ${surv.length.toLocaleString()}.</p>` : "");
