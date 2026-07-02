@@ -678,7 +678,14 @@ def main() -> int:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()
         for kind in kinds:
-            rows = BUILDERS[kind](mask_geom_27700, mask_geom_27700, mask_geom_4326)
+            # Best-effort per kind: a failure on one layer (huge national file,
+            # OOM, malformed geometry) must not lose the kinds that did build.
+            try:
+                rows = BUILDERS[kind](mask_geom_27700, mask_geom_27700, mask_geom_4326)
+            except Exception as exc:
+                print(f"  [{kind}] FAILED — skipping this kind: {exc}")
+                per_kind[kind] = None
+                continue
             if rows is None:
                 per_kind[kind] = None
                 continue
