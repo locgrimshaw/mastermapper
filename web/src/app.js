@@ -6124,7 +6124,9 @@ const VIABILITY_DEFAULTS = {
 const SIFT = {
   loaded: false,
   rows: [],
-  crit: { tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
+  step: 0,             // current wizard step (index into SIFT_STEPS)
+  crit: { requireFrequency: true, requireWellConnected: false,
+          tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
           maxFriction: 1, minBenefit: 0, minViability: 0, minDeliverability: 0 },
   sort: "composite",   // yield | benefit | viability | deliverability | composite
   weights: { benefit: 1, viability: 1, deliverability: 1 },
@@ -6187,12 +6189,12 @@ function scoreSiftRows() {
 }
 
 async function enterSiftMode() {
-  buildSiftCriteria();
   if (!SIFT.loaded) {
     const summary = document.getElementById("sift-summary");
     if (summary) summary.textContent = "Loading station assessments…";
     await loadSiftData();
   }
+  SIFT.step = 0;   // start the funnel at the first gate
   renderSift();
 }
 
@@ -6206,12 +6208,16 @@ async function loadSiftData() {
   try {
     const { data, error } = await sb
       .from("station_assessments")
-      .select("crs, tier, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, stations(name, region, ttwa_name)")
+      .select("crs, tier, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
       .order("dwelling_yield", { ascending: false });
     if (error) throw error;
     SIFT.rows = (data || []).map(r => ({
       crs: r.crs, tier: r.tier, densityFloor: r.density_floor,
       developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
+      wellConnected: !!(r.stations && r.stations.well_connected),
+      meetsFrequency: !!(r.stations && r.stations.meets_frequency),
+      connectivityPctile: (r.stations && r.stations.connectivity_pctile != null) ? Number(r.stations.connectivity_pctile) : null,
+      directDest: (r.stations && r.stations.direct_destinations != null) ? Number(r.stations.direct_destinations) : null,
       friction: r.constraint_friction == null ? null : Number(r.constraint_friction),
       greenBeltHa: Number(r.green_belt_ha) || 0,
       softCover: r.soft_cover || {},
@@ -6232,110 +6238,198 @@ async function loadSiftData() {
   }
 }
 
-function siftSurvivors() {
-  const c = SIFT.crit;
-  scoreSiftRows();   // refresh viability/deliverability/composite from assumptions
-  const out = SIFT.rows.filter(r =>
-    ((r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
-     (r.tier === "ineligible" && c.ineligible)) &&
-    r.developableHa >= c.minDevHa && r.yield >= c.minYield &&
-    // Gate 3 friction: null friction (not yet computed) passes; otherwise it must
-    // sit at or below the cap. maxFriction 1 admits everything.
-    (r.friction == null || r.friction <= c.maxFriction) &&
-    // Assessment 4 benefit: null passes; otherwise at/above the floor.
-    (r.benefit == null || r.benefit >= (c.minBenefit || 0)) &&
-    // Assessments 5 & 6 floors.
-    (r._viab.score >= (c.minViability || 0)) &&
-    (r._deliv >= (c.minDeliverability || 0)));
-  const key = {
-    yield: r => r.yield || 0,
-    benefit: r => r.benefit || 0,
-    viability: r => r._viab.score,
-    deliverability: r => r._deliv,
+// The sift is a sequential funnel: an ordered series of gated steps, each with a
+// predicate. Survivors "up to" a step are the rows passing steps 0..step. The UI
+// shows only the current step's controls; the funnel count narrows step by step.
+const SIFT_STEPS = [
+  { key: "connectivity", title: "1 · Connectivity gate",
+    pred: (r, c) => (!c.requireFrequency || r.meetsFrequency) &&
+                    (!c.requireWellConnected || r.wellConnected) },
+  { key: "eligibility", title: "2 · Eligibility & tier",
+    pred: (r, c) => (r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
+                    (r.tier === "ineligible" && c.ineligible) },
+  { key: "developable", title: "3 · Developable land",
+    pred: (r, c) => r.developableHa >= c.minDevHa && r.yield >= c.minYield },
+  { key: "constraints", title: "4 · NPPF constraints",
+    pred: (r, c) => r.friction == null || r.friction <= c.maxFriction },
+  { key: "benefit", title: "5 · Socio-economic benefit",
+    pred: (r, c) => r.benefit == null || r.benefit >= (c.minBenefit || 0) },
+  { key: "viability", title: "6 · Viability",
+    pred: (r, c) => r._viab.score >= (c.minViability || 0) },
+  { key: "deliverability", title: "7 · Deliverability",
+    pred: (r, c) => r._deliv >= (c.minDeliverability || 0) },
+  { key: "ranking", title: "8 · Rank & shortlist", pred: () => true },
+];
+
+function siftSortKey() {
+  return {
+    yield: r => r.yield || 0, benefit: r => r.benefit || 0,
+    viability: r => r._viab.score, deliverability: r => r._deliv,
     composite: r => r._composite,
   }[SIFT.sort] || (r => r.yield || 0);
+}
+
+// Rows passing every step predicate up to and including stepIdx, sorted.
+function siftSurvivorsUpTo(stepIdx) {
+  const c = SIFT.crit;
+  scoreSiftRows();
+  const steps = SIFT_STEPS.slice(0, stepIdx + 1);
+  const out = SIFT.rows.filter(r => steps.every(s => s.pred(r, c)));
+  const key = siftSortKey();
   out.sort((a, b) => key(b) - key(a));
   return out;
 }
+function siftSurvivors() { return siftSurvivorsUpTo(SIFT.step); }
 
-function buildSiftCriteria() {
-  const el = document.getElementById("sift-criteria");
-  if (!el || el.dataset.built) return;
-  el.dataset.built = "1";
-  el.innerHTML =
-    `<div class="sift-stage"><div class="sift-stage-h">1 · Station eligibility (tier)</div>` +
-    `<label class="dd-row"><input type="checkbox" id="sift-tierA" checked> <span>Tier A · in-settlement (40 dph)</span></label>` +
-    `<label class="dd-row"><input type="checkbox" id="sift-tierB" checked> <span>Tier B · well-connected, out-of-settlement (50 dph)</span></label>` +
-    `<label class="dd-row"><input type="checkbox" id="sift-inelig"> <span>Include ineligible</span></label></div>` +
-    `<div class="sift-stage"><div class="sift-stage-h">2 · Developable land</div>` +
-    `<label class="sift-field"><span>Min developable ha</span><input type="number" id="sift-minha" min="0" step="1" value="0"></label>` +
-    `<label class="sift-field"><span>Min dwelling yield</span><input type="number" id="sift-minyield" min="0" step="50" value="0"></label></div>` +
-    `<div class="sift-stage"><div class="sift-stage-h">3 · NPPF constraints</div>` +
-    `<p class="hint">Hard environmental designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased from the developable land above. This caps the remaining <em>soft</em>-constraint friction (conservation areas, AONB, parks &amp; gardens, listed-building settings).</p>` +
-    `<label class="sift-field"><span>Max soft friction <b id="sift-fric-val">1.00</b></span><input type="range" id="sift-maxfric" min="0" max="1" step="0.05" value="1"></label></div>` +
-    `<div class="sift-stage"><div class="sift-stage-h">4 · Socio-economic benefit</div>` +
-    `<p class="hint">Benefit (0–100) = regeneration (catchment deprivation) + sustainable access (local amenities + rail connectivity) + housing contribution (dwelling-yield percentile), equally weighted.</p>` +
-    `<label class="sift-field"><span>Min benefit score <b id="sift-benefit-val">0</b></span><input type="range" id="sift-minbenefit" min="0" max="100" step="1" value="0"></label></div>` +
-    `<div class="sift-stage"><div class="sift-stage-h">5 · Viability (residual appraisal)</div>` +
-    `<p class="hint">Profit on cost from a residual appraisal. Sales value scales by region off the base £/ft². All assumptions are yours to set.</p>` +
-    `<label class="sift-field"><span>Sales £/ft² (base)</span><input type="number" id="v-sales" min="0" step="10" value="${VIABILITY_DEFAULTS.salesPsf}"></label>` +
-    `<label class="sift-field"><span>Build £/ft²</span><input type="number" id="v-build" min="0" step="10" value="${VIABILITY_DEFAULTS.buildPsf}"></label>` +
-    `<label class="sift-field"><span>Avg unit ft²</span><input type="number" id="v-unit" min="200" step="25" value="${VIABILITY_DEFAULTS.unitSizeFt2}"></label>` +
-    `<label class="sift-field"><span>Soft costs %</span><input type="number" id="v-soft" min="0" step="1" value="${VIABILITY_DEFAULTS.softCostPct}"></label>` +
-    `<label class="sift-field"><span>Affordable %</span><input type="number" id="v-aff" min="0" max="100" step="5" value="${VIABILITY_DEFAULTS.affordablePct}"></label>` +
-    `<label class="sift-field"><span>Land £000/unit</span><input type="number" id="v-blv" min="0" step="5" value="${VIABILITY_DEFAULTS.blvPerUnit}"></label>` +
-    `<label class="sift-field"><span>Profit target %</span><input type="number" id="v-target" min="0" step="0.5" value="${VIABILITY_DEFAULTS.profitTargetPct}"></label>` +
-    `<label class="sift-field"><span>Min viability <b id="v-minval">0</b></span><input type="range" id="v-min" min="0" max="100" step="1" value="0"></label></div>` +
-    `<div class="sift-stage"><div class="sift-stage-h">6 · Deliverability</div>` +
-    `<p class="hint">Driven by soft-constraint friction; a permitted Tier-B Green Belt site scores a bonus. LA land-supply &amp; ownership drivers are parameterised placeholders pending data.</p>` +
-    `<label class="sift-field"><span>Tier-B Green Belt bonus</span><input type="number" id="d-gb" min="0" step="1" value="${VIABILITY_DEFAULTS.gbTierBBonus}"></label>` +
-    `<label class="sift-field"><span>Min deliverability <b id="d-minval">0</b></span><input type="range" id="d-min" min="0" max="100" step="1" value="0"></label></div>` +
-    `<div class="sift-stage"><div class="sift-stage-h">Ranking · 3-axis composite</div>` +
-    `<p class="hint">Weight the three scored axes, then rank.</p>` +
-    `<label class="sift-field"><span>Benefit weight</span><input type="number" id="w-ben" min="0" step="0.5" value="1"></label>` +
-    `<label class="sift-field"><span>Viability weight</span><input type="number" id="w-via" min="0" step="0.5" value="1"></label>` +
-    `<label class="sift-field"><span>Deliverability weight</span><input type="number" id="w-del" min="0" step="0.5" value="1"></label>` +
-    `<label class="sift-field"><span>Rank by</span><select id="sift-sort">` +
-    `<option value="composite">3-axis composite</option><option value="yield">Dwelling yield</option>` +
-    `<option value="benefit">Benefit</option><option value="viability">Viability</option>` +
-    `<option value="deliverability">Deliverability</option></select></label></div>`;
-  const num = (id, d) => { const v = parseFloat(el.querySelector(id).value); return isNaN(v) ? d : v; };
-  const upd = () => {
-    const fricVal = parseFloat(el.querySelector("#sift-maxfric").value);
-    const fricLbl = el.querySelector("#sift-fric-val");
-    if (fricLbl) fricLbl.textContent = (isNaN(fricVal) ? 1 : fricVal).toFixed(2);
-    const benVal = parseFloat(el.querySelector("#sift-minbenefit").value) || 0;
-    if (el.querySelector("#sift-benefit-val")) el.querySelector("#sift-benefit-val").textContent = String(benVal);
-    const vMin = num("#v-min", 0), dMin = num("#d-min", 0);
-    if (el.querySelector("#v-minval")) el.querySelector("#v-minval").textContent = String(vMin);
-    if (el.querySelector("#d-minval")) el.querySelector("#d-minval").textContent = String(dMin);
-    SIFT.sort = el.querySelector("#sift-sort").value;
-    SIFT.assumptions = {
-      unitSizeFt2: num("#v-unit", VIABILITY_DEFAULTS.unitSizeFt2),
-      salesPsf: num("#v-sales", VIABILITY_DEFAULTS.salesPsf),
-      buildPsf: num("#v-build", VIABILITY_DEFAULTS.buildPsf),
-      softCostPct: num("#v-soft", VIABILITY_DEFAULTS.softCostPct),
-      affordablePct: num("#v-aff", VIABILITY_DEFAULTS.affordablePct),
-      affordableValue: VIABILITY_DEFAULTS.affordableValue,
-      blvPerUnit: num("#v-blv", VIABILITY_DEFAULTS.blvPerUnit),
-      profitTargetPct: num("#v-target", VIABILITY_DEFAULTS.profitTargetPct),
-      gbTierBBonus: num("#d-gb", VIABILITY_DEFAULTS.gbTierBBonus),
-    };
-    SIFT.weights = { benefit: num("#w-ben", 1), viability: num("#w-via", 1), deliverability: num("#w-del", 1) };
-    SIFT.crit = {
-      tierA: el.querySelector("#sift-tierA").checked,
-      tierB: el.querySelector("#sift-tierB").checked,
-      ineligible: el.querySelector("#sift-inelig").checked,
-      minDevHa: parseFloat(el.querySelector("#sift-minha").value) || 0,
-      minYield: parseFloat(el.querySelector("#sift-minyield").value) || 0,
-      maxFriction: isNaN(fricVal) ? 1 : fricVal,
-      minBenefit: benVal,
-      minViability: vMin,
-      minDeliverability: dMin,
-    };
-    renderSift();
-  };
-  el.querySelectorAll("input, select").forEach(i => i.addEventListener("input", upd));
+// Cumulative count remaining after each step — the funnel shown in the stepper.
+function siftFunnelCounts() {
+  const c = SIFT.crit;
+  scoreSiftRows();
+  let pool = SIFT.rows;
+  return SIFT_STEPS.map(s => { pool = pool.filter(r => s.pred(r, c)); return pool.length; });
+}
+
+function siftNumField(id, label, val, step) {
+  return `<label class="sift-field"><span>${label}</span>` +
+    `<input type="number" id="${id}" step="${step}" value="${val}"></label>`;
+}
+
+// Controls HTML for one step only (keeps the panel uncluttered).
+function siftStepControlsHTML(key) {
+  const A = SIFT.assumptions, C = SIFT.crit, W = SIFT.weights;
+  const chk = v => v ? " checked" : "";
+  switch (key) {
+    case "connectivity":
+      return `<p class="hint">The first gate keeps only stations meeting the NPPF service-frequency test (4 trains/trams per hour overall, or 2 per hour per direction, through the daytime). Optionally require the full 'well-connected' definition (also within a top-60 Travel-to-Work Area by GVA).</p>` +
+        `<label class="dd-row"><input type="checkbox" id="sc-freq"${chk(C.requireFrequency)}> <span>Require NPPF service frequency</span></label>` +
+        `<label class="dd-row"><input type="checkbox" id="sc-wc"${chk(C.requireWellConnected)}> <span>Require 'well-connected' (frequency + top-60 TTWA)</span></label>`;
+    case "eligibility":
+      return `<p class="hint">Two-tier NPPF test. Density floor is by connectivity: <strong>50 dph</strong> for well-connected stations, else <strong>40 dph</strong> — applied to the net developable area.</p>` +
+        `<label class="dd-row"><input type="checkbox" id="sift-tierA"${chk(C.tierA)}> <span>Tier A · in-settlement</span></label>` +
+        `<label class="dd-row"><input type="checkbox" id="sift-tierB"${chk(C.tierB)}> <span>Tier B · well-connected, out-of-settlement (Green Belt permitted)</span></label>` +
+        `<label class="dd-row"><input type="checkbox" id="sift-inelig"${chk(C.ineligible)}> <span>Include ineligible</span></label>`;
+    case "developable":
+      return `<p class="hint">Net developable area within 800 m after erasing built-up land, green space, transport (roads + railway curtilage), flood zone 3 and hard environmental designations.</p>` +
+        siftNumField("sift-minha", "Min developable ha", C.minDevHa || 0, 1) +
+        siftNumField("sift-minyield", "Min dwelling yield", C.minYield || 0, 50);
+    case "constraints":
+      return `<p class="hint">Hard designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased above. This caps residual soft-constraint friction (conservation areas, AONB, parks &amp; gardens, listed-building settings).</p>` +
+        `<label class="sift-field"><span>Max soft friction <b id="sift-fric-val">${(C.maxFriction).toFixed(2)}</b></span><input type="range" id="sift-maxfric" min="0" max="1" step="0.05" value="${C.maxFriction}"></label>`;
+    case "benefit":
+      return `<p class="hint">Benefit (0–100) = regeneration (catchment deprivation) + sustainable access (amenities + rail connectivity) + housing contribution (yield percentile), equally weighted.</p>` +
+        `<label class="sift-field"><span>Min benefit <b id="sift-benefit-val">${C.minBenefit || 0}</b></span><input type="range" id="sift-minbenefit" min="0" max="100" step="1" value="${C.minBenefit || 0}"></label>`;
+    case "viability":
+      return `<p class="hint">Residual appraisal → profit on cost. Sales value scales by region off the base £/ft². All assumptions are yours to set.</p>` +
+        siftNumField("v-sales", "Sales £/ft² (base)", A.salesPsf, 10) +
+        siftNumField("v-build", "Build £/ft²", A.buildPsf, 10) +
+        siftNumField("v-unit", "Avg unit ft²", A.unitSizeFt2, 25) +
+        siftNumField("v-soft", "Soft costs %", A.softCostPct, 1) +
+        siftNumField("v-aff", "Affordable %", A.affordablePct, 5) +
+        siftNumField("v-blv", "Land £000/unit", A.blvPerUnit, 5) +
+        siftNumField("v-target", "Profit target %", A.profitTargetPct, 0.5) +
+        `<label class="sift-field"><span>Min viability <b id="v-minval">${C.minViability || 0}</b></span><input type="range" id="v-min" min="0" max="100" step="1" value="${C.minViability || 0}"></label>`;
+    case "deliverability":
+      return `<p class="hint">Friction-driven; a permitted Tier-B Green Belt site scores a bonus. LA land-supply &amp; ownership drivers are parameterised placeholders pending data.</p>` +
+        siftNumField("d-gb", "Tier-B Green Belt bonus", A.gbTierBBonus, 1) +
+        `<label class="sift-field"><span>Min deliverability <b id="d-minval">${C.minDeliverability || 0}</b></span><input type="range" id="d-min" min="0" max="100" step="1" value="${C.minDeliverability || 0}"></label>`;
+    case "ranking":
+      return `<p class="hint">Weight the three scored axes and rank the survivors. Click a row to profile that station.</p>` +
+        siftNumField("w-ben", "Benefit weight", W.benefit, 0.5) +
+        siftNumField("w-via", "Viability weight", W.viability, 0.5) +
+        siftNumField("w-del", "Deliverability weight", W.deliverability, 0.5) +
+        `<label class="sift-field"><span>Rank by</span><select id="sift-sort">` +
+        ["composite:3-axis composite", "yield:Dwelling yield", "benefit:Benefit",
+         "viability:Viability", "deliverability:Deliverability"]
+          .map(o => { const [v, t] = o.split(":"); return `<option value="${v}"${SIFT.sort === v ? " selected" : ""}>${t}</option>`; })
+          .join("") + `</select></label>`;
+  }
+  return "";
+}
+
+// Read whatever controls are currently in the DOM (only the current step's) into
+// the persistent SIFT state. Absent inputs leave their state untouched.
+function readSiftControls() {
+  const g = id => document.getElementById(id);
+  const C = SIFT.crit, A = SIFT.assumptions, W = SIFT.weights;
+  const numv = (id, d) => { const el = g(id); if (!el) return d; const v = parseFloat(el.value); return isNaN(v) ? d : v; };
+  if (g("sc-freq")) C.requireFrequency = g("sc-freq").checked;
+  if (g("sc-wc")) C.requireWellConnected = g("sc-wc").checked;
+  if (g("sift-tierA")) C.tierA = g("sift-tierA").checked;
+  if (g("sift-tierB")) C.tierB = g("sift-tierB").checked;
+  if (g("sift-inelig")) C.ineligible = g("sift-inelig").checked;
+  if (g("sift-minha")) C.minDevHa = numv("sift-minha", 0);
+  if (g("sift-minyield")) C.minYield = numv("sift-minyield", 0);
+  if (g("sift-maxfric")) C.maxFriction = numv("sift-maxfric", 1);
+  if (g("sift-minbenefit")) C.minBenefit = numv("sift-minbenefit", 0);
+  if (g("v-min")) C.minViability = numv("v-min", 0);
+  if (g("d-min")) C.minDeliverability = numv("d-min", 0);
+  [["v-sales", "salesPsf"], ["v-build", "buildPsf"], ["v-unit", "unitSizeFt2"],
+   ["v-soft", "softCostPct"], ["v-aff", "affordablePct"], ["v-blv", "blvPerUnit"],
+   ["v-target", "profitTargetPct"], ["d-gb", "gbTierBBonus"]].forEach(([id, key]) => {
+    if (g(id)) A[key] = numv(id, A[key]);
+  });
+  if (g("w-ben")) W.benefit = numv("w-ben", 1);
+  if (g("w-via")) W.viability = numv("w-via", 1);
+  if (g("w-del")) W.deliverability = numv("w-del", 1);
+  if (g("sift-sort")) SIFT.sort = g("sift-sort").value;
+  // live slider labels
+  const lbl = (id, v) => { const el = g(id); if (el) el.textContent = v; };
+  if (g("sift-maxfric")) lbl("sift-fric-val", C.maxFriction.toFixed(2));
+  if (g("sift-minbenefit")) lbl("sift-benefit-val", String(C.minBenefit));
+  if (g("v-min")) lbl("v-minval", String(C.minViability));
+  if (g("d-min")) lbl("d-minval", String(C.minDeliverability));
+}
+
+// Render the stepper + the current step's controls + nav. Full re-render on step
+// change only; input events update counts/table via updateSiftFunnel (no control
+// re-render), so number-field focus isn't lost mid-type.
+function renderSiftStep() {
+  const crit = document.getElementById("sift-criteria");
+  if (!crit) return;
+  const step = SIFT.step;
+  const counts = siftFunnelCounts();
+  const stepper = SIFT_STEPS.map((s, i) =>
+    `<button type="button" class="sift-step-chip${i === step ? " active" : ""}${i < step ? " done" : ""}" data-step="${i}" title="${escapeSift(s.title)}">` +
+    `<span class="ssc-n">${i + 1}</span><span class="ssc-c">${counts[i].toLocaleString()}</span></button>`).join("");
+  const def = SIFT_STEPS[step];
+  const last = SIFT_STEPS.length - 1;
+  crit.innerHTML =
+    `<div class="sift-stepper">${stepper}</div>` +
+    `<div class="sift-step-body"><div class="sift-stage-h">${escapeSift(def.title)}</div>` +
+    siftStepControlsHTML(def.key) + `</div>` +
+    `<div class="sift-nav">` +
+    `<button type="button" class="ghost" id="sift-back"${step === 0 ? " disabled" : ""}>← Back</button>` +
+    `<span class="sift-nav-count" id="sift-stepcount"></span>` +
+    `<button type="button" class="plot-mode-btn sift-next" id="sift-next"${step >= last ? " disabled" : ""}>Next →</button>` +
+    `</div>`;
+  crit.querySelectorAll(".sift-step-chip").forEach(b =>
+    b.addEventListener("click", () => { SIFT.step = +b.dataset.step; renderSift(); }));
+  crit.querySelector("#sift-back").addEventListener("click", () => { if (SIFT.step > 0) { SIFT.step--; renderSift(); } });
+  crit.querySelector("#sift-next").addEventListener("click", () => { if (SIFT.step < last) { SIFT.step++; renderSift(); } });
+  crit.querySelectorAll(".sift-step-body input, .sift-step-body select").forEach(i =>
+    i.addEventListener("input", () => { readSiftControls(); updateSiftFunnel(); }));
+}
+
+// Recompute survivors up to the current step + refresh the summary, stepper
+// counts and results table (no control re-render).
+function updateSiftFunnel() {
+  const summary = document.getElementById("sift-summary");
+  const results = document.getElementById("sift-results");
+  if (!summary || !results) return;
+  const counts = siftFunnelCounts();
+  document.querySelectorAll(".sift-step-chip .ssc-c").forEach((el, i) => {
+    if (counts[i] != null) el.textContent = counts[i].toLocaleString();
+  });
+  const surv = siftSurvivorsUpTo(SIFT.step);
+  const totalYield = surv.reduce((s, r) => s + (r.yield || 0), 0);
+  const stepTitle = SIFT_STEPS[SIFT.step].title.replace(/^\d+ · /, "");
+  summary.innerHTML =
+    `<strong>${surv.length.toLocaleString()}</strong> of ${SIFT.rows.length.toLocaleString()} stations remain after ` +
+    `<em>${escapeSift(stepTitle)}</em> · ~<strong>${totalYield.toLocaleString()}</strong> dwellings`;
+  const sc = document.getElementById("sift-stepcount");
+  if (sc) sc.textContent = `${surv.length.toLocaleString()} remain`;
+  renderSiftTable(surv, results);
+  highlightSiftSurvivors(surv);
 }
 
 function escapeSift(s) {
@@ -6343,23 +6437,26 @@ function escapeSift(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+// Dispatcher: (re)build the current step, then compute the funnel/table.
 function renderSift() {
   const summary = document.getElementById("sift-summary");
   const results = document.getElementById("sift-results");
-  if (!summary || !results) return;
+  const crit = document.getElementById("sift-criteria");
+  if (!summary || !results || !crit) return;
   if (!SIFT.loaded) {
     summary.textContent = "Station assessments unavailable (database not reachable).";
-    results.innerHTML = ""; return;
+    results.innerHTML = ""; crit.innerHTML = ""; return;
   }
-  const surv = siftSurvivors();
-  const totalYield = surv.reduce((s, r) => s + (r.yield || 0), 0);
-  summary.innerHTML =
-    `<strong>${surv.length.toLocaleString()}</strong> of ${SIFT.rows.length.toLocaleString()} stations pass` +
-    ` · ~<strong>${totalYield.toLocaleString()}</strong> dwellings capacity`;
-  const top = surv.slice(0, 100);
+  renderSiftStep();
+  updateSiftFunnel();
+}
+
+// The ranked survivors table (shared by every step).
+function renderSiftTable(surv, results) {
   const SORT_LABELS = { yield: "dwelling yield", benefit: "benefit", viability: "viability",
     deliverability: "deliverability", composite: "3-axis composite" };
-  const sortLabel = SORT_LABELS[SIFT.sort] || "yield";
+  const sortLabel = SORT_LABELS[SIFT.sort] || "composite";
+  const top = surv.slice(0, 100);
   const vcell = (r) => {
     const v = r._viab;
     if (v.profitOnCost == null) return `<td>—</td>`;
@@ -6373,7 +6470,7 @@ function renderSift() {
       `<tr data-crs="${escapeSift(r.crs)}"><td>${i + 1}</td>` +
       `<td>${escapeSift(r.name)}<small>${escapeSift(r.region || r.ttwa)}</small></td>` +
       `<td><span class="sift-tier sift-tier-${r.tier}">${r.tier === "ineligible" ? "—" : r.tier}</span></td>` +
-      `<td title="${r.developableHa.toFixed(1)} developable ha">${(r.yield || 0).toLocaleString()}</td>` +
+      `<td title="${r.developableHa.toFixed(1)} developable ha · ${r.densityFloor || "?"} dph">${(r.yield || 0).toLocaleString()}</td>` +
       `<td>${r.benefit == null ? "—" : `<span class="sift-benefit" title="regen ${r.regen ?? "?"} · access ${r.access ?? "?"} · housing ${r.housing ?? "?"}">${Math.round(r.benefit)}</span>`}</td>` +
       vcell(r) +
       `<td>${Math.round(r._deliv)}${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha developable in Green Belt · friction ${r.friction == null ? "—" : r.friction.toFixed(2)}">⬡</span>` : ""}</td>` +
@@ -6383,7 +6480,6 @@ function renderSift() {
     (surv.length > 100 ? `<p class="hint">Showing the top 100 by ${sortLabel} of ${surv.length.toLocaleString()}.</p>` : "");
   results.querySelectorAll("tr[data-crs]").forEach(tr =>
     tr.addEventListener("click", () => siftDrillTo(tr.dataset.crs)));
-  highlightSiftSurvivors(surv);
 }
 
 function siftDrillTo(crs) {
