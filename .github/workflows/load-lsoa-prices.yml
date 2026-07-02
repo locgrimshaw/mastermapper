@@ -18,12 +18,16 @@ name: Load LSOA prices into the points layer
 on:
   workflow_dispatch:
     inputs:
+      zip_url:
+        description: "URL to the London Datastore hpm zip (or any zip of price CSVs)"
+        type: string
+        default: ""
       ppm2_url:
-        description: "Direct URL to an LSOA £/m² CSV (blank = use data/raw/lsoa_price_per_m2.csv)"
+        description: "Direct URL to an LSOA £/m² CSV (optional)"
         type: string
         default: ""
       median_price_url:
-        description: "Direct URL to an LSOA median-price CSV (blank = use data/raw/lsoa_median_price.csv)"
+        description: "Direct URL to an LSOA median-price CSV (optional)"
         type: string
         default: ""
 
@@ -43,18 +47,26 @@ jobs:
 
       - name: Fetch price sources (best effort)
         run: |
-          mkdir -p data/raw
+          mkdir -p data/raw data/raw/hpm
+          if [ -n "${{ inputs.zip_url }}" ]; then
+            echo "Downloading zip…"
+            curl -fL --retry 3 --retry-delay 5 -o data/raw/hpm.zip "${{ inputs.zip_url }}" \
+              && unzip -o -q data/raw/hpm.zip -d data/raw/hpm \
+              || echo "::warning::zip download/unzip failed"
+          fi
           if [ -n "${{ inputs.ppm2_url }}" ]; then
-            echo "Downloading £/m² source…"
             curl -fL --retry 3 --retry-delay 5 -o data/raw/lsoa_price_per_m2.csv \
               "${{ inputs.ppm2_url }}" || echo "::warning::£/m² download failed"
           fi
           if [ -n "${{ inputs.median_price_url }}" ]; then
-            echo "Downloading median-price source…"
             curl -fL --retry 3 --retry-delay 5 -o data/raw/lsoa_median_price.csv \
               "${{ inputs.median_price_url }}" || echo "::warning::median-price download failed"
           fi
-          ls -la data/raw || true
+          echo "=== files ==="; find data/raw -type f | head -40
+          echo "=== CSV headers + first row ==="
+          for f in $(find data/raw -iname '*.csv' | head -6); do
+            echo "--- $f"; head -2 "$f"; echo;
+          done
 
       - name: Merge prices onto the LSOA points layer
         run: python pipeline/build_lsoa_prices.py

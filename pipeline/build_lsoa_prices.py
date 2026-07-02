@@ -48,11 +48,18 @@ RAW = ROOT / "data" / "raw"
 # is supplied. ~94 m² is the ONS/English Housing Survey average dwelling size.
 AVG_FLOOR_M2 = 94.0
 
-LSOA_CODE_COLS = ["lsoa_code", "lsoa11cd", "lsoa21cd", "lsoa11", "lsoa21",
-                  "lsoa", "code", "area_code", "geography_code", "geography code"]
+LSOA_CODE_COLS = ["lsoa_code", "lsoa11cd", "lsoa21cd", "lsoa11", "lsoa21", "lsoacd",
+                  "lsoa"]
+LA_CODE_COLS = ["lad21cd", "lad22cd", "lad23cd", "ladcd", "lad_code", "la_code",
+                "ltla_code", "utla_code", "local_authority_code"]
+LA_NAME_COLS = ["lad21nm", "lad22nm", "lad23nm", "ladnm", "lad_name", "la_name",
+                "local_authority", "local_authority_name", "name", "area_name",
+                "geography", "geography_name"]
 PPM2_COLS = ["price_per_m2", "price_per_sqm", "ppsqm", "price_per_square_metre",
-             "pricepersqm", "median_price_per_sqm", "value"]
-MEDIAN_COLS = ["median_price", "median", "median_price_paid", "price", "value"]
+             "pricepersqm", "median_price_per_sqm", "price_paid_per_sqm",
+             "median_ppsqm", "ppm2"]
+MEDIAN_COLS = ["median_price", "median", "median_price_paid", "price_paid_median",
+               "medianprice"]
 YEAR_COLS = ["year", "period", "date"]
 
 
@@ -68,51 +75,85 @@ def _find(headers, cands):
     return None
 
 
-def _read_csv_latest(path, value_cols):
-    """Read a CSV keyed by LSOA -> numeric value. If a year/period column exists,
-    keep the latest per LSOA. Returns {lsoa_code: value} or {}."""
-    if not path or not path.exists():
-        return {}
-    out, years = {}, {}
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as fh:
-        reader = csv.DictReader(fh)
-        headers = reader.fieldnames or []
-        code_col = _find(headers, LSOA_CODE_COLS)
-        val_col = _find(headers, value_cols)
-        year_col = _find(headers, YEAR_COLS)
-        if not code_col or not val_col:
-            print(f"  [{path.name}] could not find LSOA code / value columns "
-                  f"(headers: {headers[:8]}…) — skipping")
-            return {}
-        for row in reader:
-            code = (row.get(code_col) or "").strip()
-            raw = (row.get(val_col) or "").strip().replace(",", "").replace("£", "")
-            if not code or not raw:
-                continue
-            try:
-                val = float(raw)
-            except ValueError:
-                continue
-            if val <= 0:
-                continue
-            yr = 0
-            if year_col:
-                m = re.search(r"(\d{4})", str(row.get(year_col) or ""))
-                yr = int(m.group(1)) if m else 0
-            if code not in out or yr >= years.get(code, -1):
-                out[code] = val
-                years[code] = yr
-    print(f"  [{path.name}] {len(out)} LSOA values via '{code_col}' / '{val_col}'"
-          + (f" (latest by '{year_col}')" if _find(headers, YEAR_COLS) else ""))
-    return out
+def _read_price_csv(path):
+    """Read one CSV. Detect its geography (LSOA code, else LA code/name) and the
+    £/m² and/or median-price columns, keeping the latest year per area. Returns
+    (level, ppm2_map, median_map) where level is 'lsoa' | 'la' | None and the maps
+    are keyed by LSOA code (level='lsoa') or normalised LA name (level='la')."""
+    try:
+        with path.open(newline="", encoding="utf-8-sig", errors="replace") as fh:
+            reader = csv.DictReader(fh)
+            headers = reader.fieldnames or []
+            lsoa_col = _find(headers, LSOA_CODE_COLS)
+            la_name_col = _find(headers, LA_NAME_COLS)
+            la_code_col = _find(headers, LA_CODE_COLS)
+            ppm2_col = _find(headers, PPM2_COLS)
+            med_col = _find(headers, MEDIAN_COLS)
+            year_col = _find(headers, YEAR_COLS)
+            if not (ppm2_col or med_col):
+                return (None, {}, {})
+            if lsoa_col:
+                level, key_col = "lsoa", lsoa_col
+            elif la_name_col or la_code_col:
+                level, key_col = "la", (la_name_col or la_code_col)
+            else:
+                return (None, {}, {})
+
+            ppm2, median, years = {}, {}, {}
+            for row in reader:
+                raw_key = (row.get(key_col) or "").strip()
+                if not raw_key:
+                    continue
+                key = raw_key if level == "lsoa" else _norm(raw_key)
+                yr = 0
+                if year_col:
+                    m = re.search(r"(\d{4})", str(row.get(year_col) or ""))
+                    yr = int(m.group(1)) if m else 0
+                if yr < years.get(key, -1):
+                    continue
+                years[key] = yr
+
+                def num(col):
+                    v = (row.get(col) or "").strip().replace(",", "").replace("£", "")
+                    try:
+                        f = float(v)
+                        return f if f > 0 else None
+                    except ValueError:
+                        return None
+                if ppm2_col and num(ppm2_col) is not None:
+                    ppm2[key] = num(ppm2_col)
+                if med_col and num(med_col) is not None:
+                    median[key] = num(med_col)
+            print(f"  [{path.name}] level={level} · {len(ppm2)} £/m² · {len(median)} median "
+                  f"(key '{key_col}'"
+                  + (f", ppm2 '{ppm2_col}'" if ppm2_col else "")
+                  + (f", median '{med_col}'" if med_col else "")
+                  + (f", latest by '{year_col}'" if year_col else "") + ")")
+            return (level, ppm2, median)
+    except Exception as exc:
+        print(f"  [{path.name}] read failed: {exc}")
+        return (None, {}, {})
 
 
-def _src(env, default):
-    v = os.environ.get(env, "").strip()
-    if v and Path(v).exists():
-        return Path(v)
-    p = RAW / default
-    return p if p.exists() else None
+def _iter_sources():
+    """Yield candidate CSV paths from the env vars / data/raw defaults. Each var
+    may point at a CSV, or a directory (or an unzipped download folder) to scan."""
+    seen = set()
+    cands = []
+    for env, default in (("LSOA_PPM2_SRC", "lsoa_price_per_m2.csv"),
+                         ("LSOA_MEDIAN_PRICE_SRC", "lsoa_median_price.csv"),
+                         ("HPM_SRC", "hpm")):
+        v = os.environ.get(env, "").strip()
+        cands.append(Path(v) if v else (RAW / default))
+    cands.append(RAW / "hpm")            # default unzip folder
+    for p in cands:
+        if not p or not p.exists():
+            continue
+        files = sorted(p.rglob("*.csv")) if p.is_dir() else [p]
+        for f in files:
+            if f not in seen:
+                seen.add(f)
+                yield f
 
 
 def main() -> int:
@@ -120,12 +161,19 @@ def main() -> int:
         print(f"ERROR: {POINTS} not found — run build_lsoa_imd_points.py first.")
         return 1
 
-    ppm2 = _read_csv_latest(_src("LSOA_PPM2_SRC", "lsoa_price_per_m2.csv"), PPM2_COLS)
-    median = _read_csv_latest(_src("LSOA_MEDIAN_PRICE_SRC", "lsoa_median_price.csv"), MEDIAN_COLS)
-    if not ppm2 and not median:
-        print("No price source found. Provide LSOA_PPM2_SRC and/or "
-              "LSOA_MEDIAN_PRICE_SRC (see the module docstring). Nothing to do.")
+    lsoa_ppm2, lsoa_med = {}, {}
+    la_ppm2, la_med = {}, {}
+    for f in _iter_sources():
+        level, ppm2, median = _read_price_csv(f)
+        if level == "lsoa":
+            lsoa_ppm2.update(ppm2); lsoa_med.update(median)
+        elif level == "la":
+            la_ppm2.update(ppm2); la_med.update(median)
+    if not (lsoa_ppm2 or lsoa_med or la_ppm2 or la_med):
+        print("No usable price source found (see the module docstring). Nothing to do.")
         return 1
+    print(f"Loaded LSOA: {len(lsoa_ppm2)} £/m², {len(lsoa_med)} median · "
+          f"LA: {len(la_ppm2)} £/m², {len(la_med)} median")
 
     with POINTS.open(encoding="utf-8") as fh:
         data = json.load(fh)
@@ -135,23 +183,25 @@ def main() -> int:
     for f in feats:
         p = f.setdefault("properties", {})
         code = p.get("lsoa_code")
-        mp = median.get(code)
-        pm = ppm2.get(code)
+        lad = _norm(p.get("lad_name") or "")
+        # Prefer the LSOA value; fall back to the containing local authority.
+        pm = lsoa_ppm2.get(code)
+        if pm is None:
+            pm = la_ppm2.get(lad)
+        mp = lsoa_med.get(code)
+        if mp is None:
+            mp = la_med.get(lad)
         if mp is not None:
-            p["median_price"] = round(mp)
-            n_med += 1
+            p["median_price"] = round(mp); n_med += 1
         if pm is not None:
-            p["price_per_m2"] = round(pm)
-            n_ppm2 += 1
+            p["price_per_m2"] = round(pm); n_ppm2 += 1
         elif mp is not None:
-            p["price_per_m2"] = round(mp / AVG_FLOOR_M2)   # derived fallback
-            n_derived += 1
+            p["price_per_m2"] = round(mp / AVG_FLOOR_M2); n_derived += 1   # derived
 
     with POINTS.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, separators=(",", ":"))
-    print(f"Wrote {POINTS.relative_to(ROOT)}: {n_ppm2} £/m² direct, "
-          f"{n_derived} £/m² derived from median, {n_med} median prices "
-          f"(of {len(feats)} LSOAs).")
+    print(f"Wrote {POINTS.relative_to(ROOT)}: {n_ppm2} £/m² ({n_derived} derived), "
+          f"{n_med} median prices, of {len(feats)} LSOAs.")
     return 0
 
 
