@@ -4315,7 +4315,11 @@ function renderStationSynthesis() {
     <div class="syn-actions">
       <button class="syn-btn" id="syn-pin-btn" type="button"></button>
       <button class="syn-btn syn-btn-ghost" id="syn-compare-btn" type="button">Shortlist & compare →</button>
+      <button class="syn-btn syn-btn-ghost" id="syn-report-btn" type="button">⤓ Station report</button>
     </div>`;
+
+  const reportBtn = el.querySelector("#syn-report-btn");
+  if (reportBtn) reportBtn.addEventListener("click", () => exportStationReport(buildStationSnapshot()));
 
   const pinBtn = el.querySelector("#syn-pin-btn");
   const updatePinBtn = () => {
@@ -4529,6 +4533,19 @@ function wireCompareModal(modal) {
 function exportShortlistReport() {
   if (!shortlist.items.length) { alert("Shortlist is empty — nothing to export."); return; }
   const html = buildReportHTML(shortlist.items);
+  const w = window.open("", "_blank");
+  if (!w) { alert("Pop-up blocked — allow pop-ups to open the report."); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}
+
+// Mode A — standalone single-station report. Reuses the shortlist report
+// generator (which already handles a one-item array) so a user exploring one
+// station can export a clean report without shortlisting first.
+function exportStationReport(snap) {
+  if (!snap) { alert("No station profiled yet."); return; }
+  const html = buildReportHTML([snap]);
   const w = window.open("", "_blank");
   if (!w) { alert("Pop-up blocked — allow pop-ups to open the report."); return; }
   w.document.open();
