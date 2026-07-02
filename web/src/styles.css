@@ -103,7 +103,7 @@ html, body {
 
 #app {
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: 440px 1fr;
   height: 100vh;
   width: 100vw;
   max-width: 100%;
@@ -242,6 +242,12 @@ html, body {
 .sift-star { cursor: pointer; text-align: center; color: var(--text-dim); user-select: none; width: 18px; }
 .sift-star.on { color: #e0853a; }
 .sift-star:hover { color: #e0853a; }
+
+/* Map-layer overlay toggles (swatch + label + live count). */
+#map-overlays { margin-top: 4px; }
+.map-overlay-row { align-items: center; }
+.ov-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+  margin: 0 6px 0 2px; flex: 0 0 auto; border: 1px solid rgba(0,0,0,0.15); }
 .sift-benefit { font-variant-numeric: tabular-nums; font-weight: 600; cursor: help; }
 .sift-rag { font-variant-numeric: tabular-nums; font-weight: 600; padding: 1px 5px; border-radius: 4px; cursor: help; }
 .sift-rag-viable   { background: rgba(47,158,68,0.16);  color: #1e7a34; }

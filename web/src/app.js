@@ -852,6 +852,122 @@ function wireImdToggle() {
   if (legend) legend.style.display = state.imdOn ? "" : "none";
 }
 
+// ---- On-demand planning / environmental map overlays ----------------------
+// The constraint + brownfield polygons live in Supabase, clipped to ~1 km around
+// stations. Rather than load them nationally, each "Map layers" toggle fetches
+// only the current viewport (a bbox RPC), refetched as you pan/zoom. A zoom guard
+// keeps a wide view from pulling too much.
+const MAP_OVERLAYS = [
+  { key: "green_space",       label: "Green space",             color: "#74b816", kinds: ["green_space"] },
+  { key: "conservation_area", label: "Conservation areas",      color: "#9c36b5", kinds: ["conservation_area"] },
+  { key: "aonb",              label: "AONB / National Landscapes", color: "#5c940d", kinds: ["aonb"] },
+  { key: "environmental",     label: "Environmental (SSSI/SAC/SPA/Ramsar/woodland)", color: "#0c8599",
+    kinds: ["sssi", "sac", "spa", "ramsar", "ancient_woodland"] },
+  { key: "heritage",          label: "Heritage (listed / monuments / parks)", color: "#a5744b",
+    kinds: ["scheduled_monument", "listed_building", "park_garden"] },
+  { key: "flood",             label: "Flood zones 2 & 3",       color: "#1c7ed6", kinds: ["flood_zone_2", "flood_zone_3"] },
+  { key: "transport",         label: "Transport corridors (road + rail)", color: "#868e96", kinds: ["transport"] },
+  { key: "brownfield",        label: "Brownfield sites",        color: "#e8590c", brownfield: true },
+];
+const OVERLAY_MIN_ZOOM = 10.5;      // below this, the bbox is too big to fetch
+const overlayState = {};            // key -> { on: bool }
+let _overlayMoveWired = false;
+let _overlayMoveTimer = null;
+
+function wireMapOverlays() {
+  const host = document.getElementById("map-overlays");
+  if (!host) return;
+  host.innerHTML = MAP_OVERLAYS.map(o =>
+    `<label class="dd-row map-overlay-row">` +
+    `<input type="checkbox" class="map-overlay-cb" data-key="${o.key}" />` +
+    `<span class="ov-swatch" style="background:${o.color}"></span>` +
+    `<span class="dd-label">${o.label}</span>` +
+    `<span class="dd-stat" id="ov-stat-${o.key}"></span></label>`).join("");
+  host.querySelectorAll(".map-overlay-cb").forEach(cb =>
+    cb.addEventListener("change", e => toggleMapOverlay(e.target.dataset.key, e.target.checked)));
+}
+
+function anyOverlayOn() { return MAP_OVERLAYS.some(o => overlayState[o.key] && overlayState[o.key].on); }
+
+function toggleMapOverlay(key, on) {
+  overlayState[key] = { on };
+  if (on) {
+    if (!_overlayMoveWired && typeof map !== "undefined") {
+      map.on("moveend", () => {
+        clearTimeout(_overlayMoveTimer);
+        _overlayMoveTimer = setTimeout(refreshMapOverlays, 250);
+      });
+      _overlayMoveWired = true;
+    }
+    fetchMapOverlay(key);
+  } else {
+    removeOverlayLayers(key);
+    const stat = document.getElementById(`ov-stat-${key}`);
+    if (stat) stat.textContent = "";
+  }
+}
+
+function refreshMapOverlays() {
+  MAP_OVERLAYS.forEach(o => { if (overlayState[o.key] && overlayState[o.key].on) fetchMapOverlay(o.key); });
+}
+
+async function fetchMapOverlay(key) {
+  const def = MAP_OVERLAYS.find(o => o.key === key);
+  const stat = document.getElementById(`ov-stat-${key}`);
+  if (!def || typeof map === "undefined") return;
+  if (map.getZoom() < OVERLAY_MIN_ZOOM) {
+    removeOverlayLayers(key);
+    if (stat) stat.textContent = "zoom in";
+    return;
+  }
+  const sb = (typeof getSupabase === "function") ? getSupabase() : null;
+  if (!sb) { if (stat) stat.textContent = "n/a"; return; }
+  const b = map.getBounds();
+  const w = b.getWest(), s = b.getSouth(), e = b.getEast(), n = b.getNorth();
+  if (stat) stat.textContent = "…";
+  try {
+    const { data, error } = def.brownfield
+      ? await sb.rpc("brownfield_in_bbox", { w, s, e, n })
+      : await sb.rpc("constraints_in_bbox", { p_kinds: def.kinds, w, s, e, n });
+    if (error) throw error;
+    const fc = data || { type: "FeatureCollection", features: [] };
+    renderOverlay(key, def, fc);
+    if (stat) stat.textContent = `${(fc.features || []).length}`;
+  } catch (err) {
+    console.error("overlay fetch failed", key, err);
+    if (stat) stat.textContent = "err";
+  }
+}
+
+// Keep station dots (and the developable layers) above overlays so they stay
+// clickable: insert overlay fills beneath the first station/dot layer if present.
+function overlayBeforeId() {
+  for (const id of ["station-dot", "station-label", "developable-fill"]) {
+    if (map.getLayer(id)) return id;
+  }
+  return undefined;
+}
+
+function renderOverlay(key, def, fc) {
+  const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`;
+  if (map.getSource(srcId)) {
+    map.getSource(srcId).setData(fc);
+    return;
+  }
+  map.addSource(srcId, { type: "geojson", data: fc });
+  const before = overlayBeforeId();
+  map.addLayer({ id: fillId, type: "fill", source: srcId,
+    paint: { "fill-color": def.color, "fill-opacity": 0.28 } }, before);
+  map.addLayer({ id: lineId, type: "line", source: srcId,
+    paint: { "line-color": def.color, "line-width": 1, "line-opacity": 0.7 } }, before);
+}
+
+function removeOverlayLayers(key) {
+  for (const id of [`ov-${key}-fill`, `ov-${key}-line`]) if (map.getLayer(id)) map.removeLayer(id);
+  const srcId = `ov-${key}-src`;
+  if (map.getSource(srcId)) map.removeSource(srcId);
+}
+
 // ---- Choropleth restyle on weight change ----------------------------------
 
 // Apply the current fill-colour expression to BOTH the fill and its gap-
@@ -6241,11 +6357,21 @@ async function loadSiftData() {
   const sb = (typeof getSupabase === "function") ? getSupabase() : null;
   if (!sb) { SIFT.rows = []; SIFT.loaded = false; return; }
   try {
-    const { data, error } = await sb
-      .from("station_assessments")
-      .select("crs, tier, in_settlement, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
-      .order("dwelling_yield", { ascending: false });
-    if (error) throw error;
+    // PostgREST caps a response at ~1000 rows, so page through in ranges until a
+    // short page — otherwise the sift silently sees only the top 1000 stations.
+    const PAGE = 1000;
+    let data = [], from = 0;
+    for (;;) {
+      const { data: page, error } = await sb
+        .from("station_assessments")
+        .select("crs, tier, in_settlement, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
+        .order("dwelling_yield", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      data = data.concat(page || []);
+      if (!page || page.length < PAGE) break;
+      from += PAGE;
+    }
     SIFT.rows = (data || []).map(r => ({
       crs: r.crs, tier: r.tier, inSettlement: !!r.in_settlement, densityFloor: r.density_floor,
       developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
@@ -6565,9 +6691,16 @@ function renderSiftTable(surv, results) {
     (nShort ? `<button type="button" class="ghost" id="sift-short-csv" title="Export the shortlist as CSV">⤓ Shortlist</button>` +
               `<button type="button" class="ghost" id="sift-short-clear" title="Clear the shortlist">✕ Clear</button>` : "") +
     `</div>` +
-    `<table class="sift-table"><thead><tr><th></th><th>#</th><th>Station</th><th>Tier</th><th title="Dwelling yield">Yield</th>` +
-    `<th title="Socio-economic benefit 0–100">Ben</th><th title="Viability — profit on cost">Via</th>` +
-    `<th title="Deliverability 0–100 (friction-driven; ⬡ = Green Belt)">Del</th><th title="3-axis composite 0–100">Σ</th></tr></thead><tbody>` +
+    `<table class="sift-table"><thead><tr>` +
+    `<th title="Shortlist — click a row's ★ to pin it. The shortlist is saved in your browser and exportable as CSV."></th>` +
+    `<th title="Rank position within the current survivors, ordered by the 'Rank by' setting on the final step.">#</th>` +
+    `<th title="Station name and region. Heavy-rail stations from the National Rail dataset (2,019 stations in England).">Station</th>` +
+    `<th title="NPPF tier. A = in a built-up area (OS Open Built Up Areas, point-in-polygon). B = well-connected station outside a settlement (Green Belt permitted). Sets eligibility.">Tier</th>` +
+    `<th title="Dwelling yield = net developable hectares × NPPF density floor (50 dph if well-connected, else 40 dph). Developable ha = 800 m catchment minus built-up land, green space, roads + railway, flood zone 3, and hard environmental designations (PostGIS ST_Difference). Hover a cell for the ha and dph used.">Yield</th>` +
+    `<th title="Socio-economic benefit, 0–100 (equal weight): regeneration = population-weighted catchment IMD deprivation (ONS 2019, LSOA); access = local amenities (GP/school/pharmacy/nursery/bus within 800 m) + rail connectivity percentile; housing = dwelling-yield percentile. Hover a cell for the three components.">Ben</th>` +
+    `<th title="Viability — profit on cost from a residual appraisal (GDV − build − soft costs − land). Sales value scales by region off your base £/ft²; all assumptions are set on step 6. Colour = viable / marginal / unviable vs your profit target.">Via</th>` +
+    `<th title="Deliverability, 0–100. Driven by residual soft-constraint friction (conservation areas, AONB, parks & gardens, listed-building settings covering the developable land); a permitted Tier-B Green Belt site scores a bonus. ⬡ = developable land overlaps Green Belt. LA land-supply & ownership drivers are placeholders pending data.">Del</th>` +
+    `<th title="3-axis composite, 0–100 = your weighted blend of Benefit × Viability × Deliverability (weights on the final step).">Σ</th></tr></thead><tbody>` +
     top.map((r, i) =>
       `<tr data-crs="${escapeSift(r.crs)}">` +
       `<td class="sift-star${SIFT.shortlist.has(r.crs) ? " on" : ""}" data-star="${escapeSift(r.crs)}" title="Shortlist">${star(r.crs)}</td>` +
@@ -6617,6 +6750,7 @@ function highlightSiftSurvivors(surv) {
 buildSliders();
 buildLegend();
 wireImdToggle();          // IMD choropleth is a context layer, OFF by default
+wireMapOverlays();        // on-demand planning/environmental overlay toggles
 wireCollapsibleBlocks();  // weighting block ships collapsed
 wireModeSwitch();         // Explore / Site-sift mode switch
 
