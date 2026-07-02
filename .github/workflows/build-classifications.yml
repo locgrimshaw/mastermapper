@@ -1,0 +1,86 @@
+# Build two national classification layers and commit them back to the repo:
+#   1. web/data/greenbelt.geojson  — green-belt DISPLAY overlay
+#                                     (pipeline/build_greenbelt_layer.py)
+#   2. web/data/stations.geojson   — stations gain a rural/urban classification
+#                                     (pipeline/build_station_ruc.py)
+#
+# REQUIRED SOURCE FILES (commit under data/raw/ or fetch in CI — the asset hosts
+# aren't reachable from this Action, same policy as the other builders):
+#   data/raw/green-belt.geojson  planning.data.gov.uk green-belt (GeoJSON, 4326)
+#                                https://www.planning.data.gov.uk/dataset/green-belt
+#                                (env GREEN_BELT_SRC overrides the path)
+#   data/raw/ruc_lsoa.csv        ONS Rural Urban Classification (2011) of LSOAs
+#                                in England and Wales — CSV keyed by LSOA11 code
+#                                (env RUC_SRC overrides the path)
+#   web/data/lsoa_imd.geojson    LSOA boundaries with an lsoa_code property,
+#                                already committed by the "Build data layer"
+#                                workflow (env LSOA_SRC overrides).
+#   web/data/stations.geojson    existing stations, already committed.
+#
+# Both source datasets are Open Government Licence v3 — see docs/DATASETS.md.
+
+name: Build classifications
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Build green-belt display layer
+        run: |
+          if [ -f data/raw/green-belt.geojson ] || [ -n "${GREEN_BELT_SRC}" ]; then
+            echo "Building green-belt display layer..."
+            python pipeline/build_greenbelt_layer.py
+          else
+            echo "No data/raw/green-belt.geojson — skipping green-belt build."
+          fi
+
+      - name: Classify stations (ONS Rural-Urban Classification)
+        run: |
+          if [ -f data/raw/ruc_lsoa.csv ] || [ -n "${RUC_SRC}" ]; then
+            echo "Adding rural/urban classification to stations..."
+            python pipeline/build_station_ruc.py
+          else
+            echo "No data/raw/ruc_lsoa.csv — skipping station RUC build."
+          fi
+
+      - name: Commit the updated classification layers
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          echo "=== Staging outputs ==="
+          if [ -f web/data/greenbelt.geojson ]; then
+            git add -f web/data/greenbelt.geojson
+            echo "Staged greenbelt.geojson ($(du -h web/data/greenbelt.geojson | cut -f1))"
+          fi
+          if [ -f web/data/stations.geojson ]; then
+            git add -f web/data/stations.geojson
+            echo "Staged stations.geojson ($(du -h web/data/stations.geojson | cut -f1))"
+          fi
+
+          echo "=== What is staged? ==="
+          git status --short
+          git diff --cached --stat
+
+          echo "=== Commit + push (no-op safe) ==="
+          if git diff --cached --quiet; then
+            echo "Outputs identical to what's already committed — nothing to push."
+          else
+            git commit -m "Build classification layers (green-belt + station RUC) [automated]"
+            git push
+          fi

@@ -153,6 +153,14 @@ const DEVELOPABLE_ATTRIBUTION =
 // attribution). Toggled by render/removeDevelopableLayer.
 let developableAttributionShown = false;
 
+// National Green Belt display overlay (web/data/greenbelt.geojson, built by
+// pipeline/build_greenbelt_layer.py). Toggled from the "Planning overlays" block.
+const GREENBELT_COLOR = "#2b8a3e";
+const GREENBELT_ATTRIBUTION =
+  "Green Belt © planning.data.gov.uk / MHCLG (contains OS data © Crown " +
+  "copyright and database right), Open Government Licence v3.0";
+let greenbeltAttributionShown = false;
+
 // Default developable filter config (radius + which constraints to subtract).
 // Fresh copy per deep dive so edits don't leak between stations.
 function defaultDevelopableConfig() {
@@ -578,6 +586,9 @@ async function loadData() {
     addStationLayer();
   }
 
+  // --- National Green Belt display overlay (optional static layer) ---------
+  loadGreenbelt();
+
   updateDataSourceNote();
 }
 
@@ -726,7 +737,59 @@ function updateDataSourceNote() {
     if (developableAttributionShown) {
       el.textContent += " " + DEVELOPABLE_ATTRIBUTION;
     }
+    if (greenbeltAttributionShown) {
+      el.textContent += " " + GREENBELT_ATTRIBUTION;
+    }
   }
+}
+
+// ---- National Green Belt display overlay ----------------------------------
+
+// Load web/data/greenbelt.geojson (built by pipeline/build_greenbelt_layer.py)
+// and add a hidden fill overlay + its toggle. Entirely optional: if the file is
+// absent (not built yet) the rest of the map is unaffected.
+async function loadGreenbelt() {
+  try {
+    const r = await fetch("data/greenbelt.geojson", { cache: "no-store" });
+    if (!r.ok) return;
+    const gj = await r.json();
+    const n = (gj.features || []).length;
+    if (!n) return;
+    state.hasGreenbelt = true;
+    if (!map.getSource("greenbelt")) {
+      map.addSource("greenbelt", { type: "geojson", data: gj });
+      // Insert beneath the station dots so markers stay tappable on top.
+      const beforeId = map.getLayer("station-dot") ? "station-dot" : undefined;
+      map.addLayer({
+        id: "greenbelt-fill", type: "fill", source: "greenbelt",
+        layout: { visibility: "none" },
+        paint: {
+          "fill-color": GREENBELT_COLOR,
+          "fill-opacity": 0.28,
+          "fill-outline-color": GREENBELT_COLOR,
+        },
+      }, beforeId);
+    }
+    buildGreenbeltToggle(n);
+  } catch (err) {
+    console.warn("[greenbelt] load failed:", err.message);
+  }
+}
+
+// Reveal the "Planning overlays" block and wire the Green Belt checkbox.
+function buildGreenbeltToggle(count) {
+  const block = document.getElementById("overlay-block");
+  const cb = document.getElementById("greenbelt-show");
+  if (!block || !cb) return;
+  block.hidden = false;
+  const cnt = document.getElementById("greenbelt-count");
+  if (cnt && count) cnt.textContent = `${count.toLocaleString()} areas`;
+  cb.addEventListener("change", (e) => {
+    if (!map.getLayer("greenbelt-fill")) return;
+    map.setLayoutProperty("greenbelt-fill", "visibility", e.target.checked ? "visible" : "none");
+    greenbeltAttributionShown = e.target.checked;
+    updateDataSourceNote();
+  });
 }
 
 // ---- Choropleth restyle on weight change ----------------------------------
@@ -1939,6 +2002,10 @@ async function profileStation(p, point) {
       meets_frequency: sp.meets_frequency === true || sp.meets_frequency === "true" || Number(sp.meets_frequency) === 1,
       ttwa_name: sp.ttwa_name || null,
       ttwa_gva_rank: sp.ttwa_gva_rank != null && sp.ttwa_gva_rank !== "" ? Number(sp.ttwa_gva_rank) : null,
+      // ONS Rural-Urban Classification of the station's LSOA (build_station_ruc.py).
+      // Drives the DEFAULT developable density regime (rural/suburban/urban).
+      rural_urban: sp.rural_urban || station.rural_urban || null,
+      ruc_name: sp.ruc_name || station.ruc_name || null,
       name: station.name, crs: station.crs, operator: station.operator,
       usage, trend, year: state.stationsMeta?.latest_year || "",
       interchanges: station.interchanges != null && station.interchanges !== "" ? Number(station.interchanges) : null,
@@ -2437,6 +2504,9 @@ function runDeepDive(catchment, meta) {
   deep.brownfieldFilters = { minDwellings: 0, publicOnly: false, deliverableOnly: false };
   // Developable-land analysis — reset per dive; centre carried in from station meta.
   deep.stationCentre = meta.stationCentre || null;
+  // ONS RUC-derived regime for this station (preferred over density bands).
+  deep.stationRuralUrban = (meta.station && meta.station.rural_urban) || null;
+  deep.stationRucName = (meta.station && meta.station.ruc_name) || null;
   deep.developable = defaultDevelopableConfig();
   deep.developableResult = null;
   deep.developableVisible = false;
@@ -3469,11 +3539,26 @@ function classifyDevelopable(density) {
   return "rural";
 }
 
+// The auto (non-override) regime: ONS Rural-Urban Classification of the
+// station's LSOA when available (the preferred, authoritative source), else the
+// population-density bands as a fallback.
+function autoDevelopableRegime() {
+  if (deep.stationRuralUrban) return deep.stationRuralUrban;
+  return classifyDevelopable(deep.developableDensity);
+}
+
+// Where the auto regime came from — for the UI note ("ONS RUC" vs "by density").
+function autoDevelopableRegimeSource() {
+  if (deep.stationRuralUrban) return "ONS RUC";
+  if (deep.developableDensity != null) return "by density";
+  return null;
+}
+
 // The regime currently in effect: the user's override, else the auto class,
 // else a sensible suburban default.
 function activeDevelopableRegime() {
   if (deep.developableRegime && deep.developableRegime !== "auto") return deep.developableRegime;
-  return classifyDevelopable(deep.developableDensity) || "suburban";
+  return autoDevelopableRegime() || "suburban";
 }
 
 // Potential dwellings under each regime from the RPC's hectare breakdown and the
@@ -3638,10 +3723,15 @@ function renderDevelopableSummary() {
   const dw = developableDwellings() || { rural: 0, suburban: 0, urban: 0 };
   const active = activeDevelopableRegime();
   const density = deep.developableDensity;
-  const autoClass = classifyDevelopable(density);
+  const autoClass = autoDevelopableRegime();
+  const autoSrc = autoDevelopableRegimeSource();
   const densTxt = density == null ? "n/a" : `${Math.round(density).toLocaleString()} /km²`;
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : "—";
   const overriding = deep.developableRegime && deep.developableRegime !== "auto";
+  // Prefer the ONS RUC label when we have it, else fall back to the density read.
+  const classNote = autoClass
+    ? `Auto-classified <strong>${cap(autoClass)}</strong>${autoSrc ? ` (${autoSrc}${deep.stationRucName ? `: ${deep.stationRucName}` : ""})` : ""} · density ${densTxt}`
+    : `Density ${densTxt}`;
 
   const card = (key, label, val) => `
     <div class="dd-stat-cell dd-dev-cap ${key === active ? "dd-dev-cap-on" : ""}">
@@ -3656,7 +3746,7 @@ function renderDevelopableSummary() {
       <div class="dd-stat-cell"><div class="dd-stat-num">${pct.toFixed(0)}%</div><div class="dd-stat-cap">of catchment</div></div>
     </div>
     <p class="hint" style="margin:8px 0 4px">
-      Auto-classified <strong>${cap(autoClass)}</strong> · density ${densTxt}${overriding ? ` · using <strong>${cap(active)}</strong> (override)` : ""}.
+      ${classNote}${overriding ? ` · using <strong>${cap(active)}</strong> (override)` : ""}.
       Inner ${innerHa.toFixed(1)} ha / outer ${outerHa.toFixed(1)} ha.
     </p>
     <div class="dd-stats-grid dd-dev-caps">

@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws7-developable" />
+  <link rel="stylesheet" href="src/styles.css?v=ws8-greenbelt-ruc" />
 </head>
 <body>
   <div id="app">
@@ -108,6 +108,16 @@
         <div id="rail-toggle" class="rail-toggle"></div>
       </section>
 
+      <section class="block" id="overlay-block" hidden>
+        <h2>Planning overlays</h2>
+        <p class="hint">National planning-constraint layers drawn over the map for context.</p>
+        <label class="dd-row">
+          <input type="checkbox" id="greenbelt-show" />
+          <span class="dd-label">Green Belt</span>
+          <span class="dd-stat" id="greenbelt-count"></span>
+        </label>
+      </section>
+
       <footer>
         <p class="datasource" id="datasource">Loading data…</p>
       </footer>
@@ -203,6 +213,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws7-developable"></script>
+  <script type="module" src="src/app.js?v=ws8-greenbelt-ruc"></script>
 </body>
 </html>
