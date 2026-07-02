@@ -6125,7 +6125,7 @@ const SIFT = {
   loaded: false,
   rows: [],
   step: 0,             // current wizard step (index into SIFT_STEPS)
-  crit: { requireFrequency: true, requireWellConnected: false,
+  crit: { requireFrequency: true, requireWellConnected: false, exemptInSettlement: true,
           tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
           maxFriction: 1, minBenefit: 0, minViability: 0, minDeliverability: 0 },
   sort: "composite",   // yield | benefit | viability | deliverability | composite
@@ -6208,11 +6208,11 @@ async function loadSiftData() {
   try {
     const { data, error } = await sb
       .from("station_assessments")
-      .select("crs, tier, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
+      .select("crs, tier, in_settlement, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
       .order("dwelling_yield", { ascending: false });
     if (error) throw error;
     SIFT.rows = (data || []).map(r => ({
-      crs: r.crs, tier: r.tier, densityFloor: r.density_floor,
+      crs: r.crs, tier: r.tier, inSettlement: !!r.in_settlement, densityFloor: r.density_floor,
       developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
       wellConnected: !!(r.stations && r.stations.well_connected),
       meetsFrequency: !!(r.stations && r.stations.meets_frequency),
@@ -6243,8 +6243,17 @@ async function loadSiftData() {
 // shows only the current step's controls; the funnel count narrows step by step.
 const SIFT_STEPS = [
   { key: "connectivity", title: "1 · Connectivity gate",
-    pred: (r, c) => (!c.requireFrequency || r.meetsFrequency) &&
-                    (!c.requireWellConnected || r.wellConnected) },
+    // NPPF gives in-settlement stations a "default yes" regardless of service
+    // frequency; exemptInSettlement (default on) mirrors that, so the frequency /
+    // well-connected requirements apply only to out-of-settlement stations. Turn
+    // it off to apply connectivity to every station (stricter than the NPPF).
+    pred: (r, c) => {
+      const exempt = c.exemptInSettlement && r.inSettlement;
+      if (exempt) return true;
+      if (c.requireFrequency && !r.meetsFrequency) return false;
+      if (c.requireWellConnected && !r.wellConnected) return false;
+      return true;
+    } },
   { key: "eligibility", title: "2 · Eligibility & tier",
     pred: (r, c) => (r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
                     (r.tier === "ineligible" && c.ineligible) },
@@ -6302,7 +6311,9 @@ function siftStepControlsHTML(key) {
     case "connectivity":
       return `<p class="hint">The first gate keeps only stations meeting the NPPF service-frequency test (4 trains/trams per hour overall, or 2 per hour per direction, through the daytime). Optionally require the full 'well-connected' definition (also within a top-60 Travel-to-Work Area by GVA).</p>` +
         `<label class="dd-row"><input type="checkbox" id="sc-freq"${chk(C.requireFrequency)}> <span>Require NPPF service frequency</span></label>` +
-        `<label class="dd-row"><input type="checkbox" id="sc-wc"${chk(C.requireWellConnected)}> <span>Require 'well-connected' (frequency + top-60 TTWA)</span></label>`;
+        `<label class="dd-row"><input type="checkbox" id="sc-wc"${chk(C.requireWellConnected)}> <span>Require 'well-connected' (frequency + top-60 TTWA)</span></label>` +
+        `<label class="dd-row"><input type="checkbox" id="sc-exempt"${chk(C.exemptInSettlement)}> <span>Exempt in-settlement stations (mirror NPPF 'default yes')</span></label>` +
+        `<p class="hint" style="margin-top:4px">With the exemption on, the tests above apply only to out-of-settlement stations. Turn it off to gate every station on connectivity (stricter than the NPPF).</p>`;
     case "eligibility":
       return `<p class="hint">Two-tier NPPF test. Density floor is by connectivity: <strong>50 dph</strong> for well-connected stations, else <strong>40 dph</strong> — applied to the net developable area.</p>` +
         `<label class="dd-row"><input type="checkbox" id="sift-tierA"${chk(C.tierA)}> <span>Tier A · in-settlement</span></label>` +
@@ -6354,6 +6365,7 @@ function readSiftControls() {
   const numv = (id, d) => { const el = g(id); if (!el) return d; const v = parseFloat(el.value); return isNaN(v) ? d : v; };
   if (g("sc-freq")) C.requireFrequency = g("sc-freq").checked;
   if (g("sc-wc")) C.requireWellConnected = g("sc-wc").checked;
+  if (g("sc-exempt")) C.exemptInSettlement = g("sc-exempt").checked;
   if (g("sift-tierA")) C.tierA = g("sift-tierA").checked;
   if (g("sift-tierB")) C.tierB = g("sift-tierB").checked;
   if (g("sift-inelig")) C.ineligible = g("sift-inelig").checked;
