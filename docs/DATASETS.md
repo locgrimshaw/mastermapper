@@ -161,6 +161,129 @@ Notes:
 
 ---
 
+## Classification layers (green-belt overlay + station rural/urban)
+
+Two national classification layers, each built by its own script and committed
+back to the repo by the **Build classifications** workflow
+(`.github/workflows/build-classifications.yml`).
+
+### 11. Green belt — DISPLAY overlay
+- **What it is:** England's green-belt boundaries as a light area wash drawn on
+  the map. This is the *display* overlay, separate from the developable-land
+  "erase" constraint (which `build_constraints.py` clips and pushes to Supabase).
+- **Where:** planning.data.gov.uk green-belt (GeoJSON, already EPSG:4326) —
+  https://www.planning.data.gov.uk/dataset/green-belt
+  Click **Download** and choose GeoJSON.
+- **Save as:** `data/raw/green-belt.geojson` (env `GREEN_BELT_SRC` overrides;
+  `.gpkg` / `.json` also accepted).
+- **Builder:** `python pipeline/build_greenbelt_layer.py`
+- **Output (data contract):** `web/data/greenbelt.geojson` — a GeoJSON
+  FeatureCollection; each feature is Polygon/MultiPolygon with
+  `properties.name` (string, may be `''`) and `properties.reference` (string),
+  plus `properties.organisation` when the source carries it. The geometry is
+  lightly simplified (~10 m, topology-preserving) for web display. If the file
+  grows past ~15 MB, tile it with tippecanoe (the builder emits
+  `web/data/greenbelt.pmtiles` automatically when tippecanoe is on PATH).
+- **Licence:** OGL v3.0 — *"Contains public sector information licensed under
+  the Open Government Licence v3.0."*
+
+### 12. ONS Rural-Urban Classification (2011) — for stations
+- **What it is:** the ONS Rural Urban Classification 2011 at LSOA level — a
+  10-fold class (RUC11 code `A1`…`F2` + full name) per 2011 LSOA. Used to give
+  each rail station a default density regime (rural / suburban / urban) for the
+  developable-land tool.
+- **Where:** ONS "Rural Urban Classification (2011) of Lower Layer Super Output
+  Areas in England and Wales" (a lookup CSV keyed by LSOA11 code). Published on
+  the ONS / gov.uk statistics pages; the CSV carries an LSOA11 code column plus
+  a RUC11 code and name.
+- **Save as:** `data/raw/ruc_lsoa.csv` (env `RUC_SRC` overrides). Header
+  spellings vary between exports; the builder matches leniently (accepts
+  `LSOA11CD` / `LSOA code` / `geography code`… for the code, `RUC11CD` /
+  `RUC11` / `Rural Urban Classification 2011 (10 fold)`… for the code/name).
+- **Boundaries used for the join:** `web/data/lsoa_imd.geojson` (has an
+  `lsoa_code` property; env `LSOA_SRC` overrides). Stations are joined to their
+  LSOA by point-in-polygon, then looked up in the RUC CSV. NB: the RUC lookup is
+  on 2011 LSOAs and the boundaries are 2021 LSOAs, so ~6% of codes won't match —
+  those stations get `rural_urban = null`, reported in the build summary.
+- **Builder:** `python pipeline/build_station_ruc.py`
+- **Output (data contract):** rewrites `web/data/stations.geojson` in place,
+  adding to each feature's properties `rural_urban` ∈ {`rural`,`suburban`,
+  `urban`} (or `null`), `ruc_name` (string) and `ruc_code` (string, e.g. `A1`).
+  RUC → regime mapping (tunable, defined at the top of the script): Urban major/
+  minor conurbation → `urban`; Urban city and town (+ sparse) → `suburban`;
+  Rural town and fringe / village / hamlets and isolated dwellings (+ sparse) →
+  `rural`.
+- **Licence:** OGL v3.0 — *"Contains public sector information licensed under
+  the Open Government Licence v3.0."* Attribute ONS.
+
+---
+
+## Brownfield site POLYGON boundaries (`brownfield` table `area` column)
+
+The national **brownfield-land** register (loaded by
+`pipeline/build_brownfield_csv.py`) is **point-only** — 35,892 sites, every
+`area` null. Two independent feeds add real polygon footprints; both are
+wanted, and both are optional (run whichever sources you have). The frontend
+already draws the polygon when the RPC returns `area_geojson`
+(`renderBrownfieldLayer`), so populating `area` is all that's needed.
+
+Pipeline:
+`build_brownfield_site_csv.py` + `build_brownfield_inspire.py` →
+`supabase/brownfield_site_import.csv` + `supabase/brownfield_inspire_import.csv`
+→ `supabase/loaders/load_brownfield_polygons.py` → `public.brownfield`
+(workflow: `.github/workflows/load-brownfield-polygons.yml`).
+
+### A. planning.data.gov.uk `brownfield-site` (has polygons — mostly London)
+
+- **What it is:** a SEPARATE planning.data.gov.uk dataset from brownfield-land,
+  and the one that actually carries polygon geometries (almost all submitted by
+  London boroughs). Loaded as **new** brownfield rows (distinct `reference`s),
+  so they upsert on `(organisation, reference)` **alongside** the point register
+  without clobbering it.
+- **Where:** https://www.planning.data.gov.uk/dataset/brownfield-site — click
+  **Download → GeoJSON**, or use the entity API (already **EPSG:4326**):
+  https://www.planning.data.gov.uk/entity.geojson?dataset=brownfield-site
+- **Save as:** `data/raw/brownfield-site.geojson`
+- **Licence:** Open Government Licence v3.0 (per-dataset — confirm on the page).
+  Attribute the publishing organisation and *"Contains public sector
+  information licensed under the Open Government Licence v3.0."*
+- **Fields used** (lenient matching, shared with the brownfield-land builder):
+  `reference`, `name`, `organisation-entity`/`organisation`, `site-address`,
+  `point` (WKT), `hectares`, `minimum-net-dwellings`, `maximum-net-dwellings`,
+  `deliverable`, `ownership-status`, `planning-permission-status`,
+  `planning-permission-date`, `notes`, `site-plan-url`. The polygon comes from
+  the GeoJSON feature `geometry` (Polygon/MultiPolygon → MultiPolygon). `geom`
+  is the site's `point`, or the polygon centroid when no point is given.
+
+### B. HM Land Registry INSPIRE parcels (boundaries for brownfield-land points)
+
+- **What it is:** INSPIRE Index Polygons — freehold land parcels. This feed
+  spatially joins each **brownfield-land POINT** to its **containing** parcel
+  and writes an `area` **update** for that existing `(organisation, reference)`
+  row. Points that fall in no parcel stay point-only.
+- **Where:** the Land Registry / `use1.uk` INSPIRE download index publishes
+  polygons as **per-Local-Planning-Authority GML zips** (EPSG:27700). The build
+  reprojects to 4326.
+- **Save as:** unzip into `data/raw/inspire/` (e.g.
+  `data/raw/inspire/<lpa>.gml`; `*.geojson`/`*.json` also accepted). The
+  brownfield-land **point** download (`data/raw/brownfield-land.csv` or
+  `.geojson`) must also be present — it's the point set being enriched.
+- **Regional by design:** national INSPIRE is **hundreds of per-LPA files** and
+  many GB unzipped. The builder processes **whatever parcel files are present**
+  and leaves everything else point-only, so add LPAs incrementally.
+- **⚠️ LICENCE — RESTRICTED RE-USE (important):** INSPIRE Index Polygons are
+  **not** plain OGL data. They contain **Ordnance Survey data (© Crown copyright
+  and database rights)** and are provided under the **Land Registry INSPIRE
+  end-user licence**, which **restricts onward republication**. Deriving site
+  boundaries from them and **publishing** those boundaries may **not** be freely
+  permitted — review the current INSPIRE licence and OS terms before making
+  these polygons public. Pursued here with that caveat explicitly accepted.
+- **Multiple / zero parcels per point:** a point inside several nested/
+  overlapping parcels keeps the **smallest-area** containing parcel (the most
+  specific plot); a point inside **no** parcel is skipped (row left point-only).
+
+---
+
 ## TIER 3 — needs a backend / 3rd-party service (later phase)
 
 ### 9. Isochrones + travel times (requirement 1.4)

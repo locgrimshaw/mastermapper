@@ -29,6 +29,24 @@ data/raw/*
 !data/raw/brownfield-land.json
 !data/raw/brownfield-land.geojson
 
+# planning.data.gov.uk brownfield-SITE download (build input for
+# build_brownfield_site_csv.py -> supabase/brownfield_site_import.csv). This is
+# the dataset that HAS polygon footprints (almost all London). OGL v3.0.
+!data/raw/brownfield-site.geojson
+!data/raw/brownfield-site.json
+!data/raw/brownfield_site.geojson
+
+# HM Land Registry INSPIRE parcels (build input for build_brownfield_inspire.py).
+# ⚠️ RESTRICTED RE-USE: INSPIRE contains Ordnance Survey data (© Crown copyright
+# and database rights) under the Land Registry INSPIRE end-user licence, which
+# limits republication — see docs/DATASETS.md. National INSPIRE is hundreds of
+# heavy per-LPA files, so keep this REGIONAL: commit only the LPAs you need, or
+# (better, given the licence) fetch them in CI and don't commit them at all.
+!data/raw/inspire/
+!data/raw/inspire/*.gml
+!data/raw/inspire/*.geojson
+!data/raw/inspire/*.json
+
 # Optional GP practice file fallback: if the NHS auto-download is blocked, you
 # can download the CSV in your browser and commit it here, and the loader will
 # use it instead of downloading. Small, so safe to keep in the repo.

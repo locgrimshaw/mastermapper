@@ -1,0 +1,108 @@
+name: Load brownfield polygons into Supabase
+
+# Gives brownfield sites REAL polygon boundaries and loads them into your
+# Supabase `brownfield` table. You trigger this with a button in the GitHub
+# "Actions" tab — no command line needed. It reads your Supabase keys from
+# repository Secrets, so they never appear in your code.
+#
+# It runs two independent builders (either can be skipped if its source is
+# absent) and then one loader:
+#   PART A  pipeline/build_brownfield_site_csv.py
+#           planning.data.gov.uk `brownfield-site` polygons -> NEW rows.
+#           Needs data/raw/brownfield-site.geojson (Open Government Licence v3.0).
+#   PART B  pipeline/build_brownfield_inspire.py
+#           HM Land Registry INSPIRE parcels -> `area` updates for existing
+#           brownfield-land points. Needs the brownfield-land POINT download
+#           (data/raw/brownfield-land.csv/.geojson) AND per-LPA parcel files in
+#           data/raw/inspire/*.gml (or *.geojson).
+#
+# ⚠️ INSPIRE LICENCE: INSPIRE-derived boundaries contain Ordnance Survey data
+# (© Crown copyright and database rights) under the Land Registry INSPIRE
+# end-user licence, which RESTRICTS republication. See docs/DATASETS.md before
+# publishing them. PART A (brownfield-site) is OGL v3.0 and unrestricted.
+#
+# SOURCE DOWNLOADS MUST BE PRESENT. Two ways to supply them:
+#   (a) Commit the downloads under data/raw/ (allowlisted in .gitignore):
+#         data/raw/brownfield-site.geojson       (PART A)
+#         data/raw/brownfield-land.csv|.geojson   (PART B point set)
+#         data/raw/inspire/<lpa>.gml              (PART B parcels; one or more)
+#   (b) Add a download step below — CI has open internet. See docs/DATASETS.md.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # geopandas installs binary wheels (shapely/pyogrio/pyproj bundle their
+      # own GDAL/GEOS/PROJ), so no apt GDAL is normally required. If a wheel is
+      # ever unavailable for the runner, uncomment the apt step below.
+      # - name: System GDAL (fallback only)
+      #   run: sudo apt-get update && sudo apt-get install -y gdal-bin libgdal-dev
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      # OPTIONAL: fetch source downloads here instead of committing them. CI has
+      # open internet. Example (uncomment + adjust):
+      # - name: Download brownfield-site GeoJSON
+      #   run: |
+      #     mkdir -p data/raw
+      #     curl -L -o data/raw/brownfield-site.geojson \
+      #       "https://www.planning.data.gov.uk/entity.geojson?dataset=brownfield-site&limit=..."
+
+      - name: Check at least one source is present
+        run: |
+          if ! ls data/raw/brownfield-site.* >/dev/null 2>&1 \
+             && ! ls data/raw/inspire/* >/dev/null 2>&1; then
+            echo "::error::No brownfield-polygon sources found."
+            echo "::error::Provide data/raw/brownfield-site.geojson (PART A) and/or"
+            echo "::error::data/raw/inspire/*.gml + the brownfield-land points (PART B)."
+            echo "::error::See this workflow's header and docs/DATASETS.md."
+            exit 1
+          fi
+          echo "Source files present:"
+          ls -lh data/raw/ || true
+          ls -lh data/raw/inspire/ 2>/dev/null || true
+
+      - name: Build PART A — brownfield-site polygons CSV
+        run: |
+          echo "Building supabase/brownfield_site_import.csv"
+          python pipeline/build_brownfield_site_csv.py
+
+      - name: Build PART B — INSPIRE boundary CSV
+        run: |
+          echo "Building supabase/brownfield_inspire_import.csv"
+          python pipeline/build_brownfield_inspire.py
+
+      - name: Upload import CSVs as downloadable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: brownfield_polygon_csvs
+          path: |
+            supabase/brownfield_site_import.csv
+            supabase/brownfield_inspire_import.csv
+          if-no-files-found: warn
+
+      - name: Load the brownfield polygons into Supabase
+        env:
+          # These come from your repository Secrets (Settings > Secrets and
+          # variables > Actions). The service key is write-access and secret.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing secrets. Add SUPABASE_URL and SUPABASE_SERVICE_KEY"
+            echo "::error::under Settings > Secrets and variables > Actions, then re-run."
+            exit 1
+          fi
+          python supabase/loaders/load_brownfield_polygons.py
