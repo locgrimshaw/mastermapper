@@ -78,6 +78,16 @@ def _find(headers, cands):
     return None
 
 
+def _la_key_from_filename(path):
+    """The hpm zip is one file per local authority (e.g. 'York_link_26122024.csv',
+    'South_Cambridgeshire_link_…', 'Herefordshire_County_of_link_…'). Derive the LA
+    name key from the filename (strip the '_link_<date>' suffix), normalised to
+    match the points layer's lad_name."""
+    stem = path.stem
+    stem = re.sub(r"_link_?\d*$", "", stem, flags=re.I)
+    return _norm(stem)
+
+
 def _median(vals):
     s = sorted(vals)
     n = len(s)
@@ -104,12 +114,13 @@ def _read_price_csv(path, agg_ppm2, agg_med):
             year_col = _find(headers, YEAR_COLS)
             if not (ppm2_col or med_col):
                 return None
+            # LSOA code column → true LSOA granularity. Otherwise treat the whole
+            # file as one local authority, keyed by its FILENAME (the hpm zip is one
+            # file per LA, and the rows only carry the LA code, not its name).
             if lsoa_col:
-                level, key_col = "lsoa", lsoa_col
-            elif la_name_col or la_code_col:
-                level, key_col = "la", (la_name_col or la_code_col)
+                level, key_col, file_la_key = "lsoa", lsoa_col, None
             else:
-                return None
+                level, key_col, file_la_key = "la", None, _la_key_from_filename(path)
 
             def num(col):
                 v = (row.get(col) or "").strip().replace(",", "").replace("£", "")
@@ -121,10 +132,12 @@ def _read_price_csv(path, agg_ppm2, agg_med):
 
             n_p = n_m = 0
             for row in reader:
-                raw_key = (row.get(key_col) or "").strip()
-                if not raw_key:
-                    continue
-                key = raw_key if level == "lsoa" else _norm(raw_key)
+                if level == "lsoa":
+                    key = (row.get(key_col) or "").strip()
+                    if not key:
+                        continue
+                else:
+                    key = file_la_key      # whole file = one local authority
                 if year_col:
                     m = re.search(r"(\d{4})", str(row.get(year_col) or ""))
                     if m and int(m.group(1)) < MIN_YEAR:
@@ -137,7 +150,7 @@ def _read_price_csv(path, agg_ppm2, agg_med):
                     agg_med[(level, key)].append(mp); n_m += 1
             if n_p or n_m:
                 print(f"  [{path.name}] level={level} · +{n_p} £/m² · +{n_m} price "
-                      f"(key '{key_col}'"
+                      f"(key {key_col or repr(file_la_key)}"
                       + (f", ppm2 '{ppm2_col}'" if ppm2_col else "")
                       + (f", price '{med_col}'" if med_col else "") + ")")
             return level
@@ -162,8 +175,9 @@ def _iter_sources():
             continue
         files = sorted(p.rglob("*.csv")) if p.is_dir() else [p]
         for f in files:
-            if f not in seen:
-                seen.add(f)
+            rp = f.resolve()
+            if rp not in seen:
+                seen.add(rp)
                 yield f
 
 
