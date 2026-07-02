@@ -477,7 +477,7 @@ def build_transport(mask_27700, mask_geom_27700):
     return rows
 
 
-def build_flood(zone, mask_27700, mask_geom_27700):
+def build_flood(zone, mask_27700, mask_geom_27700, mask_geom_4326):
     kind = f"flood_zone_{zone}"
     per = _src_path(f"FLOOD_ZONE_{zone}_SRC", [
         f"ea_flood_zone_{zone}.gpkg", f"ea_flood_zone_{zone}.shp",
@@ -485,6 +485,9 @@ def build_flood(zone, mask_27700, mask_geom_27700):
         f"flood_zone_{zone}.shp",
     ])
     combined = _src_path("FLOOD_ZONES_SRC", [
+        # planning.data.gov.uk flood-risk-zone (EA Flood Map for Planning,
+        # already EPSG:4326) — split by its flood-risk-level attribute below.
+        "flood-risk-zone.geojson", "flood_risk_zone.geojson",
         "ea_flood_zones.gpkg",
         "flood_map_for_planning_rivers_and_sea_flood_zones.gpkg",
         "ea_flood_zones.geojson",
@@ -496,10 +499,17 @@ def build_flood(zone, mask_27700, mask_geom_27700):
                                   f"Flood_Map_for_Planning_Rivers_and_Sea_Flood_Zone_{zone}"])
         gdf = _to_27700(_read_source(per, layer, mask_geom_27700))
     elif combined:
+        # planning.data flood-risk-zone is EPSG:4326; EA bulk files are 27700.
+        # The mask used for the read filter must match the source CRS.
+        is_wgs84 = (combined.suffix.lower() in (".geojson", ".json")
+                    or "flood-risk-zone" in combined.name.lower())
+        read_mask = mask_geom_4326 if is_wgs84 else mask_geom_27700
         print(f"  [{kind}] reading {combined.name} (splitting by zone attribute) ...")
-        gdf = _to_27700(_read_source(combined, None, mask_geom_27700))
-        zcol = _find_col(gdf, ["flood_zone", "zone", "flood_zone_type",
-                               "flood_source", "type", "layer"])
+        gdf = _to_27700(_read_source(combined, None, read_mask),
+                        assume_epsg=(4326 if is_wgs84 else 27700))
+        zcol = _find_col(gdf, ["flood-risk-level", "flood_risk_level",
+                               "flood-risk-type", "flood_zone", "zone",
+                               "flood_zone_type", "flood_source", "type", "layer"])
         if zcol:
             gdf = gdf[gdf[zcol].astype(str).str.contains(str(zone), na=False)]
         else:
@@ -507,12 +517,13 @@ def build_flood(zone, mask_27700, mask_geom_27700):
                   f"cannot split — skipping {kind}.")
             return None
     else:
-        _skip(kind, "EA Flood Map for Planning Flood Zones",
+        _skip(kind, "EA Flood Map for Planning Flood Zones (or planning.data flood-risk-zone)",
               f"FLOOD_ZONE_{zone}_SRC or FLOOD_ZONES_SRC")
         return None
 
     gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
-    return _finish(gdf, kind, mask_27700, prop_cols=["flood_source", "type"])
+    return _finish(gdf, kind, mask_27700,
+                   prop_cols=["flood-risk-level", "flood_source", "type"])
 
 
 def build_green_belt(mask_27700, mask_geom_4326):
@@ -538,8 +549,8 @@ BUILDERS = {
     "built_land": lambda m27, g27, g43: build_built_land(m27, g27),
     "green_space": lambda m27, g27, g43: build_green_space(m27, g27),
     "transport": lambda m27, g27, g43: build_transport(m27, g27),
-    "flood_zone_2": lambda m27, g27, g43: build_flood(2, m27, g27),
-    "flood_zone_3": lambda m27, g27, g43: build_flood(3, m27, g27),
+    "flood_zone_2": lambda m27, g27, g43: build_flood(2, m27, g27, g43),
+    "flood_zone_3": lambda m27, g27, g43: build_flood(3, m27, g27, g43),
     "green_belt": lambda m27, g27, g43: build_green_belt(m27, g43),
 }
 

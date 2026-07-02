@@ -64,15 +64,19 @@ LSOA_DEFAULTS = [ROOT / "web" / "data" / "lsoa_imd.geojson",
 
 # Lenient column matching in the RUC CSV. ONS/Nomis exports vary the wording.
 RUC_LSOA_CODE_CANDIDATES = [
+    # 2021 classification (matches lsoa_imd.geojson's 2021 boundaries) first.
+    "LSOA21CD", "LSOA21 Code",
     "LSOA11CD", "LSOA11 Code", "LSOA code", "LSOA Code",
     "Lower Super Output Area 2011 Code", "lsoa_code", "geography code",
     "Geography Code", "mnemonic", "LSOA11CD ",
 ]
 RUC_CODE_CANDIDATES = [
+    "RUC21CD", "RUC21 Code",
     "RUC11CD", "RUC11 Code", "Rural Urban Classification 2011 code",
     "Rural Urban Classification 2011 Code", "RUC code", "ruc_code",
 ]
 RUC_NAME_CANDIDATES = [
+    "RUC21NM", "RUC21 Name",
     "RUC11", "RUC11NM", "RUC11 Name",
     "Rural Urban Classification 2011 (10 fold)",
     "Rural Urban Classification 2011 name",
@@ -96,7 +100,20 @@ REGIME_BY_RUC_NAME = {
     "Rural hamlets and isolated dwellings": "rural",
     # Some exports spell the RUC differently; a couple of common aliases:
     "Urban city and town in a sparse setting": "suburban",
+    # --- 2021 Rural-Urban Classification (the current 6-category scheme) ------
+    # Urban nearer a major town/city = the dense cores that get the inner-200 m
+    # 100 dph boost; Urban further out = suburban; all Rural tiers = rural.
+    "Urban: Nearer to a major town or city":          "urban",
+    "Urban: Further from a major town or city":       "suburban",
+    "Larger rural: Nearer to a major town or city":   "rural",
+    "Larger rural: Further from a major town or city": "rural",
+    "Smaller rural: Nearer to a major town or city":  "rural",
+    "Smaller rural: Further from a major town or city": "rural",
 }
+
+# 2021 RUC code prefixes (UN1/UF1/RLN1/RLF1/RSN1/RSF1), used as a code fallback.
+REGIME_BY_RUC21_CODE = {"UN": "urban", "UF": "suburban",
+                        "RL": "rural", "RS": "rural"}
 
 # Fallback by RUC11 code letter, so a lookup still works if the CSV only carries
 # codes (A/B urban, C suburban, D/E/F rural). The digit (1 vs 2) is the sparse
@@ -112,11 +129,15 @@ REGIME_BY_CODE_LETTER = {
 
 
 def _pick(columns, candidates):
-    """Case-insensitive lookup of the first candidate column present."""
-    lower = {c.lower().strip(): c for c in columns}
+    """Case-insensitive lookup of the first candidate column present. Tolerant of
+    a leading UTF-8 BOM (﻿), which ONS exports often carry on the first
+    column and which str.strip() does NOT remove."""
+    def norm(s):
+        return str(s).lstrip("﻿").strip().lower()
+    lower = {norm(c): c for c in columns}
     for cand in candidates:
-        if cand.lower().strip() in lower:
-            return lower[cand.lower().strip()]
+        if norm(cand) in lower:
+            return lower[norm(cand)]
     return None
 
 
@@ -139,7 +160,13 @@ def _classify(ruc_name, ruc_code):
         if "rural" in low:
             return "rural"
     if isinstance(ruc_code, str) and ruc_code.strip():
-        return REGIME_BY_CODE_LETTER.get(ruc_code.strip()[0].upper())
+        code = ruc_code.strip().upper()
+        # 2021 RUC codes (UN1/UF1/RLN1/RLF1/RSN1/RSF1) by prefix, then the
+        # 2011 single-letter (A-F) fallback.
+        for pref, reg in REGIME_BY_RUC21_CODE.items():
+            if code.startswith(pref):
+                return reg
+        return REGIME_BY_CODE_LETTER.get(code[0])
     return None
 
 

@@ -60,6 +60,15 @@ jobs:
           curl -fL --retry 3 --retry-delay 5 -o data/raw/green-belt.geojson \
             "https://files.planning.data.gov.uk/dataset/green-belt.geojson" \
             || echo "::warning::green-belt download failed"
+          # --- planning.data flood-risk-zone (EA Flood Map for Planning, 4326) -
+          # Fetched only when a flood kind is requested (it's a large national
+          # download). Split into flood_zone_2 / _3 by its flood-risk-level attr.
+          if echo "${{ inputs.kinds }}" | grep -q flood; then
+            echo "flood-risk-zone..."
+            curl -fL --retry 3 --retry-delay 5 -o data/raw/flood-risk-zone.geojson \
+              "https://files.planning.data.gov.uk/dataset/flood-risk-zone.geojson" \
+              || echo "::warning::flood-risk-zone download failed"
+          fi
           # --- OS OpenData via the OS Data Hub Downloads API (no key needed) ---
           # Delivered as a zip; we unzip, find the .gpkg, and point the builder's
           # env var at it. Best effort — a failure just skips that kind.
