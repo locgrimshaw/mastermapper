@@ -188,22 +188,52 @@ def _src_path(env_var, default_names):
     return None
 
 
+def _list_layers(path):
+    """Layer names in a multi-layer container (GeoPackage/GDB), or [] otherwise."""
+    if path.suffix.lower() not in (".gpkg", ".gdb"):
+        return []
+    try:
+        import pyogrio
+        return [row[0] for row in pyogrio.list_layers(path)]
+    except Exception:
+        try:
+            import fiona
+            return list(fiona.listlayers(str(path)))
+        except Exception:
+            return []
+
+
+def _pick_rail_layer(path):
+    """Pick the railway *track/line* layer, never the station-points layer.
+    OpenMap Local's GB GeoPackage names the lines `railway_track` and the points
+    `railway_station`; a naive substring match on 'railway' grabs the points
+    (which then buffer to nothing). Score layers so a track/line rail layer wins
+    and any 'station' layer is rejected."""
+    layers = _list_layers(path)
+
+    def score(name):
+        n = name.lower()
+        if "rail" not in n:
+            return -1
+        if "station" in n:       # station POINTS — never the barrier we want
+            return -1
+        if "track" in n:
+            return 3
+        if "line" in n:
+            return 2
+        return 1                 # some other rail line layer
+
+    ranked = sorted(((score(l), l) for l in layers), key=lambda t: t[0], reverse=True)
+    return ranked[0][1] if ranked and ranked[0][0] > 0 else None
+
+
 def _pick_layer(path, candidates):
     """For a multi-layer container (GeoPackage), return the layer name matching
     one of the candidates (exact, then substring). None for single-layer files
     like Shapefile/GeoJSON, or when no candidate matches."""
-    if path.suffix.lower() not in (".gpkg", ".gdb"):
+    layers = _list_layers(path)
+    if not layers:
         return None
-    layers = []
-    try:
-        import pyogrio
-        layers = [row[0] for row in pyogrio.list_layers(path)]
-    except Exception:
-        try:
-            import fiona
-            layers = list(fiona.listlayers(str(path)))
-        except Exception:
-            return None
     low = {l.lower(): l for l in layers}
     for c in candidates:
         if c.lower() in low:
@@ -538,21 +568,26 @@ def build_transport(mask_27700, mask_geom_27700):
         rows += _finish(roads, "transport", mask_27700, dissolve=True)
     if rail_path:
         print(f"  [transport] reading railway from {rail_path.name} ...")
-        elayer = _pick_layer(rail_path, ["RailwayTrack", "Railway",
-                                         "railwaytrack", "OpenMapLocal_RailwayTrack",
-                                         "RailwayTrackSide", "Rail"])
+        # Pick the rail TRACK/line layer (never the station-points layer, which a
+        # bare 'railway' substring match used to grab — buffering points = no rail).
+        elayer = _pick_rail_layer(rail_path)
+        if elayer is None:
+            print(f"    WARNING: no rail track/line layer found in {rail_path.name}; "
+                  f"available: {_list_layers(rail_path)} — skipping rail.")
         print(f"    rail layer picked: {elayer!r}")
-        rail = _to_27700(_read_source(rail_path, elayer, mask_geom_27700))
+        rail = _to_27700(_read_source(rail_path, elayer, mask_geom_27700)) if elayer else None
         # A silently-empty masked read (0 rows, no exception) leaves rail out
         # entirely — the bug that dropped railway curtilage before. Fall back to a
-        # full read (then the mask clip in _finish still trims it) and report.
-        if rail is None or rail.empty:
+        # full read of the SAME track layer (the mask clip in _finish still trims
+        # it) and report. Only when we actually resolved a track layer.
+        if elayer and (rail is None or rail.empty):
             print("    masked rail read returned 0 features — retrying full read")
-            rail = _to_27700(gpd.read_file(rail_path, **({"layer": elayer} if elayer else {})))
-        print(f"    read {0 if rail is None else len(rail)} rail features")
-        rail = _buffer_transport_layer(rail, is_rail=True)
-        print(f"    {0 if rail is None else len(rail)} rail features after buffering to curtilage")
-        rows += _finish(rail, "transport", mask_27700, dissolve=True)
+            rail = _to_27700(gpd.read_file(rail_path, layer=elayer))
+        if rail is not None and not rail.empty:
+            print(f"    read {len(rail)} rail features")
+            rail = _buffer_transport_layer(rail, is_rail=True)
+            print(f"    {len(rail)} rail features after buffering to curtilage")
+            rows += _finish(rail, "transport", mask_27700, dissolve=True)
     return rows
 
 
