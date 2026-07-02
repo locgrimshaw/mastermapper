@@ -1,0 +1,108 @@
+name: Load constraints into Supabase
+
+# Builds the station developable-land constraint polygons (built land, green
+# space, transport corridors, flood zones, green belt) and loads them into your
+# Supabase `planning_constraints` table. You trigger this with a button in the
+# GitHub "Actions" tab — no command line needed. It reads your Supabase keys
+# from repository Secrets, so they never appear in your code.
+#
+# SOURCE DOWNLOADS MUST BE PRESENT. build_constraints.py clips the constraint
+# layers to a 1 km buffer around every rail station, so it needs the raw
+# national datasets as input. Each source is OPTIONAL (missing ones are skipped
+# with a warning), but you get a useful result only for the sources you provide.
+# Two ways to supply them:
+#   (a) Commit the downloads under data/raw/ (they're allowlisted in
+#       .gitignore). Expected default filenames (configurable via env vars —
+#       see the header of pipeline/build_constraints.py):
+#         data/raw/os_open_built_up_areas.gpkg   (OS Open Built Up Areas)
+#         data/raw/os_open_greenspace.gpkg       (OS Open Greenspace)
+#         data/raw/os_openmap_local.gpkg         (OS OpenMap Local: Road + Rail)
+#         data/raw/ea_flood_zone_2.gpkg          (EA Flood Zone 2)
+#         data/raw/ea_flood_zone_3.gpkg          (EA Flood Zone 3)
+#         data/raw/green-belt.geojson            (planning.data.gov.uk green-belt)
+#   (b) Add a download step below (curl the Defra/OS Data Hub/planning.data URLs
+#       into data/raw/) — CI has open internet. See docs/DATASETS.md for links.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kinds:
+        description: "Which constraint kinds to build (comma-separated, blank = all)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # geopandas installs binary wheels (shapely/pyogrio/pyproj bundle their
+      # own GDAL/GEOS/PROJ), so no apt GDAL is normally required. If a wheel is
+      # ever unavailable for the runner, uncomment the apt step below.
+      # - name: System GDAL (fallback only)
+      #   run: sudo apt-get update && sudo apt-get install -y gdal-bin libgdal-dev
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      # OPTIONAL: fetch the raw source downloads here instead of committing them.
+      # CI has open internet. Example (uncomment + fill in real URLs):
+      # - name: Download source datasets
+      #   run: |
+      #     mkdir -p data/raw
+      #     curl -L -o data/raw/green-belt.geojson \
+      #       "https://www.planning.data.gov.uk/entity.geojson?dataset=green-belt&limit=..."
+      #     # OS Open Built Up Areas / Greenspace / OpenMap Local and the EA
+      #     # Flood Zones are large GeoPackages from osdatahub.os.uk and
+      #     # environment.data.gov.uk — add curl/unzip steps as needed.
+
+      - name: Check at least one source download is present
+        run: |
+          if ! ls data/raw/os_open_built_up_areas.* \
+                  data/raw/os_open_greenspace.* \
+                  data/raw/os_openmap_local.* \
+                  data/raw/ea_flood_zone_2.* data/raw/ea_flood_zone_3.* \
+                  data/raw/ea_flood_zones.* \
+                  data/raw/green-belt.* data/raw/green_belt.* >/dev/null 2>&1; then
+            echo "::error::No constraint source files found under data/raw/."
+            echo "::error::Commit at least one (see this workflow's header) or add"
+            echo "::error::a download step. See docs/DATASETS.md for the URLs."
+            exit 1
+          fi
+          echo "Source files present:"
+          ls -lh data/raw/ || true
+
+      - name: Build the constraints import CSV
+        env:
+          CONSTRAINT_KINDS: ${{ inputs.kinds }}
+        run: |
+          echo "Building supabase/constraints_import.csv (clipped to station catchments)"
+          python pipeline/build_constraints.py
+
+      - name: Upload import CSV as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: constraints_import_csv
+          path: supabase/constraints_import.csv
+          if-no-files-found: error
+
+      - name: Load the constraints into Supabase
+        env:
+          # These come from your repository Secrets (Settings > Secrets and
+          # variables > Actions). The service key is write-access and secret.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing secrets. Add SUPABASE_URL and SUPABASE_SERVICE_KEY"
+            echo "::error::under Settings > Secrets and variables > Actions, then re-run."
+            exit 1
+          fi
+          python supabase/loaders/load_constraints.py

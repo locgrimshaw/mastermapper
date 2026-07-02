@@ -39,6 +39,22 @@ data/raw/*
 # API. It's larger (~tens of MB) but git handles it and the deploy strips it.
 !data/raw/lsoa_2021_bgc.geojson
 
+# Planning-constraint source downloads (build inputs for build_constraints.py ->
+# supabase/constraints_import.csv). They're clipped to a 1 km buffer around every
+# rail station, so the DB stays tiny, but the raw national files are large. Commit
+# whichever you have (or fetch them in CI). Filenames are the build's defaults;
+# override with the *_SRC env vars if yours differ.
+!data/raw/os_open_built_up_areas.gpkg
+!data/raw/os_open_built_up_areas.shp
+!data/raw/os_open_greenspace.gpkg
+!data/raw/os_open_greenspace.shp
+!data/raw/os_openmap_local.gpkg
+!data/raw/ea_flood_zone_2.gpkg
+!data/raw/ea_flood_zone_3.gpkg
+!data/raw/ea_flood_zones.gpkg
+!data/raw/green-belt.geojson
+!data/raw/green_belt.geojson
+
 # Python
 __pycache__/
 *.pyc

@@ -118,6 +118,49 @@ app. You'll have a real, national, reweightable deprivation map.
 
 ---
 
+## Station developable-land constraints (`planning_constraints` table)
+
+These are the "erase"/overlay polygon layers for the station developable-land
+analysis (`pipeline/build_constraints.py` → `supabase/constraints_import.csv` →
+`supabase/loaders/load_constraints.py` → `public.planning_constraints`). The
+build **clips every layer to a 1 km buffer around each rail station** (union of
+`web/data/stations.geojson`), so the national downloads shrink to a thin sliver
+and the Supabase free tier stays under its cap.
+
+Each source is optional (missing ones are skipped). Commit the download under
+`data/raw/` (allowlisted in `.gitignore`) or fetch it in CI — the paths are
+configurable via the `*_SRC` env vars documented at the top of
+`pipeline/build_constraints.py`. Most OS/EA data is **EPSG:27700** (British
+National Grid) and is reprojected to 4326 by the pipeline.
+
+| kind | dataset | download | default path | CRS |
+|------|---------|----------|--------------|-----|
+| `built_land` | OS Open Built Up Areas (polygon) | https://osdatahub.os.uk/downloads/open/BuiltUpAreas | `data/raw/os_open_built_up_areas.gpkg` | 27700 |
+| `green_space` | OS Open Greenspace — "Greenspace Site" polygon layer (ignore Access Points) | https://osdatahub.os.uk/downloads/open/OpenGreenspace | `data/raw/os_open_greenspace.gpkg` | 27700 |
+| `transport` | OS OpenMap Local — Road + Railway (lines buffered by class; road polygons kept) | https://osdatahub.os.uk/downloads/open/OpenMapLocal | `data/raw/os_openmap_local.gpkg` | 27700 |
+| `flood_zone_2` | EA Flood Map for Planning (Rivers and Sea) — Flood Zone 2 | https://environment.data.gov.uk/ (Defra Data Services Platform) | `data/raw/ea_flood_zone_2.gpkg` | 27700 |
+| `flood_zone_3` | EA Flood Map for Planning (Rivers and Sea) — Flood Zone 3 | https://environment.data.gov.uk/ (Defra Data Services Platform) | `data/raw/ea_flood_zone_3.gpkg` | 27700 |
+| `green_belt` | planning.data.gov.uk green-belt (polygon) | https://www.planning.data.gov.uk/dataset/green-belt | `data/raw/green-belt.geojson` | **4326** (no reprojection) |
+
+Notes:
+- **transport half-widths** applied to line features before reprojecting
+  (metres): motorway 15, A-road 9, B/minor 5, local/residential 4, rail 6. Road
+  *polygons* are kept as-is.
+- **flood zones** can be supplied as two per-zone files (above) **or** as one
+  combined file (`data/raw/ea_flood_zones.gpkg`, env `FLOOD_ZONES_SRC`) with a
+  zone attribute — the build auto-splits it into `flood_zone_2` / `flood_zone_3`.
+
+**Licences & required attribution (OGL v3.0):**
+- OS Open Built Up Areas / Open Greenspace / OpenMap Local:
+  *"Contains OS data © Crown copyright and database right 2025"*.
+- EA Flood Map for Planning Flood Zones:
+  *"© Environment Agency copyright and/or database right 2025"*.
+- planning.data.gov.uk green-belt: OGL v3.0
+  (*"Contains public sector information licensed under the Open Government
+  Licence v3.0"*).
+
+---
+
 ## TIER 3 — needs a backend / 3rd-party service (later phase)
 
 ### 9. Isochrones + travel times (requirement 1.4)
