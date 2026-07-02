@@ -1,0 +1,72 @@
+name: Load LSOA prices into the points layer
+
+# Merges LSOA-level price data (£/m² and/or median price) onto
+# web/data/lsoa_imd_points.geojson so the viability model can use a real, LOCAL
+# Gross Development Value (catchment-weighted £/m² per station).
+#
+# The £/m² dataset (HM Land Registry Price Paid × EPC floor areas) is published on
+# the London Datastore ("House Price per Square Metre in England and Wales", EPO9W)
+# and the median-price dataset by ONS (HPSSA). Their exact file URLs aren't stable
+# to hard-code, so supply them here at run time (or commit the CSVs under
+# data/raw/ and leave the inputs blank):
+#   ppm2_url          -> data/raw/lsoa_price_per_m2.csv   (LSOA code + £/m²)
+#   median_price_url  -> data/raw/lsoa_median_price.csv   (LSOA code + median price)
+#
+# After it commits the updated points layer (which redeploys to Pages), the DB is
+# refreshed by re-running the lsoa_imd http-load + public.rebuild_station_prices().
+
+on:
+  workflow_dispatch:
+    inputs:
+      ppm2_url:
+        description: "Direct URL to an LSOA £/m² CSV (blank = use data/raw/lsoa_price_per_m2.csv)"
+        type: string
+        default: ""
+      median_price_url:
+        description: "Direct URL to an LSOA median-price CSV (blank = use data/raw/lsoa_median_price.csv)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch price sources (best effort)
+        run: |
+          mkdir -p data/raw
+          if [ -n "${{ inputs.ppm2_url }}" ]; then
+            echo "Downloading £/m² source…"
+            curl -fL --retry 3 --retry-delay 5 -o data/raw/lsoa_price_per_m2.csv \
+              "${{ inputs.ppm2_url }}" || echo "::warning::£/m² download failed"
+          fi
+          if [ -n "${{ inputs.median_price_url }}" ]; then
+            echo "Downloading median-price source…"
+            curl -fL --retry 3 --retry-delay 5 -o data/raw/lsoa_median_price.csv \
+              "${{ inputs.median_price_url }}" || echo "::warning::median-price download failed"
+          fi
+          ls -la data/raw || true
+
+      - name: Merge prices onto the LSOA points layer
+        run: python pipeline/build_lsoa_prices.py
+
+      - name: Commit the updated points layer
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          if git diff --quiet -- web/data/lsoa_imd_points.geojson; then
+            echo "No change to lsoa_imd_points.geojson (no price data merged)."
+          else
+            git add web/data/lsoa_imd_points.geojson
+            git commit -m "Merge LSOA price data onto the points layer (viability GDV)"
+            git push
+          fi

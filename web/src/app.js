@@ -6301,7 +6301,8 @@ function regionPriceMult(region) {
 
 const VIABILITY_DEFAULTS = {
   unitSizeFt2: 750,    // average saleable area per dwelling
-  salesPsf: 350,       // base £/ft² sales value (× regional multiplier)
+  salesPsf: 350,       // FALLBACK base £/ft² (× regional multiplier) where no local price
+  salesAdjPct: 100,    // adjustment applied to the LOCAL catchment £/ft² (new-build premium/discount)
   buildPsf: 200,       // £/ft² build cost
   softCostPct: 30,     // fees + finance + contingency, as % of build cost
   affordablePct: 25,   // % affordable homes
@@ -6348,12 +6349,19 @@ function toggleShortlist(crs) {
 
 // Residual appraisal → profit on cost (%). Transparent: GDV − (build + softs +
 // land); profit-on-cost is the headline viability metric.
+const FT2_PER_M2 = 10.7639;
 function computeViability(row) {
   const a = SIFT.assumptions;
   const units = row.yield || 0;
-  if (units <= 0) return { profitOnCost: null, rag: "n/a", score: 0 };
+  if (units <= 0) return { profitOnCost: null, rag: "n/a", score: 0, price: null, local: false };
   const area = units * a.unitSizeFt2;
-  const price = a.salesPsf * regionPriceMult(row.region);
+  // Sales value: prefer the LOCAL catchment £/ft² (from Land Registry £/m² within
+  // 800 m) × an adjustment; fall back to the base £/ft² × regional multiplier where
+  // no local price is loaded yet.
+  const localPsf = row.catchmentPpm2 ? row.catchmentPpm2 / FT2_PER_M2 : null;
+  const price = localPsf != null
+    ? localPsf * ((a.salesAdjPct || 100) / 100)
+    : a.salesPsf * regionPriceMult(row.region);
   const affFrac = (a.affordablePct || 0) / 100;
   const blend = (1 - affFrac) + affFrac * ((a.affordableValue || 0) / 100);
   const gdv = area * price * blend;
@@ -6361,13 +6369,13 @@ function computeViability(row) {
   const softs = build * ((a.softCostPct || 0) / 100);
   const land = units * (a.blvPerUnit || 0) * 1000;
   const cost = build + softs + land;
-  if (cost <= 0) return { profitOnCost: null, rag: "n/a", score: 0 };
+  if (cost <= 0) return { profitOnCost: null, rag: "n/a", score: 0, price: null, local: false };
   const poc = ((gdv - cost) / cost) * 100;
   const target = a.profitTargetPct || 17.5;
   const rag = poc >= target ? "viable" : poc >= target * 0.5 ? "marginal" : "unviable";
   // 0–100 score: target maps to ~60, 2× target to 100, break-even to ~25.
   const score = Math.max(0, Math.min(100, 25 + (poc / (2 * target)) * 55));
-  return { profitOnCost: poc, rag, score };
+  return { profitOnCost: poc, rag, score, price: Math.round(price), local: localPsf != null };
 }
 
 // Deliverability composite (0–100): low soft-constraint friction is the main
@@ -6426,7 +6434,7 @@ async function loadSiftData() {
     for (;;) {
       const { data: page, error } = await sb
         .from("station_assessments")
-        .select("crs, tier, in_settlement, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
+        .select("crs, tier, in_settlement, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, catchment_ppm2, catchment_median_price, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
         .order("dwelling_yield", { ascending: false })
         .range(from, from + PAGE - 1);
       if (error) throw error;
@@ -6450,6 +6458,8 @@ async function loadSiftData() {
       housing: r.housing_score == null ? null : Number(r.housing_score),
       catchmentImd: r.catchment_imd == null ? null : Number(r.catchment_imd),
       catchmentPop: r.catchment_pop == null ? null : Number(r.catchment_pop),
+      catchmentPpm2: r.catchment_ppm2 == null ? null : Number(r.catchment_ppm2),
+      catchmentMedianPrice: r.catchment_median_price == null ? null : Number(r.catchment_median_price),
       name: (r.stations && r.stations.name) || r.crs,
       region: (r.stations && r.stations.region) || "",
       ttwa: (r.stations && r.stations.ttwa_name) || "",
@@ -6559,9 +6569,11 @@ function siftStepControlsHTML(key) {
       return `<p class="hint">Benefit (0–100) = regeneration (catchment deprivation) + sustainable access (amenities + rail connectivity) + housing contribution (yield percentile), equally weighted.</p>` +
         `<label class="sift-field"><span>Min benefit <b id="sift-benefit-val">${C.minBenefit || 0}</b></span><input type="range" id="sift-minbenefit" min="0" max="100" step="1" value="${C.minBenefit || 0}"></label>`;
     case "viability":
-      return `<p class="hint"><strong>Viability</strong> runs a simple residual appraisal for each station's scheme: <em>Gross Development Value − (build + soft costs + land)</em>, expressed as <strong>profit on cost %</strong>. GDV = dwellings × avg unit size × sales £/ft², with affordable homes valued lower. Sales value scales by region off your base £/ft². All assumptions below are yours to set.</p>` +
-        siftNumField("v-sales", "Sales £/ft² (base)", A.salesPsf, 10,
-          "Base new-build sales value per square foot, multiplied by a regional factor (London ~1.9× … North East ~0.8×) so GDV varies by location. This is the biggest driver of viability.") +
+      return `<p class="hint"><strong>Viability</strong> runs a residual appraisal per scheme: <em>Gross Development Value − (build + soft costs + land)</em> = <strong>profit on cost %</strong>. GDV uses each station's <strong>local sales value</strong> — the catchment-weighted £/m² from HM Land Registry (Price Paid × EPC floor area) over the LSOAs within 800 m, converted to £/ft² — so value reflects the actual neighbourhood, not a broad region. Where local price data isn't loaded yet it falls back to the base £/ft² below.</p>` +
+        siftNumField("v-salesadj", "Local price adjustment %", A.salesAdjPct, 5,
+          "Applied to the local market £/ft² from Land Registry data. 100% = the neighbourhood market rate; raise it for a prime new-build premium, lower it for a discount.") +
+        siftNumField("v-sales", "Fallback sales £/ft²", A.salesPsf, 10,
+          "Used only for stations where local Land Registry £/m² hasn't loaded. Multiplied by a regional factor (London ~1.9× … North East ~0.8×).") +
         siftNumField("v-build", "Build £/ft²", A.buildPsf, 10,
           "All-in construction cost per square foot (BCIS-style). Higher build cost lowers profit on cost.") +
         siftNumField("v-unit", "Avg unit ft²", A.unitSizeFt2, 25,
@@ -6617,9 +6629,9 @@ function readSiftControls() {
   if (g("sift-minbenefit")) C.minBenefit = numv("sift-minbenefit", 0);
   if (g("v-minpoc")) C.minProfitOnCost = numv("v-minpoc", -30);
   if (g("d-min")) C.minDeliverability = numv("d-min", 0);
-  [["v-sales", "salesPsf"], ["v-build", "buildPsf"], ["v-unit", "unitSizeFt2"],
-   ["v-soft", "softCostPct"], ["v-aff", "affordablePct"], ["v-blv", "blvPerUnit"],
-   ["v-target", "profitTargetPct"], ["d-gb", "gbTierBBonus"]].forEach(([id, key]) => {
+  [["v-sales", "salesPsf"], ["v-salesadj", "salesAdjPct"], ["v-build", "buildPsf"],
+   ["v-unit", "unitSizeFt2"], ["v-soft", "softCostPct"], ["v-aff", "affordablePct"],
+   ["v-blv", "blvPerUnit"], ["v-target", "profitTargetPct"], ["d-gb", "gbTierBBonus"]].forEach(([id, key]) => {
     if (g(id)) A[key] = numv(id, A[key]);
   });
   if (g("w-ben")) W.benefit = numv("w-ben", 1);
@@ -6759,7 +6771,9 @@ function renderSiftTable(surv, results) {
   const vcell = (r) => {
     const v = r._viab;
     if (v.profitOnCost == null) return `<td>—</td>`;
-    return `<td><span class="sift-rag sift-rag-${v.rag}" title="profit on cost; viability score ${Math.round(v.score)}">${v.profitOnCost.toFixed(0)}%</span></td>`;
+    const priceNote = v.price == null ? "" :
+      ` · sales £${v.price}/ft² (${v.local ? "local Land Registry £/m²" : "regional fallback"})`;
+    return `<td><span class="sift-rag sift-rag-${v.rag}" title="profit on cost; viability score ${Math.round(v.score)}${priceNote}">${v.profitOnCost.toFixed(0)}%</span></td>`;
   };
   const nShort = SIFT.shortlist.size;
   const star = crs => SIFT.shortlist.has(crs) ? "★" : "☆";
