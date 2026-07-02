@@ -6087,6 +6087,18 @@ function applyModeVisibility() {
   if (siftBlock) siftBlock.hidden = !sift;
 }
 
+// ---- Persistence: a tiny namespaced localStorage wrapper --------------------
+// Backs the sift configuration + shortlist so they survive a page reload. All
+// access is guarded (private-mode / disabled storage just no-ops).
+const mmStore = {
+  key: k => `mastermapper:${k}`,
+  get(k, fallback) {
+    try { const v = localStorage.getItem(this.key(k)); return v == null ? fallback : JSON.parse(v); }
+    catch (_) { return fallback; }
+  },
+  set(k, v) { try { localStorage.setItem(this.key(k), JSON.stringify(v)); } catch (_) {} },
+};
+
 // ---- Assessments 5 & 6: parameterised Viability + Deliverability ------------
 // Both are transparent models computed client-side over the sift rows, so they
 // recompute instantly when the user edits an assumption (no DB round-trip). The
@@ -6131,7 +6143,30 @@ const SIFT = {
   sort: "composite",   // yield | benefit | viability | deliverability | composite
   weights: { benefit: 1, viability: 1, deliverability: 1 },
   assumptions: Object.assign({}, VIABILITY_DEFAULTS),
+  shortlist: new Set(mmStore.get("shortlist", [])),  // pinned station CRSs (persisted)
 };
+
+// Restore a previously-saved sift configuration (criteria/assumptions/weights/sort)
+// over the defaults, so a reload lands you where you left off.
+(function restoreSiftConfig() {
+  const saved = mmStore.get("siftConfig", null);
+  if (!saved) return;
+  Object.assign(SIFT.crit, saved.crit || {});
+  Object.assign(SIFT.assumptions, saved.assumptions || {});
+  Object.assign(SIFT.weights, saved.weights || {});
+  if (saved.sort) SIFT.sort = saved.sort;
+})();
+
+function persistSiftConfig() {
+  mmStore.set("siftConfig", { crit: SIFT.crit, assumptions: SIFT.assumptions,
+    weights: SIFT.weights, sort: SIFT.sort });
+}
+function persistShortlist() { mmStore.set("shortlist", Array.from(SIFT.shortlist)); }
+function toggleShortlist(crs) {
+  if (SIFT.shortlist.has(crs)) SIFT.shortlist.delete(crs);
+  else SIFT.shortlist.add(crs);
+  persistShortlist();
+}
 
 // Residual appraisal → profit on cost (%). Transparent: GDV − (build + softs +
 // land); profit-on-cost is the headline viability metric.
@@ -6390,6 +6425,53 @@ function readSiftControls() {
   if (g("sift-minbenefit")) lbl("sift-benefit-val", String(C.minBenefit));
   if (g("v-min")) lbl("v-minval", String(C.minViability));
   if (g("d-min")) lbl("d-minval", String(C.minDeliverability));
+  persistSiftConfig();   // remember the configuration across reloads
+}
+
+// Download the current ranked survivors as a CSV (there is no server; build a
+// Blob and click a temporary link). Includes tier, density, capacity + all scores.
+function exportSiftCsv() {
+  const rows = siftSurvivorsUpTo(SIFT.step);
+  const cols = ["rank", "crs", "name", "region", "tier", "density_floor", "developable_ha",
+    "dwelling_yield", "friction", "green_belt_ha", "benefit", "regen", "access", "housing",
+    "viability_profit_on_cost_pct", "viability_rag", "deliverability", "composite"];
+  const esc = v => {
+    const s = v == null ? "" : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [cols.join(",")];
+  rows.forEach((r, i) => {
+    lines.push([i + 1, r.crs, r.name, r.region, r.tier, r.densityFloor ?? "", r.developableHa,
+      r.yield, r.friction ?? "", r.greenBeltHa, r.benefit ?? "", r.regen ?? "", r.access ?? "",
+      r.housing ?? "", r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1),
+      r._viab.rag, Math.round(r._deliv), Math.round(r._composite)].map(esc).join(","));
+  });
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `mastermapper-sift-${rows.length}-stations.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Shortlist-only CSV (the pinned stations), for the saved shortlist.
+function exportShortlistCsv() {
+  const set = SIFT.shortlist;
+  const rows = SIFT.rows.filter(r => set.has(r.crs));
+  scoreSiftRows();
+  const cols = ["crs", "name", "region", "tier", "density_floor", "dwelling_yield",
+    "benefit", "viability_profit_on_cost_pct", "deliverability", "composite"];
+  const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = [cols.join(",")];
+  rows.forEach(r => lines.push([r.crs, r.name, r.region, r.tier, r.densityFloor ?? "", r.yield,
+    r.benefit ?? "", r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1),
+    Math.round(r._deliv), Math.round(r._composite)].map(esc).join(",")));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `mastermapper-shortlist-${rows.length}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // Render the stepper + the current step's controls + nav. Full re-render on step
@@ -6474,12 +6556,22 @@ function renderSiftTable(surv, results) {
     if (v.profitOnCost == null) return `<td>—</td>`;
     return `<td><span class="sift-rag sift-rag-${v.rag}" title="profit on cost; viability score ${Math.round(v.score)}">${v.profitOnCost.toFixed(0)}%</span></td>`;
   };
+  const nShort = SIFT.shortlist.size;
+  const star = crs => SIFT.shortlist.has(crs) ? "★" : "☆";
   results.innerHTML =
-    `<table class="sift-table"><thead><tr><th>#</th><th>Station</th><th>Tier</th><th title="Dwelling yield">Yield</th>` +
+    `<div class="sift-actions">` +
+    `<span class="sift-short-count">${nShort} shortlisted</span>` +
+    `<button type="button" class="ghost" id="sift-csv" title="Export the ${surv.length.toLocaleString()} ranked survivors as CSV">⤓ Ranked CSV</button>` +
+    (nShort ? `<button type="button" class="ghost" id="sift-short-csv" title="Export the shortlist as CSV">⤓ Shortlist</button>` +
+              `<button type="button" class="ghost" id="sift-short-clear" title="Clear the shortlist">✕ Clear</button>` : "") +
+    `</div>` +
+    `<table class="sift-table"><thead><tr><th></th><th>#</th><th>Station</th><th>Tier</th><th title="Dwelling yield">Yield</th>` +
     `<th title="Socio-economic benefit 0–100">Ben</th><th title="Viability — profit on cost">Via</th>` +
     `<th title="Deliverability 0–100 (friction-driven; ⬡ = Green Belt)">Del</th><th title="3-axis composite 0–100">Σ</th></tr></thead><tbody>` +
     top.map((r, i) =>
-      `<tr data-crs="${escapeSift(r.crs)}"><td>${i + 1}</td>` +
+      `<tr data-crs="${escapeSift(r.crs)}">` +
+      `<td class="sift-star${SIFT.shortlist.has(r.crs) ? " on" : ""}" data-star="${escapeSift(r.crs)}" title="Shortlist">${star(r.crs)}</td>` +
+      `<td>${i + 1}</td>` +
       `<td>${escapeSift(r.name)}<small>${escapeSift(r.region || r.ttwa)}</small></td>` +
       `<td><span class="sift-tier sift-tier-${r.tier}">${r.tier === "ineligible" ? "—" : r.tier}</span></td>` +
       `<td title="${r.developableHa.toFixed(1)} developable ha · ${r.densityFloor || "?"} dph">${(r.yield || 0).toLocaleString()}</td>` +
@@ -6490,8 +6582,20 @@ function renderSiftTable(surv, results) {
     ).join("") +
     `</tbody></table>` +
     (surv.length > 100 ? `<p class="hint">Showing the top 100 by ${sortLabel} of ${surv.length.toLocaleString()}.</p>` : "");
+  results.querySelectorAll("td.sift-star").forEach(td =>
+    td.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleShortlist(td.dataset.star);
+      updateSiftFunnel();   // refresh stars + shortlist count
+    }));
   results.querySelectorAll("tr[data-crs]").forEach(tr =>
     tr.addEventListener("click", () => siftDrillTo(tr.dataset.crs)));
+  const csv = results.querySelector("#sift-csv");
+  if (csv) csv.addEventListener("click", exportSiftCsv);
+  const scsv = results.querySelector("#sift-short-csv");
+  if (scsv) scsv.addEventListener("click", exportShortlistCsv);
+  const sclr = results.querySelector("#sift-short-clear");
+  if (sclr) sclr.addEventListener("click", () => { SIFT.shortlist.clear(); persistShortlist(); updateSiftFunnel(); });
 }
 
 function siftDrillTo(crs) {

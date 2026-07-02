@@ -234,6 +234,14 @@ html, body {
   font-variant-numeric: tabular-nums; }
 .sift-next { padding: 6px 14px; }
 .sift-next:disabled, .sift-nav .ghost:disabled { opacity: 0.4; cursor: default; }
+
+/* Shortlist + export bar above the ranked table. */
+.sift-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+.sift-actions .ghost { padding: 3px 8px; font-size: 11px; }
+.sift-short-count { font-size: 11px; color: var(--text-dim); margin-right: auto; font-variant-numeric: tabular-nums; }
+.sift-star { cursor: pointer; text-align: center; color: var(--text-dim); user-select: none; width: 18px; }
+.sift-star.on { color: #e0853a; }
+.sift-star:hover { color: #e0853a; }
 .sift-benefit { font-variant-numeric: tabular-nums; font-weight: 600; cursor: help; }
 .sift-rag { font-variant-numeric: tabular-nums; font-weight: 600; padding: 1px 5px; border-radius: 4px; cursor: help; }
 .sift-rag-viable   { background: rgba(47,158,68,0.16);  color: #1e7a34; }
