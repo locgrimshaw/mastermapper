@@ -21,7 +21,13 @@ intersects EVERY constraint layer with that mask before output. National
 datasets shrink to a thin sliver around the rail network.
 
 kinds produced: built_land, green_space, transport, flood_zone_2,
-flood_zone_3, green_belt.
+flood_zone_3, green_belt, plus the Gate-3 heritage/environmental designations
+from planning.data.gov.uk (all OGL, already EPSG:4326):
+  hard exclusions: sssi, sac, spa, ramsar, ancient_woodland, scheduled_monument
+  soft constraints: conservation_area, aonb, park_garden, listed_building
+The heritage/environmental kinds share ONE generic builder (build_planning_data)
+since every planning.data.gov.uk dataset is a uniform WGS84 GeoJSON — see
+PLANNING_DATA_KINDS for the kind->dataset-slug map.
 
 DATA SOURCES (all Open Government Licence v3.0). Most OS data is EPSG:27700
 British National Grid and is reprojected to EPSG:4326 here. Downloads are large;
@@ -105,7 +111,36 @@ SIMPLIFY_M = 1.0
 COORD_DP = 6
 
 ALL_KINDS = ["built_land", "green_space", "transport",
-             "flood_zone_2", "flood_zone_3", "green_belt"]
+             "flood_zone_2", "flood_zone_3", "green_belt",
+             # Gate 3 heritage/environmental designations (planning.data.gov.uk,
+             # all OGL v3.0, all already EPSG:4326). Hard exclusions remove land;
+             # soft constraints are retained and feed the friction score.
+             # hard:
+             "sssi", "sac", "spa", "ramsar", "ancient_woodland", "scheduled_monument",
+             # soft:
+             "conservation_area", "aonb", "park_garden", "listed_building"]
+
+# The new Gate-3 kinds are all planning.data.gov.uk national datasets served as
+# EPSG:4326 GeoJSON at https://files.planning.data.gov.uk/dataset/<slug>.geojson —
+# so they build with ONE generic builder (mirrors build_green_belt): read WGS84,
+# reproject to 27700 only for the station-catchment clip, emit MultiPolygons.
+#   kind -> (dataset-slug, [prop columns to keep])
+PLANNING_DATA_KINDS = {
+    # Hard exclusions (statutory environmental designations).
+    "sssi":               ("site-of-special-scientific-interest", ["reference", "entity"]),
+    "sac":                ("special-area-of-conservation",        ["reference", "entity"]),
+    "spa":                ("special-protection-area",             ["reference", "entity"]),
+    "ramsar":             ("ramsar",                              ["reference", "entity"]),
+    "ancient_woodland":   ("ancient-woodland",                    ["reference", "entity"]),
+    "scheduled_monument": ("scheduled-monument",                  ["reference", "entity"]),
+    # Soft constraints (heritage/landscape — retained, penalised via friction).
+    "conservation_area":  ("conservation-area",                   ["reference", "entity"]),
+    "aonb":               ("area-of-outstanding-natural-beauty",  ["reference", "entity"]),
+    "park_garden":        ("park-and-garden",                     ["reference", "entity"]),
+    # listed-building-outline is the polygon layer (the plain listed-building
+    # dataset is points); use it as a soft/setting proxy where coverage exists.
+    "listed_building":    ("listed-building-outline",             ["reference", "entity"]),
+}
 
 # Transport half-widths (metres) applied to LINE features before reprojecting.
 RAIL_HALF_WIDTH = 6.0
@@ -565,6 +600,25 @@ def build_green_belt(mask_27700, mask_geom_4326):
                               "organisation-entity"])
 
 
+def build_planning_data(kind, mask_27700, mask_geom_4326):
+    """Generic builder for a planning.data.gov.uk polygon dataset (EPSG:4326
+    GeoJSON). Mirrors build_green_belt: the read-filter mask is 4326, the source
+    is reprojected to 27700 only for the station-catchment clip in _finish."""
+    slug, prop_cols = PLANNING_DATA_KINDS[kind]
+    path = _src_path(f"{kind.upper()}_SRC", [
+        f"{slug}.geojson", f"{slug}.json", f"{kind}.geojson",
+        f"{slug}.gpkg", f"{kind}.gpkg",
+    ])
+    if not path:
+        _skip(kind, f"planning.data.gov.uk {slug}", f"{kind.upper()}_SRC")
+        return None
+    print(f"  [{kind}] reading {path.name} ...")
+    gdf = _read_source(path, None, mask_geom_4326)
+    gdf = _to_27700(gdf, assume_epsg=4326)
+    gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
+    return _finish(gdf, kind, mask_27700, prop_cols=prop_cols)
+
+
 BUILDERS = {
     "built_land": lambda m27, g27, g43: build_built_land(m27, g27),
     "green_space": lambda m27, g27, g43: build_green_space(m27, g27),
@@ -573,6 +627,12 @@ BUILDERS = {
     "flood_zone_3": lambda m27, g27, g43: build_flood(3, m27, g27, g43),
     "green_belt": lambda m27, g27, g43: build_green_belt(m27, g43),
 }
+# Register every planning.data.gov.uk heritage/environmental kind on the same
+# generic builder (bind `kind` per-lambda so the closure captures its own value).
+for _pd_kind in PLANNING_DATA_KINDS:
+    BUILDERS[_pd_kind] = (
+        lambda m27, g27, g43, _k=_pd_kind: build_planning_data(_k, m27, g43)
+    )
 
 
 def _resolve_kinds(cli_kinds):

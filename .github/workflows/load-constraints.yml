@@ -60,6 +60,33 @@ jobs:
           curl -fL --retry 3 --retry-delay 5 -o data/raw/green-belt.geojson \
             "https://files.planning.data.gov.uk/dataset/green-belt.geojson" \
             || echo "::warning::green-belt download failed"
+          # --- planning.data.gov.uk heritage/environmental (Gate 3, OGL, 4326) -
+          # Each is a national WGS84 GeoJSON; build_constraints.py clips them to
+          # the station catchments. Only fetch a dataset when its kind is named
+          # in the run's `kinds` input (blank = default run does NOT pull these
+          # large national files — name them explicitly to build Gate 3).
+          declare -A PD_SLUGS=(
+            [sssi]=site-of-special-scientific-interest
+            [sac]=special-area-of-conservation
+            [spa]=special-protection-area
+            [ramsar]=ramsar
+            [ancient_woodland]=ancient-woodland
+            [scheduled_monument]=scheduled-monument
+            [conservation_area]=conservation-area
+            [aonb]=area-of-outstanding-natural-beauty
+            [park_garden]=park-and-garden
+            [listed_building]=listed-building-outline
+          )
+          K="${{ inputs.kinds }}"
+          for kind in "${!PD_SLUGS[@]}"; do
+            if echo "$K" | grep -qw "$kind"; then
+              slug="${PD_SLUGS[$kind]}"
+              echo "$slug ($kind)..."
+              curl -fL --retry 3 --retry-delay 5 -o "data/raw/${slug}.geojson" \
+                "https://files.planning.data.gov.uk/dataset/${slug}.geojson" \
+                || echo "::warning::${slug} download failed"
+            fi
+          done
           # --- planning.data flood-risk-zone (EA Flood Map for Planning, 4326) -
           # Fetched only when a flood kind is requested (it's a large national
           # download). Split into flood_zone_2 / _3 by its flood-risk-level attr.
@@ -106,8 +133,20 @@ jobs:
           # points at a real file (set by the download step via $GITHUB_ENV).
           ok=0
           [ -f data/raw/green-belt.geojson ] && ok=1
+          [ -f data/raw/flood-risk-zone.geojson ] && ok=1
           for v in "$BUILT_LAND_SRC" "$GREEN_SPACE_SRC" "$TRANSPORT_ROAD_SRC"; do
             [ -n "$v" ] && [ -f "$v" ] && ok=1
+          done
+          # Any planning.data.gov.uk heritage/environmental GeoJSON also counts.
+          for f in data/raw/site-of-special-scientific-interest.geojson \
+                   data/raw/special-area-of-conservation.geojson \
+                   data/raw/special-protection-area.geojson data/raw/ramsar.geojson \
+                   data/raw/ancient-woodland.geojson data/raw/scheduled-monument.geojson \
+                   data/raw/conservation-area.geojson \
+                   data/raw/area-of-outstanding-natural-beauty.geojson \
+                   data/raw/park-and-garden.geojson \
+                   data/raw/listed-building-outline.geojson; do
+            [ -f "$f" ] && ok=1
           done
           if [ "$ok" -eq 0 ]; then
             echo "::error::No constraint sources downloaded — see the download step logs."
