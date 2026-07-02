@@ -708,6 +708,38 @@ footer {
   font-size: 12px;
 }
 .dd-bf-check { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.dd-bf-filter input[type="number"] {
+  width: 68px;
+  background: var(--ink-2);
+  color: var(--text);
+  border: 1px solid var(--ink-line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-family: var(--font-data);
+  font-size: 12px;
+}
+
+/* Developable land + dwelling capacity */
+.dd-nppf {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+.dd-nppf-yes { background: rgba(47, 158, 68, 0.16); color: #2f9e44; border: 1px solid rgba(47, 158, 68, 0.5); }
+.dd-nppf-no  { background: var(--ink-2); color: var(--text-dim); border: 1px solid var(--ink-line); }
+.dd-dev-subtract { margin: 8px 0 4px; }
+.dd-dev-sub-label { font-size: 11px; color: var(--text-dim); letter-spacing: 0.02em; }
+.dd-dev-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 5px; font-size: 12px; color: var(--text); }
+.dd-dev-dph { margin-top: 6px; }
+.dd-dev-caps { margin-top: 8px; }
+.dd-dev-cap-on {
+  background: rgba(47, 158, 68, 0.16);
+  border-color: rgba(47, 158, 68, 0.55);
+}
+.dd-dev-cap-on .dd-stat-num { color: #2f9e44; }
 
 .dd-stat {
   font-family: var(--font-data);

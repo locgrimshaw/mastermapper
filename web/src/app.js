@@ -113,6 +113,54 @@ function railMode(key) {
   return RAIL_MODES.find(m => m.key === key);
 }
 
+// ---- Developable land + dwelling capacity (station analysis) --------------
+// Density thresholds (people/km²) that auto-classify a station's catchment into
+// a dwelling-density regime. Adjustable constants so the bands can be tuned.
+// urban  : density  > DENSITY_BANDS.urban
+// suburban: DENSITY_BANDS.suburban ≤ density ≤ DENSITY_BANDS.urban
+// rural  : density  < DENSITY_BANDS.suburban
+const DENSITY_BANDS = { urban: 4000, suburban: 1000 };
+
+// Default dwellings-per-hectare (dph) per regime; surfaced as editable inputs so
+// the assumptions are adjustable. Urban applies a higher inner-ring density
+// (within inner_radius_m of the station) and the suburban rate beyond it.
+const DPH_DEFAULTS = { rural: 40, suburban: 50, urbanOuter: 50, urbanInner: 100 };
+
+// Constraint kinds the developable-land RPC can subtract, with UI labels. Order
+// here is the display order of the checkboxes. `on` = checked by default.
+const DEVELOPABLE_SUBTRACT_KINDS = [
+  { key: "built_land",   label: "Built-up land",  on: true  },
+  { key: "green_space",  label: "Green space",    on: true  },
+  { key: "transport",    label: "Transport land", on: true  },
+  { key: "flood_zone_3", label: "Flood zone 3",   on: true  },
+  { key: "flood_zone_2", label: "Flood zone 2",   on: false },
+  { key: "green_belt",   label: "Green belt",     on: false },
+];
+
+// Fill/outline colours: green for the developable land kept, muted red for the
+// subtracted "blocker" constraints.
+const DEVELOPABLE_COLOR = "#2f9e44";
+const DEVELOPABLE_BLOCKER_COLOR = "#c0392b";
+
+// OS / Environment Agency / OGL attribution appended to the datasource footer
+// while the developable-land layers are shown.
+const DEVELOPABLE_ATTRIBUTION =
+  "Contains OS data © Crown copyright and database right 2026 · " +
+  "© Environment Agency copyright and/or database right 2026 · " +
+  "Contains public sector information licensed under the Open Government Licence v3.0";
+
+// Whether the developable overlay is currently on the map (drives the footer
+// attribution). Toggled by render/removeDevelopableLayer.
+let developableAttributionShown = false;
+
+// Default developable filter config (radius + which constraints to subtract).
+// Fresh copy per deep dive so edits don't leak between stations.
+function defaultDevelopableConfig() {
+  const subtract = {};
+  for (const k of DEVELOPABLE_SUBTRACT_KINDS) subtract[k.key] = k.on;
+  return { radius_m: 800, inner_radius_m: 200, subtract };
+}
+
 // A MapLibre 'match' expression mapping the per-feature `mode` attribute to its
 // colour. Used for both line-colour and stop-fill so a mode reads consistently.
 function railColorExpression() {
@@ -672,6 +720,11 @@ function updateDataSourceNote() {
     if (state.hasStations) {
       el.textContent +=
         " Station usage: Office of Rail and Road (OGL v3).";
+    }
+    // Developable-land analysis pulls in OS / Environment Agency constraint
+    // data; credit it only while those layers are on the map.
+    if (developableAttributionShown) {
+      el.textContent += " " + DEVELOPABLE_ATTRIBUTION;
     }
   }
 }
@@ -1381,6 +1434,17 @@ function tapDeepDiveLayers(point, box, nearest, coarse) {
     return true;
   }
 
+  // 4. Developable land / blockers — large area polygons, lowest priority so
+  // amenity / brownfield / crime taps win over them.
+  for (const id of ["developable-blockers", "developable-fill"]) {
+    const hits = q(id);
+    if (hits) {
+      const ll = map.unproject([point.x, point.y]);
+      openClickPopup({ offset: 8 }, ll, developablePopupHTML(id));
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -1855,6 +1919,9 @@ async function profileStation(p, point) {
 
   const usage = (station.usage != null && station.usage !== "") ? Number(station.usage) : null;
   const trend = parseTrend(station.trend);
+  // NPPF "well-connected station" fields live on the full GeoJSON feature; a
+  // tile/search click may not carry them, so prefer the matched feature's props.
+  const sp = (hit && hit.properties) || station || {};
   const { domains, parts } = areaWeightedScore(catchment);
   closeStation();
   runDeepDive(catchment, {
@@ -1863,7 +1930,15 @@ async function profileStation(p, point) {
     subtitle: `${minutes}-min ${circle ? "circular" : "walk"} catchment${parts ? ` · ${parts} LSOA${parts === 1 ? "" : "s"}` : ""}`,
     domains,
     scoreCaption: "Catchment deprivation · weighted",
+    // Station centre [lng,lat] for the developable-land RPC (independent of the
+    // walk-time catchment).
+    stationCentre: coords,
     station: {
+      // NPPF well-connected-station test (top-60 TTWA by GVA AND meets frequency).
+      well_connected: sp.well_connected === true || sp.well_connected === "true",
+      meets_frequency: sp.meets_frequency === true || sp.meets_frequency === "true" || Number(sp.meets_frequency) === 1,
+      ttwa_name: sp.ttwa_name || null,
+      ttwa_gva_rank: sp.ttwa_gva_rank != null && sp.ttwa_gva_rank !== "" ? Number(sp.ttwa_gva_rank) : null,
       name: station.name, crs: station.crs, operator: station.operator,
       usage, trend, year: state.stationsMeta?.latest_year || "",
       interchanges: station.interchanges != null && station.interchanges !== "" ? Number(station.interchanges) : null,
@@ -2063,6 +2138,14 @@ const deep = {
   brownfieldVisible: false, // layer toggle
   brownfieldFilters: { minDwellings: 0, publicOnly: false, deliverableOnly: false },
   brownfieldSummary: null,  // { n_sites, n_public, dwellings_*_total, hectares_total }
+  // Developable-land + dwelling-capacity analysis (station profiles only).
+  stationCentre: null,      // [lng,lat] of the profiled station (RPC centre)
+  developable: null,        // adjustable criteria { radius_m, inner_radius_m, subtract:{} }
+  developableResult: null,  // RPC row { developable_geojson, blockers_geojson, *_ha }
+  developableVisible: false,// layer + analysis toggle
+  developableRegime: "auto",// "auto" | "rural" | "suburban" | "urban" (override)
+  developableDensity: null, // people/km² over the radius circle (auto-classify)
+  developableDph: null,     // editable dwellings-per-hectare per regime
 };
 
 // ---- Workstream 3: shortlist, triad, synthesis, comparison, export --------
@@ -2352,6 +2435,14 @@ function runDeepDive(catchment, meta) {
   deep.brownfieldSummary = null;
   deep.brownfieldVisible = false;
   deep.brownfieldFilters = { minDwellings: 0, publicOnly: false, deliverableOnly: false };
+  // Developable-land analysis — reset per dive; centre carried in from station meta.
+  deep.stationCentre = meta.stationCentre || null;
+  deep.developable = defaultDevelopableConfig();
+  deep.developableResult = null;
+  deep.developableVisible = false;
+  deep.developableRegime = "auto";
+  deep.developableDensity = null;
+  deep.developableDph = { ...DPH_DEFAULTS };
 
   // The mask dims everything outside the catchment, so we keep the choropleth
   // reasonably visible (it shows through inside the catchment) rather than
@@ -2781,13 +2872,13 @@ function clearDeepDiveMapArtifacts() {
   // Layers first (a source can't be removed while a layer uses it).
   for (const id of layerIds) {
     if (id.startsWith("amenity-") || id.startsWith("access-route-")
-        || id.startsWith("brownfield-")) {
+        || id.startsWith("brownfield-") || id.startsWith("developable-")) {
       if (map.getLayer(id)) map.removeLayer(id);
     }
   }
   for (const id of sourceIds) {
     if (id.startsWith("amenity-") || id.startsWith("access-route-")
-        || id.startsWith("brownfield-")) {
+        || id.startsWith("brownfield-") || id.startsWith("developable-")) {
       if (map.getSource(id)) map.removeSource(id);
     }
   }
@@ -2797,6 +2888,7 @@ function clearDeepDiveMapArtifacts() {
   removeCrimeLayer();
   removeAccessRoutes();
   removeBrownfieldLayer();
+  removeDevelopableLayer();
   removeCatchmentOutline();
   if (map.getLayer("plot-point-dot")) map.removeLayer("plot-point-dot");
   if (map.getSource("plot-point-src")) map.removeSource("plot-point-src");
@@ -3310,6 +3402,372 @@ function brownfieldFilterSuffix() {
   if (f.publicOnly) bits.push("public-owned");
   if (f.deliverableOnly) bits.push("deliverable");
   return bits.length ? ` (filtered: ${bits.join(", ")})` : "";
+}
+
+// ---- Developable land near a station (+ dwelling capacity) -----------------
+// For the selected station we ask Supabase for the developable land inside a
+// radius (the catchment minus the chosen physical/planning constraints). The
+// RPC returns geometry to display plus hectare breakdowns we turn into a
+// dwelling-capacity estimate under three density regimes. All defensive: any
+// failure or empty result no-ops gracefully.
+
+// Build the text[] `subtract` array from the checked constraint kinds.
+function developableSubtractArray() {
+  const sub = (deep.developable && deep.developable.subtract) || {};
+  return DEVELOPABLE_SUBTRACT_KINDS.filter(k => sub[k.key]).map(k => k.key);
+}
+
+// Call the developable-land RPC for the current station + filters. Stores the
+// result row on deep.developableResult and recomputes catchment density for the
+// auto-classification. Returns the row, or null on error / not-configured.
+async function loadDevelopable() {
+  const sb = getSupabase();
+  if (!sb) { deep._lastDevelopableError = "not_configured"; return null; }
+  const centre = deep.stationCentre;
+  if (!centre) { deep._lastDevelopableError = "no_station"; return null; }
+  const cfg = deep.developable || defaultDevelopableConfig();
+  const params = {
+    centre_lng: centre[0],
+    centre_lat: centre[1],
+    radius_m: cfg.radius_m,
+    inner_radius_m: cfg.inner_radius_m,
+    subtract: developableSubtractArray(),
+  };
+  const { data, error } = await sb.rpc("developable_land_near_station", params);
+  if (error) {
+    console.error("developable_land_near_station failed", error);
+    deep._lastDevelopableError = error.message || "query failed";
+    return null;
+  }
+  deep._lastDevelopableError = null;
+  deep.developableResult = (data && data[0]) || null;
+  computeDevelopableDensity();
+  return deep.developableResult;
+}
+
+// People/km² over the SAME circular catchment used by the RPC (turf.circle at
+// radius_m), via the shared areal-interpolation helpers. Drives the auto
+// rural/suburban/urban classification. Null if turf/LSOAs unavailable.
+function computeDevelopableDensity() {
+  deep.developableDensity = null;
+  if (!window.turf || !deep.stationCentre || !deep.developable) return;
+  let circle = null;
+  try {
+    circle = turf.circle(deep.stationCentre, deep.developable.radius_m / 1000,
+      { units: "kilometers", steps: 64 });
+  } catch (_) { circle = null; }
+  if (!circle) return;
+  const res = areaWeightedPopulation(circle);
+  deep.developableDensity = densityPerKm2(res.population, res.area_km2);
+}
+
+// Classify a density (people/km²) into a regime using the adjustable bands.
+function classifyDevelopable(density) {
+  if (density == null || isNaN(density)) return null;
+  if (density > DENSITY_BANDS.urban) return "urban";
+  if (density >= DENSITY_BANDS.suburban) return "suburban";
+  return "rural";
+}
+
+// The regime currently in effect: the user's override, else the auto class,
+// else a sensible suburban default.
+function activeDevelopableRegime() {
+  if (deep.developableRegime && deep.developableRegime !== "auto") return deep.developableRegime;
+  return classifyDevelopable(deep.developableDensity) || "suburban";
+}
+
+// Potential dwellings under each regime from the RPC's hectare breakdown and the
+// (editable) dwellings-per-hectare constants. Whole numbers. Null if no result.
+function developableDwellings() {
+  const r = deep.developableResult;
+  if (!r) return null;
+  const dph = deep.developableDph || DPH_DEFAULTS;
+  const dev = Number(r.developable_ha) || 0;
+  const inner = Number(r.inner_ha) || 0;
+  const outer = Number(r.outer_ha) || 0;
+  return {
+    rural: Math.round(dev * dph.rural),
+    suburban: Math.round(dev * dph.suburban),
+    urban: Math.round(outer * dph.urbanOuter + inner * dph.urbanInner),
+  };
+}
+
+// Render the developable overlay: muted-red blocker fill underneath, green
+// developable fill + outline on top. Clicks are handled by the shared
+// handleMapTap dispatcher (see tapDeepDiveLayers); here we only set the hover
+// cursor and flag the footer attribution.
+function renderDevelopableLayer() {
+  removeDevelopableLayer();
+  const r = deep.developableResult;
+  if (!r) return;
+
+  if (r.blockers_geojson) {
+    map.addSource("developable-blockers-src", {
+      type: "geojson",
+      data: { type: "Feature", geometry: r.blockers_geojson, properties: {} },
+    });
+    map.addLayer({
+      id: "developable-blockers", type: "fill", source: "developable-blockers-src",
+      paint: {
+        "fill-color": DEVELOPABLE_BLOCKER_COLOR,
+        "fill-opacity": 0.22,
+        "fill-outline-color": DEVELOPABLE_BLOCKER_COLOR,
+      },
+    });
+  }
+  if (r.developable_geojson) {
+    map.addSource("developable-src", {
+      type: "geojson",
+      data: { type: "Feature", geometry: r.developable_geojson, properties: {} },
+    });
+    map.addLayer({
+      id: "developable-fill", type: "fill", source: "developable-src",
+      paint: { "fill-color": DEVELOPABLE_COLOR, "fill-opacity": 0.42 },
+    });
+    map.addLayer({
+      id: "developable-line", type: "line", source: "developable-src",
+      paint: { "line-color": DEVELOPABLE_COLOR, "line-width": 1.8 },
+    });
+  }
+
+  for (const id of ["developable-fill", "developable-blockers"]) {
+    if (map.getLayer(id)) {
+      map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
+      map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
+    }
+  }
+  updateDevelopableAttribution(true);
+}
+
+function removeDevelopableLayer() {
+  for (const id of ["developable-fill", "developable-line", "developable-blockers"]) {
+    if (map.getLayer(id)) map.removeLayer(id);
+  }
+  for (const id of ["developable-src", "developable-blockers-src"]) {
+    if (map.getSource(id)) map.removeSource(id);
+  }
+  updateDevelopableAttribution(false);
+}
+
+// Flip the footer attribution flag and refresh the datasource note.
+function updateDevelopableAttribution(on) {
+  developableAttributionShown = !!on;
+  if (document.getElementById("datasource")) updateDataSourceNote();
+}
+
+// Popup HTML when the user taps the developable / blocker polygon.
+function developablePopupHTML(layerId) {
+  if (layerId === "developable-blockers") {
+    const labels = developableSubtractArray()
+      .map(k => (DEVELOPABLE_SUBTRACT_KINDS.find(x => x.key === k) || {}).label || k);
+    return `<strong>Constrained land</strong><br>` +
+      `<span style="font-size:11px">Subtracted: ${labels.join(", ") || "none"}</span>`;
+  }
+  const r = deep.developableResult;
+  if (!r) return `<strong>Developable land</strong>`;
+  const dw = developableDwellings();
+  const active = activeDevelopableRegime();
+  const devHa = Number(r.developable_ha) || 0;
+  const homes = dw ? dw[active] : 0;
+  return `<strong>Developable land</strong><br>` +
+    `${devHa.toFixed(1)} ha · ~${homes.toLocaleString()} homes (${active})`;
+}
+
+function setDevelopableStatus(text) {
+  const el = document.getElementById("dd-developable-status");
+  if (el) el.textContent = text;
+}
+
+function developableErrorText() {
+  const e = deep._lastDevelopableError;
+  if (e === "not_configured") return "DB not configured";
+  if (e === "no_station") return "no station selected";
+  return "query error — see console";
+}
+
+// Toggle the developable analysis on/off (loads on first enable).
+async function toggleDevelopable(on) {
+  deep.developableVisible = on;
+  if (!on) { removeDevelopableLayer(); renderDevelopableSummary(); return; }
+  setDevelopableStatus("loading…");
+  const r = await loadDevelopable();
+  if (r === null) {
+    setDevelopableStatus(developableErrorText());
+    deep.developableVisible = false;
+    const cb = document.getElementById("dd-developable-show");
+    if (cb) cb.checked = false;
+    return;
+  }
+  renderDevelopableLayer();
+  renderDevelopableSummary();
+  setDevelopableStatus("");
+}
+
+// Re-run the RPC after a radius / subtract change (only while visible). Regime
+// and dph changes do NOT hit this — they recompute client-side via the summary.
+async function refreshDevelopable() {
+  if (!deep.developableVisible) { renderDevelopableSummary(); return; }
+  setDevelopableStatus("loading…");
+  const r = await loadDevelopable();
+  if (r === null) { setDevelopableStatus(developableErrorText()); return; }
+  renderDevelopableLayer();
+  renderDevelopableSummary();
+  setDevelopableStatus("");
+}
+
+// Render the readout: catchment/developable hectares, % developable, the auto
+// classification + density, and dwelling capacity under all three regimes with
+// the active one highlighted.
+function renderDevelopableSummary() {
+  const el = document.getElementById("dd-developable-summary");
+  if (!el) return;
+  const r = deep.developableResult;
+  if (!deep.developableVisible || !r) { el.innerHTML = ""; return; }
+
+  const catchHa = Number(r.catchment_ha) || 0;
+  const devHa = Number(r.developable_ha) || 0;
+  const innerHa = Number(r.inner_ha) || 0;
+  const outerHa = Number(r.outer_ha) || 0;
+  const pct = catchHa > 0 ? (devHa / catchHa) * 100 : 0;
+
+  if (devHa <= 0) {
+    el.innerHTML = `<p class="hint" style="margin-top:8px">No developable land within this radius for the current constraints — try removing a constraint or widening the radius.</p>`;
+    return;
+  }
+
+  const dw = developableDwellings() || { rural: 0, suburban: 0, urban: 0 };
+  const active = activeDevelopableRegime();
+  const density = deep.developableDensity;
+  const autoClass = classifyDevelopable(density);
+  const densTxt = density == null ? "n/a" : `${Math.round(density).toLocaleString()} /km²`;
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : "—";
+  const overriding = deep.developableRegime && deep.developableRegime !== "auto";
+
+  const card = (key, label, val) => `
+    <div class="dd-stat-cell dd-dev-cap ${key === active ? "dd-dev-cap-on" : ""}">
+      <div class="dd-stat-num">${val.toLocaleString()}</div>
+      <div class="dd-stat-cap">${label}${key === active ? " ✓" : ""}</div>
+    </div>`;
+
+  el.innerHTML = `
+    <div class="dd-stats-grid" style="margin-top:8px">
+      <div class="dd-stat-cell"><div class="dd-stat-num">${catchHa.toFixed(1)}</div><div class="dd-stat-cap">Catchment ha</div></div>
+      <div class="dd-stat-cell"><div class="dd-stat-num">${devHa.toFixed(1)}</div><div class="dd-stat-cap">Developable ha</div></div>
+      <div class="dd-stat-cell"><div class="dd-stat-num">${pct.toFixed(0)}%</div><div class="dd-stat-cap">of catchment</div></div>
+    </div>
+    <p class="hint" style="margin:8px 0 4px">
+      Auto-classified <strong>${cap(autoClass)}</strong> · density ${densTxt}${overriding ? ` · using <strong>${cap(active)}</strong> (override)` : ""}.
+      Inner ${innerHa.toFixed(1)} ha / outer ${outerHa.toFixed(1)} ha.
+    </p>
+    <div class="dd-stats-grid dd-dev-caps">
+      ${card("rural", "Rural", dw.rural)}
+      ${card("suburban", "Suburban", dw.suburban)}
+      ${card("urban", "Urban", dw.urban)}
+    </div>
+    <p class="hint" style="margin-top:6px">Potential dwellings by density regime (✓ = selected). Urban applies ${deep.developableDph.urbanInner} dph within ${deep.developable.inner_radius_m} m of the station and ${deep.developableDph.urbanOuter} dph beyond.</p>`;
+}
+
+// The developable section markup, built once per station deep dive. Reads the
+// (freshly reset) config for default control values.
+function developableSectionHTML(station) {
+  const cfg = deep.developable || defaultDevelopableConfig();
+  const dph = deep.developableDph || DPH_DEFAULTS;
+  const wc = station && station.well_connected;
+  const badge = wc
+    ? `<span class="dd-nppf dd-nppf-yes">✓ NPPF-qualifying station</span>`
+    : `<span class="dd-nppf dd-nppf-no">Not NPPF-qualifying</span>`;
+  const ttwaBits = [];
+  if (station && station.ttwa_name) ttwaBits.push(station.ttwa_name);
+  if (station && station.ttwa_gva_rank != null) ttwaBits.push(`GVA rank #${station.ttwa_gva_rank}`);
+  ttwaBits.push(station && station.meets_frequency ? "meets frequency" : "below frequency");
+  const nppfNote = `<p class="hint" style="margin:2px 0 8px">${badge} <span style="opacity:0.8">${ttwaBits.join(" · ")}</span></p>`;
+
+  const subs = DEVELOPABLE_SUBTRACT_KINDS.map(k => `
+    <label class="dd-bf-check"><input type="checkbox" class="dd-dev-sub" data-kind="${k.key}" ${cfg.subtract[k.key] ? "checked" : ""} /> ${k.label}</label>`).join("");
+
+  return `
+      <section class="dd-block" data-section="developable">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Developable land &amp; capacity</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          ${nppfNote}
+          <label class="dd-row dd-row-all">
+            <input type="checkbox" class="enable" id="dd-developable-show" />
+            <span class="dd-label"><strong>Analyse developable land</strong></span>
+            <span class="dd-stat" id="dd-developable-status"></span>
+          </label>
+          <div class="dd-bf-filters">
+            <label class="dd-bf-filter">
+              <span>Radius (m)</span>
+              <input type="number" id="dd-developable-radius" min="100" max="5000" step="50" value="${cfg.radius_m}" />
+            </label>
+            <label class="dd-bf-filter">
+              <span>Regime</span>
+              <select id="dd-developable-regime">
+                <option value="auto">Auto (by density)</option>
+                <option value="rural">Rural</option>
+                <option value="suburban">Suburban</option>
+                <option value="urban">Urban</option>
+              </select>
+            </label>
+          </div>
+          <div class="dd-dev-subtract">
+            <span class="dd-dev-sub-label">Subtract constraints</span>
+            <div class="dd-dev-checks">${subs}</div>
+          </div>
+          <div class="dd-bf-filters dd-dev-dph">
+            <label class="dd-bf-filter"><span>Rural dph</span><input type="number" id="dd-dph-rural" min="1" max="1000" value="${dph.rural}" /></label>
+            <label class="dd-bf-filter"><span>Suburban dph</span><input type="number" id="dd-dph-suburban" min="1" max="1000" value="${dph.suburban}" /></label>
+            <label class="dd-bf-filter"><span>Urban outer dph</span><input type="number" id="dd-dph-urban-outer" min="1" max="1000" value="${dph.urbanOuter}" /></label>
+            <label class="dd-bf-filter"><span>Urban inner dph</span><input type="number" id="dd-dph-urban-inner" min="1" max="1000" value="${dph.urbanInner}" /></label>
+          </div>
+          <div id="dd-developable-summary"></div>
+          <p class="hint" style="margin-top:8px">Developable land = the radius catchment minus the selected physical/planning constraints (OS &amp; Environment Agency data). Capacity applies dwellings-per-hectare by regime; the highlighted regime is auto-selected from catchment density. Constraints re-query the database; regime &amp; dph recompute instantly.</p>
+        </div>
+      </section>`;
+}
+
+// Wire the developable controls after the panel HTML exists. No-ops if the
+// section isn't present (non-station dives).
+function wireDevelopableControls(panel) {
+  if (!panel.querySelector('[data-section="developable"]')) return;
+
+  const show = panel.querySelector("#dd-developable-show");
+  if (show) show.addEventListener("change", (e) => toggleDevelopable(e.target.checked));
+
+  const radius = panel.querySelector("#dd-developable-radius");
+  if (radius) radius.addEventListener("change", (e) => {
+    const v = parseInt(e.target.value, 10);
+    if (v > 0) deep.developable.radius_m = v;
+    refreshDevelopable();
+  });
+
+  panel.querySelectorAll(".dd-dev-sub").forEach(cb => {
+    cb.addEventListener("change", (e) => {
+      deep.developable.subtract[e.target.dataset.kind] = e.target.checked;
+      refreshDevelopable();
+    });
+  });
+
+  const regime = panel.querySelector("#dd-developable-regime");
+  if (regime) regime.addEventListener("change", (e) => {
+    deep.developableRegime = e.target.value;
+    renderDevelopableSummary();   // client-side only, no RPC
+  });
+
+  const dphMap = {
+    "dd-dph-rural": "rural", "dd-dph-suburban": "suburban",
+    "dd-dph-urban-outer": "urbanOuter", "dd-dph-urban-inner": "urbanInner",
+  };
+  for (const [id, key] of Object.entries(dphMap)) {
+    const inp = panel.querySelector("#" + id);
+    if (inp) inp.addEventListener("input", (e) => {
+      const v = parseFloat(e.target.value);
+      if (v > 0) deep.developableDph[key] = v;
+      renderDevelopableSummary();   // client-side only, no RPC
+    });
+  }
 }
 
 async function toggleAmenityKind(kind, on) {
@@ -4794,6 +5252,8 @@ function buildDeepDivePanel(meta) {
         </div>
       </section>
 
+      ${meta.station ? developableSectionHTML(meta.station) : ""}
+
       <section class="dd-block" data-section="amenities">
         <button class="dd-block-head" type="button" aria-expanded="true">
           <span class="dd-h">Amenities in this area</span><span class="dd-caret">▾</span>
@@ -4883,6 +5343,9 @@ function buildDeepDivePanel(meta) {
     deep.brownfieldFilters.deliverableOnly = e.target.checked;
     refreshBrownfield();
   });
+
+  // Developable-land + dwelling-capacity controls (station profiles only).
+  wireDevelopableControls(panel);
 
   // Fill the deprivation headline, breakdown bars and plain-English summary.
   renderDeprivationScore();
