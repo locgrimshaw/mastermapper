@@ -143,7 +143,11 @@ PLANNING_DATA_KINDS = {
 }
 
 # Transport half-widths (metres) applied to LINE features before reprojecting.
-RAIL_HALF_WIDTH = 6.0
+# Rail is buffered wider than a single track to approximate railway CURTILAGE
+# (the operational corridor: paired tracks, ballast, embankment/cutting, boundary
+# fence) rather than a hairline centreline — so it reads as a real development
+# barrier. ~12 m half-width ≈ a 24 m corridor.
+RAIL_HALF_WIDTH = 12.0
 
 # --- generic column matching -------------------------------------------------
 # A per-feature id, in priority order. Used for a stable source_id / upsert key.
@@ -520,14 +524,15 @@ def build_transport(mask_27700, mask_geom_27700):
         rlayer = _pick_layer(road_path, ["Road", "road", "OpenMapLocal_Road",
                                          "Roads"])
         roads = _to_27700(_read_source(road_path, rlayer, mask_geom_27700))
-        # MAJOR roads only (motorway + A-road). Minor/residential streets aren't
-        # meaningful barriers to development and their volume (hundreds of
-        # thousands of segments near stations) makes the build intractable.
+        # A/B roads + motorways. Minor/residential/local streets are excluded —
+        # they aren't meaningful barriers to development and their volume (hundreds
+        # of thousands of segments near stations) makes the build intractable.
         cls_col = _find_col(roads, CLASS_CANDIDATES)
         if cls_col is not None:
             low = roads[cls_col].astype(str).str.lower()
-            roads = roads[low.str.contains("motorway|a road|primary|trunk", na=False)]
-            print(f"    kept {len(roads)} major-road features")
+            roads = roads[low.str.contains(
+                "motorway|a road|b road|primary|trunk|secondary", na=False)]
+            print(f"    kept {len(roads)} A/B/motorway-road features")
         roads = _buffer_transport_layer(roads, is_rail=False)
         # dissolve=True: merge buffered roads into corridors (few rows, not 100k+).
         rows += _finish(roads, "transport", mask_27700, dissolve=True)
@@ -535,9 +540,18 @@ def build_transport(mask_27700, mask_geom_27700):
         print(f"  [transport] reading railway from {rail_path.name} ...")
         elayer = _pick_layer(rail_path, ["RailwayTrack", "Railway",
                                          "railwaytrack", "OpenMapLocal_RailwayTrack",
-                                         "Rail"])
+                                         "RailwayTrackSide", "Rail"])
+        print(f"    rail layer picked: {elayer!r}")
         rail = _to_27700(_read_source(rail_path, elayer, mask_geom_27700))
+        # A silently-empty masked read (0 rows, no exception) leaves rail out
+        # entirely — the bug that dropped railway curtilage before. Fall back to a
+        # full read (then the mask clip in _finish still trims it) and report.
+        if rail is None or rail.empty:
+            print("    masked rail read returned 0 features — retrying full read")
+            rail = _to_27700(gpd.read_file(rail_path, **({"layer": elayer} if elayer else {})))
+        print(f"    read {0 if rail is None else len(rail)} rail features")
         rail = _buffer_transport_layer(rail, is_rail=True)
+        print(f"    {0 if rail is None else len(rail)} rail features after buffering to curtilage")
         rows += _finish(rail, "transport", mask_27700, dissolve=True)
     return rows
 
