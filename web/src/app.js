@@ -2096,10 +2096,11 @@ function setStationProfileBtn(text, disabled) {
   if (btn) { btn.textContent = text; btn.disabled = !!disabled; }
 }
 
-// Default walk-time (minutes) for a station catchment. A 15-min walk is the
-// conventional station "ped-shed"; exposed as a constant so it's easy to lift
-// into a control later.
-const STATION_WALK_MINUTES = 15;
+// Default walk-time (minutes) for a station catchment. At ~80 m/min this makes
+// the circular catchment 800 m — matching the 800 m NPPF developable-land radius
+// (the red circle), so the two rings line up by default. (10-min ped-shed.)
+// Exposed as a constant so it's easy to lift into a control later.
+const STATION_WALK_MINUTES = 10;
 
 // ---- Legend ---------------------------------------------------------------
 
@@ -6090,7 +6091,8 @@ const SIFT = {
   loaded: false,
   rows: [],
   crit: { tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
-          maxFriction: 1 },
+          maxFriction: 1, minBenefit: 0 },
+  sort: "yield",   // "yield" | "benefit"
 };
 
 async function enterSiftMode() {
@@ -6113,7 +6115,7 @@ async function loadSiftData() {
   try {
     const { data, error } = await sb
       .from("station_assessments")
-      .select("crs, tier, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, stations(name, region, ttwa_name)")
+      .select("crs, tier, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, stations(name, region, ttwa_name)")
       .order("dwelling_yield", { ascending: false });
     if (error) throw error;
     SIFT.rows = (data || []).map(r => ({
@@ -6122,6 +6124,12 @@ async function loadSiftData() {
       friction: r.constraint_friction == null ? null : Number(r.constraint_friction),
       greenBeltHa: Number(r.green_belt_ha) || 0,
       softCover: r.soft_cover || {},
+      benefit: r.benefit_score == null ? null : Number(r.benefit_score),
+      regen: r.regen_score == null ? null : Number(r.regen_score),
+      access: r.access_score == null ? null : Number(r.access_score),
+      housing: r.housing_score == null ? null : Number(r.housing_score),
+      catchmentImd: r.catchment_imd == null ? null : Number(r.catchment_imd),
+      catchmentPop: r.catchment_pop == null ? null : Number(r.catchment_pop),
       name: (r.stations && r.stations.name) || r.crs,
       region: (r.stations && r.stations.region) || "",
       ttwa: (r.stations && r.stations.ttwa_name) || "",
@@ -6135,13 +6143,20 @@ async function loadSiftData() {
 
 function siftSurvivors() {
   const c = SIFT.crit;
-  return SIFT.rows.filter(r =>
+  const out = SIFT.rows.filter(r =>
     ((r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
      (r.tier === "ineligible" && c.ineligible)) &&
     r.developableHa >= c.minDevHa && r.yield >= c.minYield &&
     // Gate 3 friction: null friction (not yet computed) passes; otherwise it must
     // sit at or below the cap. maxFriction 1 admits everything.
-    (r.friction == null || r.friction <= c.maxFriction));
+    (r.friction == null || r.friction <= c.maxFriction) &&
+    // Assessment 4 benefit: null passes; otherwise at/above the floor.
+    (r.benefit == null || r.benefit >= (c.minBenefit || 0)));
+  // Rows arrive yield-sorted; re-sort by benefit when that ranking is selected.
+  if (SIFT.sort === "benefit") {
+    out.sort((a, b) => (b.benefit || 0) - (a.benefit || 0));
+  }
+  return out;
 }
 
 function buildSiftCriteria() {
@@ -6158,12 +6173,20 @@ function buildSiftCriteria() {
     `<label class="sift-field"><span>Min dwelling yield</span><input type="number" id="sift-minyield" min="0" step="50" value="0"></label></div>` +
     `<div class="sift-stage"><div class="sift-stage-h">3 · NPPF constraints</div>` +
     `<p class="hint">Hard environmental designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased from the developable land above. This caps the remaining <em>soft</em>-constraint friction (conservation areas, AONB, parks &amp; gardens, listed-building settings).</p>` +
-    `<label class="sift-field"><span>Max soft friction <b id="sift-fric-val">1.00</b></span><input type="range" id="sift-maxfric" min="0" max="1" step="0.05" value="1"></label></div>`;
+    `<label class="sift-field"><span>Max soft friction <b id="sift-fric-val">1.00</b></span><input type="range" id="sift-maxfric" min="0" max="1" step="0.05" value="1"></label></div>` +
+    `<div class="sift-stage"><div class="sift-stage-h">4 · Socio-economic benefit</div>` +
+    `<p class="hint">Benefit (0–100) = regeneration (catchment deprivation) + sustainable access (local amenities + rail connectivity) + housing contribution (dwelling-yield percentile), equally weighted.</p>` +
+    `<label class="sift-field"><span>Min benefit score <b id="sift-benefit-val">0</b></span><input type="range" id="sift-minbenefit" min="0" max="100" step="1" value="0"></label>` +
+    `<label class="sift-field"><span>Rank by</span><select id="sift-sort"><option value="yield">Dwelling yield</option><option value="benefit">Benefit score</option></select></label></div>`;
   const upd = () => {
     const fricEl = el.querySelector("#sift-maxfric");
     const fricVal = parseFloat(fricEl.value);
     const fricLbl = el.querySelector("#sift-fric-val");
     if (fricLbl) fricLbl.textContent = fricVal.toFixed(2);
+    const benVal = parseFloat(el.querySelector("#sift-minbenefit").value) || 0;
+    const benLbl = el.querySelector("#sift-benefit-val");
+    if (benLbl) benLbl.textContent = String(benVal);
+    SIFT.sort = el.querySelector("#sift-sort").value;
     SIFT.crit = {
       tierA: el.querySelector("#sift-tierA").checked,
       tierB: el.querySelector("#sift-tierB").checked,
@@ -6171,10 +6194,11 @@ function buildSiftCriteria() {
       minDevHa: parseFloat(el.querySelector("#sift-minha").value) || 0,
       minYield: parseFloat(el.querySelector("#sift-minyield").value) || 0,
       maxFriction: isNaN(fricVal) ? 1 : fricVal,
+      minBenefit: benVal,
     };
     renderSift();
   };
-  el.querySelectorAll("input").forEach(i => i.addEventListener("input", upd));
+  el.querySelectorAll("input, select").forEach(i => i.addEventListener("input", upd));
 }
 
 function escapeSift(s) {
@@ -6196,18 +6220,20 @@ function renderSift() {
     `<strong>${surv.length.toLocaleString()}</strong> of ${SIFT.rows.length.toLocaleString()} stations pass` +
     ` · ~<strong>${totalYield.toLocaleString()}</strong> dwellings capacity`;
   const top = surv.slice(0, 100);
+  const sortLabel = SIFT.sort === "benefit" ? "benefit" : "yield";
   results.innerHTML =
-    `<table class="sift-table"><thead><tr><th>#</th><th>Station</th><th>Tier</th><th>Dev. ha</th><th>Yield</th><th title="Soft-constraint friction 0–1; ⬡ = Green Belt overlap">Fric.</th></tr></thead><tbody>` +
+    `<table class="sift-table"><thead><tr><th>#</th><th>Station</th><th>Tier</th><th>Dev. ha</th><th>Yield</th><th title="Soft-constraint friction 0–1; ⬡ = Green Belt overlap">Fric.</th><th title="Socio-economic benefit 0–100">Benefit</th></tr></thead><tbody>` +
     top.map((r, i) =>
       `<tr data-crs="${escapeSift(r.crs)}"><td>${i + 1}</td>` +
       `<td>${escapeSift(r.name)}<small>${escapeSift(r.region || r.ttwa)}</small></td>` +
       `<td><span class="sift-tier sift-tier-${r.tier}">${r.tier === "ineligible" ? "—" : r.tier}</span></td>` +
       `<td>${r.developableHa.toFixed(1)}</td><td>${(r.yield || 0).toLocaleString()}</td>` +
       `<td>${r.friction == null ? "—" : r.friction.toFixed(2)}` +
-      `${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha of developable land in Green Belt">⬡</span>` : ""}</td></tr>`
+      `${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha of developable land in Green Belt">⬡</span>` : ""}</td>` +
+      `<td>${r.benefit == null ? "—" : `<span class="sift-benefit" title="regen ${r.regen ?? "?"} · access ${r.access ?? "?"} · housing ${r.housing ?? "?"}">${Math.round(r.benefit)}</span>`}</td></tr>`
     ).join("") +
     `</tbody></table>` +
-    (surv.length > 100 ? `<p class="hint">Showing the top 100 by yield of ${surv.length.toLocaleString()}.</p>` : "");
+    (surv.length > 100 ? `<p class="hint">Showing the top 100 by ${sortLabel} of ${surv.length.toLocaleString()}.</p>` : "");
   results.querySelectorAll("tr[data-crs]").forEach(tr =>
     tr.addEventListener("click", () => siftDrillTo(tr.dataset.crs)));
   highlightSiftSurvivors(surv);

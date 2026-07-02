@@ -216,6 +216,7 @@ html, body {
 .sift-tier-B { background: #e0853a; color: #fff; }
 .sift-tier-ineligible { background: var(--ink-line); color: var(--text-dim); }
 .sift-gb { color: #2b8a3e; font-weight: 700; }
+.sift-benefit { font-variant-numeric: tabular-nums; font-weight: 600; cursor: help; }
 
 /* Gate-3 soft-constraint friction read-out in the developable summary. */
 .dd-fric { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
