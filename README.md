@@ -1,20 +1,35 @@
-# Welfare Mapper
+# MasterMapper
 
-A socio-economic site-appraisal tool for English local authorities and public
-bodies. Maps deprivation at LSOA level, lets you reweight the domains into a
-custom combined score, and produces a context report for any plot you draw.
+An **NPPF station site-appraisal tool** for England and Scotland. It maps
+heavy-rail stations and their 800 m catchments (the draft-NPPF developable
+radius), then funnels them through connectivity, eligibility, developable-land,
+constraint and scoring gates to shortlist sites near stations — and profiles any
+single station in depth.
 
-> **Status:** prototype. Core map + scoring engine + plot context report work
-> today on synthetic data. Real data drops in via the pipeline (see below).
-> Isochrones, amenities, housing/policy overlays, and portfolio scoring are
-> scoped but not yet built — see the roadmap.
+> **Status:** working prototype on real government data. England is fully wired
+> (stations, deprivation, prices, brownfield, green belt, heritage/environmental
+> constraints, land ownership). Scotland is landing in phases — station network
+> and SIMD deprivation are in; Scottish designations/constraints load via CI.
+
+The app is a static MapLibre front-end backed by a Supabase Postgres/PostGIS
+database. Heavy data prep runs offline in the `pipeline/` builders (mostly via
+GitHub Actions), which write map-ready layers and load the database; the browser
+does the interactive scoring and reporting.
+
+## Two ways to use it
+
+- **Explore** — search a station and profile its 800 m catchment: deprivation,
+  prices, developable land, constraints, land ownership, and a scored deep dive.
+- **Site sift** — step through the NPPF station funnel (connectivity → eligibility
+  → developable land → constraints → the three scored axes). The shortlist
+  updates live at every step; England and Scotland sift separately.
 
 ## How to run this (no terminal needed)
 
 If you don't use a command prompt, follow **`docs/WEBSITE_ONLY_GUIDE.md`** —
 a click-by-click walkthrough that does everything through the GitHub website:
-upload the project, turn on Pages, and let a GitHub Action process the
-government data for you in the cloud. You never touch a terminal.
+turn on Pages and let the GitHub Actions workflows process the government data
+in the cloud. You never touch a terminal.
 
 The sections below describe the local/terminal workflow, kept for reference.
 
@@ -24,73 +39,78 @@ The sections below describe the local/terminal workflow, kept for reference.
 # 1. Install the pipeline dependencies (only needed to (re)build data)
 pip install -r pipeline/requirements.txt
 
-# 2. Generate synthetic sample data so the app has something to show
-python pipeline/make_sample_data.py
-
-# 3. Serve the web app (any static server works)
+# 2. Serve the web app (any static server works)
 cd web && python -m http.server 8000
 # open http://localhost:8000
 ```
 
-You'll see a deprivation choropleth over a patch of London (fake data),
-working weighting sliders, and a working draw-a-plot context report.
+The app reads pre-built layers from `web/data/` and talks to Supabase (configured
+in `web/config.js`) for the station assessments and the developable-land RPC.
 
-## Loading real England data
+## Loading real data
 
-1. Download the two Tier-1 datasets in [`docs/DATASETS.md`](docs/DATASETS.md)
-   and place them in `data/raw/`.
-2. Run the real pipeline:
+The `pipeline/` builders turn raw government data into map-ready GeoJSON/PMTiles
+and load Supabase. Most run as GitHub Actions workflows (`.github/workflows/`) so
+they can reach the gov servers directly and commit/load results. The dataset
+shopping list and per-source CRS/attribution notes live in
+[`docs/DATASETS.md`](docs/DATASETS.md).
 
-   ```bash
-   python pipeline/build_imd_layer.py
-   ```
+Key builders:
 
-3. Reload the app. The "synthetic data" warning disappears and you're looking
-   at all 32,844 English LSOAs.
+| Area | Builders |
+| --- | --- |
+| Stations & connectivity | `build_rail_layer.py`, `build_station_usage.py`, `build_connectivity.py`, `build_connectivity_cif.py`, `build_station_ruc.py` |
+| Deprivation | `build_imd_layer.py`, `build_lsoa_imd_points.py` (England IMD), `build_simd.py` (Scotland SIMD) |
+| Prices & viability | `build_price_layer.py`, `build_lsoa_prices.py`, `build_ttwa_gva.py` |
+| Land & constraints | `build_brownfield_*.py`, `build_greenbelt_layer.py`, `build_constraints.py`, `build_scot_designations.py`, `build_land_ownership.py` |
+| Tiles / boundaries | `build_tiles.py`, `fetch_boundaries.py` |
+
+Corresponding workflows load the outputs into Supabase (`build-data.yml`,
+`build-simd.yml`, `load-constraints.yml`, `load-constraints-scotland.yml`,
+`load-land-ownership.yml`, `load-brownfield-polygons.yml`, `load-amenities.yml`,
+`build-brownfield.yml`, `build-classifications.yml`, `deploy-pages.yml`).
 
 ## Structure
 
 ```
-welfare-mapper/
+mastermapper/
 ├── data/
-│   ├── raw/          # you put downloaded gov data here (git-ignored)
-│   └── processed/    # pipeline output the app consumes (git-ignored)
-├── pipeline/         # Python: turns raw gov data into map-ready GeoJSON
-│   ├── build_imd_layer.py
-│   ├── make_sample_data.py
-│   └── requirements.txt
-├── web/              # the static front-end (deploy this to GitHub Pages)
+│   └── raw/          # downloaded gov data (git-ignored; CI self-sources it)
+├── pipeline/         # Python: turns raw gov data into map-ready layers + loads
+├── web/              # the static MapLibre front-end (deploy to GitHub Pages)
 │   ├── index.html
+│   ├── config.js     # Supabase URL + anon key
+│   ├── data/         # pre-built layers the app loads (pmtiles/geojson)
 │   └── src/{app.js, styles.css}
-└── docs/
-    └── DATASETS.md   # the dataset shopping list
+├── supabase/         # SQL migrations + loaders (Postgres/PostGIS)
+└── docs/             # DATASETS.md, setup + migration guides
 ```
 
 ## How the pieces fit
 
-- **Pipeline** (offline, occasional): heavy data prep. Run when source data
-  updates (rarely). Keeps the live app fast.
-- **Web** (static, free to host): the map. Loads one processed GeoJSON,
-  computes the combined score and plot reports entirely in the browser.
-- **Backend** (not yet): needed for isochrones, big portfolio batch jobs, and
-  serving national data as vector tiles instead of GeoJSON.
+- **Pipeline** (offline, in CI): heavy data prep. Fetches gov data, builds
+  layers, runs the SQL migrations, and loads Supabase. Keeps the live app fast.
+- **Supabase** (Postgres/PostGIS): stores stations, per-station assessments,
+  and `planning_constraints`; the developable-land RPC erases/penalises
+  constraints inside each catchment.
+- **Web** (static, free to host): the map + scoring UI. Loads the pre-built
+  layers and calls Supabase for assessments and the plot report.
 
-## Roadmap
+## Scotland rollout
 
-- [x] LSOA deprivation choropleth (1.1)
-- [x] Live domain reweighting → combined score (1.2)
-- [x] Quantile colour scaling + click-to-inspect single areas
-- [x] Domain tooltips explaining each IMD measure
-- [x] Draw a plot → area-weighted context report (1.3)
-- [x] Housing context overlay — median sale price (1.5, partial)
-- [ ] Isochrones + nearest amenities (1.4) — needs routing API
-- [ ] Council waiting lists / rents (1.5, deeper)
-- [ ] Policy/constraint overlays (1.6) — needs planning.data.gov.uk layers
-- [ ] Portfolio batch scoring + need×feasibility quadrant (2.1)
-- [ ] Indicative viability proxy (2.2) — later phase
+Scotland reuses England's schema and canonical constraint kinds so both
+countries sit in the same tables and the same developable RPC serves both:
+
+- **Phase A** — country tagging + Scottish station network. *(in)*
+- **Phase B** — SIMD deprivation points + `rebuild_station_scotland()` filling the
+  shared catchment columns, so "Regeneration need" works from SIMD. *(in)*
+- **Phase C** — Scottish designations/constraints. NatureScot (WFS) and Historic
+  Environment Scotland (ArcGIS) are discovered and paged automatically by
+  `build_scot_designations.py`; Scottish green belt and SEPA flood extents are
+  fetched the same way, all mapped onto the canonical kinds. Loads via
+  `load-constraints-scotland.yml`.
 
 ## Licence / data attribution
 
 Code: choose a licence (MIT suggested). Data: Open Government Licence v3 —
 see the attribution block in `docs/DATASETS.md`.
-```

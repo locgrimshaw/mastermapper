@@ -15,9 +15,9 @@ on:
         type: string
         default: "https://hub.arcgis.com/api/download/v1/items/88527fff4fcb4e08b8e90a43979ffc87/geojson?layers=0"
       fls_url:
-        description: "National Forest Estate Ownership Scotland GeoJSON URL"
+        description: "Optional override URL for National Forest Estate Ownership Scotland GeoJSON (else auto-tries the known ArcGIS Hub forms)"
         type: string
-        default: "https://hub.arcgis.com/api/download/v1/items/f5b65ef014464c16b24f4cfc9c9a5bf6/geojson?layers=0"
+        default: ""
 
 permissions:
   contents: read
@@ -34,16 +34,44 @@ jobs:
         run: pip install -r pipeline/requirements.txt
 
       - name: Download Forestry ownership layers
+        env:
+          FLS_ITEM: f5b65ef014464c16b24f4cfc9c9a5bf6   # National Forest Estate Ownership Scotland 2019
         run: |
           mkdir -p data/raw
-          if [ -n "${{ inputs.fe_url }}" ]; then
-            curl -fL --retry 3 --retry-delay 5 -o data/raw/land_forestry_england.geojson "${{ inputs.fe_url }}" \
-              || echo "::warning::Forestry England download failed"
-          fi
-          if [ -n "${{ inputs.fls_url }}" ]; then
-            curl -fL --retry 3 --retry-delay 5 -o data/raw/land_forestry_scotland.geojson "${{ inputs.fls_url }}" \
-              || echo "::warning::Forestry Scotland download failed"
-          fi
+
+          # Try each candidate URL in turn; keep the first that returns HTTP 200
+          # AND a non-trivial GeoJSON body (some endpoints 200 with an error blob).
+          # The ArcGIS Hub `download/v1` form works for some items but 403s for
+          # others, so we fall back to the opendata/hub v3 dataset-download forms.
+          fetch_first() {
+            out="$1"; shift
+            for url in "$@"; do
+              [ -n "$url" ] || continue
+              code=$(curl -sL --retry 3 --retry-delay 5 -w '%{http_code}' -o "$out.tmp" "$url" || echo 000)
+              size=$(wc -c < "$out.tmp" 2>/dev/null || echo 0)
+              echo "  [$code, ${size}B] $url"
+              if [ "$code" = "200" ] && grep -q '"features"' "$out.tmp" 2>/dev/null && [ "$size" -gt 1000 ]; then
+                mv "$out.tmp" "$out"; echo "  -> saved $out"; return 0
+              fi
+            done
+            rm -f "$out.tmp"; return 1
+          }
+
+          echo "=== Forestry England ==="
+          fetch_first data/raw/land_forestry_england.geojson \
+            "${{ inputs.fe_url }}" \
+            "https://hub.arcgis.com/api/download/v1/items/88527fff4fcb4e08b8e90a43979ffc87/geojson?layers=0" \
+            "https://opendata.arcgis.com/api/v3/datasets/88527fff4fcb4e08b8e90a43979ffc87_0/downloads/data?format=geojson&spatialRefId=4326" \
+            || echo "::warning::Forestry England download failed"
+
+          echo "=== Forestry and Land Scotland (National Forest Estate Ownership) ==="
+          fetch_first data/raw/land_forestry_scotland.geojson \
+            "${{ inputs.fls_url }}" \
+            "https://opendata.arcgis.com/api/v3/datasets/${FLS_ITEM}_0/downloads/data?format=geojson&spatialRefId=4326" \
+            "https://hub.arcgis.com/api/v3/datasets/${FLS_ITEM}_0/downloads/data?format=geojson&spatialRefId=4326" \
+            "https://hub.arcgis.com/api/download/v1/items/${FLS_ITEM}/geojson?layers=0" \
+            || echo "::warning::Forestry Scotland download failed (all candidate URLs)"
+
           echo "=== downloaded ==="; ls -lh data/raw/land_forestry_*.geojson 2>/dev/null || true
 
       - name: Build the land-ownership import CSV

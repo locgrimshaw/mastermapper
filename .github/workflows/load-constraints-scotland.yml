@@ -3,9 +3,10 @@ name: Load Scotland constraints into Supabase
 # Loads Scotland-specific designations into planning_constraints under the SAME
 # canonical kinds as England (sssi, sac, spa, ramsar, ancient_woodland,
 # scheduled_monument, listed_building, conservation_area, park_garden) plus
-# national_scenic_area + national_park. NatureScot (WFS) and Historic Environment
-# Scotland (ArcGIS) are discovered + paged automatically by
-# build_scot_designations.py. Green belt + SEPA flood are optional URL inputs.
+# national_scenic_area + national_park. NatureScot (WFS), Historic Environment
+# Scotland (ArcGIS), SEPA flood (ArcGIS) and Scottish green belt (SpatialHub WFS)
+# are all discovered + paged automatically by build_scot_designations.py. The
+# green-belt / SEPA URL inputs below remain as optional manual overrides.
 # The OS GB base layers (built_land/green_space/transport/water) come from the
 # normal load-constraints run, whose station mask already covers Scotland.
 

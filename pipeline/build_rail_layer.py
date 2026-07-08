@@ -241,17 +241,27 @@ def main() -> int:
         osm_lines, osm_stops = fetch_osm()
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
-        print("OSM unavailable right now. Skipping cleanly so the rest of the "
-              "build still succeeds (same policy as house prices).")
         osm_lines, osm_stops = [], []
 
     rail_stops = load_rail_stations()
     stops = rail_stops + osm_stops
     lines = osm_lines
 
-    if not lines and not stops:
-        print("Nothing to write (no lines AND no stops). Not creating rail.geojson.")
-        return 0
+    # GUARD against silently degrading the overlay. Every passenger LINE and
+    # every non-heavy-rail mode (subway/light_rail/tram) comes from OSM; only
+    # heavy-rail STOPS come from the CSV. So if Overpass fails we'd write a
+    # stops-only file — dropping all lines and all other modes — and, because
+    # the build then re-tiles and commits it, overwrite the good committed
+    # multi-mode overlay with that fallback (the exact regression that replaced
+    # a 25 MB / 71k-feature overlay with a 466 KB / 2,382-stop one). Refuse:
+    # leave the existing rail.geojson untouched and fail the build so CI never
+    # commits a degraded layer. A transient Overpass outage then means "no rail
+    # change this run", not "rail overlay wiped".
+    if not lines:
+        print("ERROR: no passenger lines were fetched (Overpass unavailable). "
+              "Refusing to overwrite the committed multi-mode rail overlay with "
+              "a stops-only fallback. Leaving web/data/rail.geojson untouched.")
+        return 1
 
     # Per-mode counts for the frontend (drives which toggles to show).
     def counts(feats, kind):
