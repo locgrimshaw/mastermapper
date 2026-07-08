@@ -75,6 +75,20 @@ jobs:
           echo "Building station-usage layer (ORR entries/exits joined to stations)..."
           python pipeline/build_station_usage.py
 
+      - name: Enrich stations — TTWA GVA + well-connected (optional)
+        if: ${{ inputs.include_rail }}
+        run: |
+          echo "Adding TTWA + well_connected (frequency AND top-60 GVA TTWA)..."
+          echo "Note: GVA data is England-only, so Scottish stations get well_connected=false"
+          echo "and tier on built-up fraction (in-settlement) for now."
+          python pipeline/build_ttwa_gva.py
+
+      - name: Enrich stations — ONS Rural-Urban Classification (optional)
+        if: ${{ inputs.include_rail }}
+        run: |
+          echo "Adding rural/urban class (England LSOA RUC; Scotland stays null -> density fallback)..."
+          python pipeline/build_station_ruc.py || echo "::warning::RUC step failed (non-fatal)"
+
       - name: Install tippecanoe (for vector tiles)
         run: pip install tippecanoe
 
