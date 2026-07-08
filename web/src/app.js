@@ -2788,6 +2788,8 @@ function computeCatchmentPopulation() {
   deep.households = res.households;
   deep.area_km2 = res.area_km2;
   deep.popPartial = res.partial;
+  deep.ppm2 = res.ppm2;
+  deep.medianPrice = res.medianPrice;
   renderCatchmentStats();
   // Any amenity counts already loaded now get a per-1,000 figure.
   refreshAmenityDensities();
@@ -2830,6 +2832,18 @@ function renderCatchmentStats() {
   if (areaEl) areaEl.textContent = fmtArea(deep.area_km2);
   const dens = densityPerKm2(deep.population, deep.area_km2);
   if (densEl) densEl.textContent = dens == null ? "—" : fmtCount(dens);
+
+  // Local house-price value over the catchment (£/m²), with median sale price
+  // as the tooltip — the local sales value the viability appraisal uses for GDV.
+  const valEl = document.getElementById("dd-value-value");
+  if (valEl) {
+    valEl.textContent = deep.ppm2 == null ? "—" : ppm2Fmt(deep.ppm2);
+    valEl.title = deep.ppm2 == null
+      ? "No local house-price data for this catchment"
+      : `${ppm2Fmt(deep.ppm2)} — catchment-weighted HM Land Registry £/m²`
+        + (deep.medianPrice != null ? ` · ${priceFmt(deep.medianPrice)} median sale price` : "")
+        + ". This is the local sales value the viability appraisal uses for GDV.";
+  }
 
   if (noteEl) {
     if (deep.popFromDb) {
@@ -5613,6 +5627,10 @@ function buildDeepDivePanel(meta) {
               <div class="dd-stat-num" id="dd-density-value">—</div>
               <div class="dd-stat-cap">Density / km²</div>
             </div>
+            <div class="dd-stat-cell">
+              <div class="dd-stat-num" id="dd-value-value">—</div>
+              <div class="dd-stat-cap">House price £/m²</div>
+            </div>
           </div>
           <p class="hint" id="dd-pop-note" style="margin-top:8px">Population is area-weighted from the LSOAs the catchment overlaps, assuming people are spread evenly within each.</p>
         </div>
@@ -5942,7 +5960,7 @@ function areaWeightedScore(catchment) {
 // partial } where `partial` flags that some overlapping LSOAs lacked a
 // population value (so the figure is a floor, not exact).
 function areaWeightedPopulation(catchment) {
-  const out = { population: null, households: null, area_km2: null, parts: 0, partial: false };
+  const out = { population: null, households: null, area_km2: null, parts: 0, partial: false, ppm2: null, medianPrice: null };
   if (!window.turf) return out;
 
   let area_m2 = 0;
@@ -5958,6 +5976,9 @@ function areaWeightedPopulation(catchment) {
   let counted = 0;
   let missing = 0;
   let hhCounted = 0;
+  // House-price value over the catchment, area-weighted by each LSOA's overlap
+  // (the polygons carry price_ppm2 / price_median from build_price_choropleth).
+  let ppmSum = 0, ppmW = 0, mpSum = 0, mpW = 0;
   for (const f of feats) {
     const props = f.properties || {};
     const code = props.lsoa_code;
@@ -5986,6 +6007,11 @@ function areaWeightedPopulation(catchment) {
     // availability — an LSOA may carry one but not the other.
     const lsoaHh = props.households;
     if (lsoaHh != null && !isNaN(lsoaHh)) { hh += Number(lsoaHh) * share; hhCounted++; }
+
+    // Value: weight £/m² and median sale price by the overlap area.
+    const ppm = props.price_ppm2, mp = props.price_median;
+    if (ppm != null && !isNaN(ppm)) { ppmSum += Number(ppm) * interArea; ppmW += interArea; }
+    if (mp != null && !isNaN(mp)) { mpSum += Number(mp) * interArea; mpW += interArea; }
   }
 
   out.parts = counted + missing;
@@ -5994,6 +6020,8 @@ function areaWeightedPopulation(catchment) {
     out.partial = missing > 0;
   }
   if (hhCounted > 0) out.households = Math.round(hh);
+  if (ppmW > 0) out.ppm2 = Math.round(ppmSum / ppmW);
+  if (mpW > 0) out.medianPrice = Math.round(mpSum / mpW);
   return out;
 }
 
