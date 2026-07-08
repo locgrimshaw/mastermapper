@@ -491,8 +491,11 @@ def load_station_points():
             continue
         lng, lat = g["coordinates"][:2]
         pts.append({"name": p.get("name", ""), "crs": (p.get("crs") or "").upper(),
-                    "lng": lng, "lat": lat})
-    print(f"  {len(pts)} England heavy-rail station points from {RAIL_GEOJSON.name}")
+                    "lng": lng, "lat": lat,
+                    "country": (p.get("country") or "england").strip().lower()})
+    n_scot = sum(1 for pt in pts if pt.get("country") == "scotland")
+    print(f"  {len(pts)} GB heavy-rail station points from {RAIL_GEOJSON.name} "
+          f"({n_scot} Scotland)")
     return pts
 
 
@@ -584,6 +587,7 @@ def main() -> int:
         props = {
             "name": s["name"],
             "crs": s["crs"],
+            "country": s.get("country", "england"),
             "usage": rec["usage"] if rec else None,
             "operator": (rec["operator"] if rec else "") or "",
             # Trend kept compact: list of {year, value}. Frontend draws a

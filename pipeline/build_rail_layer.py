@@ -59,10 +59,14 @@ RAW = ROOT / "data" / "raw"
 OUT = ROOT / "web" / "data" / "rail.geojson"
 STATIONS_CSV = RAW / "uk_stations.csv"
 
-# England bounding box (lon/lat). Overpass takes (south,west,north,east).
-# Generous box; mode filters do the real work and a few border ways spilling
-# into Wales/Scotland are harmless on the map.
-ENGLAND_BBOX = (49.8, -6.5, 55.9, 1.9)
+# Great Britain bounding box (lon/lat). Overpass takes (south,west,north,east).
+# Covers England AND Scotland (to the far north of the mainland + inner isles);
+# the constituentCountry filter on the station CSV selects which countries we
+# actually keep, and mode filters do the real work for lines.
+GB_BBOX = (49.8, -8.7, 61.1, 1.9)
+# Countries we build the network for. Scotland is sifted separately downstream,
+# but its stations + lines live in the same rail.geojson (tagged by `country`).
+INCLUDE_COUNTRIES = {"england", "scotland"}
 
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
@@ -74,7 +78,7 @@ def overpass_query() -> str:
     """One combined query for all four modes' lines + the non-heavy-rail stops.
     Heavy-rail stops come from the CSV, so we don't fetch railway=station for
     plain rail here (avoids dragging in every mainline station unnamed)."""
-    s, w, n, e = ENGLAND_BBOX
+    s, w, n, e = GB_BBOX
     b = f"{s},{w},{n},{e}"
     return f"""
 [out:json][timeout:240];
@@ -203,8 +207,11 @@ def load_rail_stations() -> list:
             return None
 
         for row in reader:
-            country = col(row, "constituentCountry", "country") or ""
-            if country and country.strip().lower() != "england":
+            country = (col(row, "constituentCountry", "country") or "").strip().lower()
+            # Keep England + Scotland; skip Wales / others. Default missing to
+            # England (the CSV's dominant, historically-kept set).
+            country = country or "england"
+            if country not in INCLUDE_COUNTRIES:
                 continue
             lat = col(row, "lat", "latitude")
             lng = col(row, "long", "lng", "longitude")
@@ -219,9 +226,12 @@ def load_rail_stations() -> list:
             feats.append({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [round(lng_f, 5), round(lat_f, 5)]},
-                "properties": {"kind": "stop", "mode": "rail", "name": name, "crs": crs},
+                "properties": {"kind": "stop", "mode": "rail", "name": name, "crs": crs,
+                               "country": country},
             })
-    print(f"  loaded {len(feats)} England heavy-rail stations from {STATIONS_CSV.name}")
+    n_scot = sum(1 for f in feats if f["properties"].get("country") == "scotland")
+    print(f"  loaded {len(feats)} GB heavy-rail stations from {STATIONS_CSV.name} "
+          f"({n_scot} Scotland, {len(feats) - n_scot} England)")
     return feats
 
 
