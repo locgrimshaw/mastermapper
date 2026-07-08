@@ -2673,6 +2673,8 @@ function runDeepDive(catchment, meta) {
   deep.households = null;
   deep.area_km2 = null;
   deep.popPartial = false;
+  deep.popFromDb = false;
+  deep.assessment = null;
   deep.counts = {};
   deep.station = meta.station || null;   // station meta for the station section
   deep.brownfield = null;
@@ -2795,7 +2797,10 @@ function renderCatchmentStats() {
   if (densEl) densEl.textContent = dens == null ? "—" : fmtCount(dens);
 
   if (noteEl) {
-    if (deep.population == null) {
+    if (deep.popFromDb) {
+      noteEl.textContent =
+        "Resident population within the 800 m catchment (ONS LSOA populations, precomputed) — the same figure the sift uses.";
+    } else if (deep.population == null) {
       noteEl.textContent =
         "Population estimate unavailable — load LSOA population data (see DATASETS.md) to enable this.";
     } else if (deep.popPartial) {
@@ -4455,7 +4460,7 @@ function renderStationSynthesis() {
   if (!snap) { el.innerHTML = ""; return; }
 
   el.innerHTML = `
-    <div class="dd-eyebrow" style="margin-bottom:6px">Opportunity synthesis</div>
+    <div class="dd-eyebrow" style="margin-bottom:6px">Official supply</div>
     <p class="syn-headline">${synthesisSentence(snap)}</p>
     ${triadHTML(snap)}
     ${snap.households != null ? `
@@ -5494,6 +5499,8 @@ function buildDeepDivePanel(meta) {
       ${meta.station ? `<section class="dd-synthesis" id="dd-synthesis"></section>` : ""}
       ${meta.station ? stationSectionHTML(meta.station) : ""}
 
+      ${meta.station ? developableSectionHTML(meta.station) : ""}
+
       <section class="dd-block" data-section="score">
         <button class="dd-block-head" type="button" aria-expanded="true">
           <span class="dd-h">${meta.station ? "Need · deprivation" : "Deprivation"}</span><span class="dd-caret">▾</span>
@@ -5566,9 +5573,6 @@ function buildDeepDivePanel(meta) {
         </div>
       </section>
 
-      ${meta.station ? developableSectionHTML(meta.station) : ""}
-      ${meta.station ? benefitSectionHTML(meta.station) : ""}
-
       <section class="dd-block" data-section="amenities">
         <button class="dd-block-head" type="button" aria-expanded="true">
           <span class="dd-h">Amenities in this area</span><span class="dd-caret">▾</span>
@@ -5594,24 +5598,6 @@ function buildDeepDivePanel(meta) {
           <p class="hint" style="margin-top:8px">Real travel distance &amp; time by road to the closest of each, shown as coloured routes on the map.</p>
         </div>
       </section>
-
-      <section class="dd-block" data-section="crime" id="dd-crime-block">
-        <button class="dd-block-head" type="button" aria-expanded="true">
-          <span class="dd-h">Crime <span class="dd-h-note" id="dd-crime-period"></span></span>
-          <span class="dd-head-right">
-            <label class="dd-show-toggle" id="dd-crime-show-wrap" hidden>
-              <input type="checkbox" id="dd-crime-show" checked />
-              <span>Show</span>
-            </label>
-            <span class="dd-caret">▾</span>
-          </span>
-        </button>
-        <div class="dd-block-content">
-          <div id="dd-crime-body">
-            <button class="dd-load-btn" id="dd-crime-load" type="button">Load 12 months of crime</button>
-          </div>
-        </div>
-      </section>
     </div>`;
 
   setDeepPanelOpen(true);
@@ -5635,10 +5621,6 @@ function buildDeepDivePanel(meta) {
   }
   const allCb = panel.querySelector("#dd-all-amenities");
   if (allCb) allCb.addEventListener("change", (e) => toggleAllAmenities(e.target.checked));
-  const crimeBtn = panel.querySelector("#dd-crime-load");
-  if (crimeBtn) crimeBtn.addEventListener("click", loadCrime);
-  const crimeShow = panel.querySelector("#dd-crime-show");
-  if (crimeShow) crimeShow.addEventListener("change", (e) => setCrimeVisible(e.target.checked));
 
   // Brownfield (developable supply) controls.
   const bfShow = panel.querySelector("#dd-brownfield-show");
@@ -5664,66 +5646,39 @@ function buildDeepDivePanel(meta) {
 
   // Fill the deprivation headline, breakdown bars and plain-English summary.
   renderDeprivationScore();
-  // Fetch + render our precomputed socio-economic benefit score (Assessment 4).
-  if (meta.station && meta.station.crs) loadStationBenefit(meta.station.crs);
+  // Fetch the precomputed catchment IMD + population and use them as the
+  // authoritative Need / Catchment read-outs (consistent with the sift).
+  if (meta.station && meta.station.crs) loadStationAssessment(meta.station.crs);
 }
 
-// Assessment-4 benefit section for the deep dive: a placeholder filled async by
-// loadStationBenefit from the precomputed station_assessments row.
-function benefitSectionHTML(station) {
-  return `
-      <section class="dd-block" data-section="benefit">
-        <button class="dd-block-head" type="button" aria-expanded="true">
-          <span class="dd-h">Socio-economic benefit · Assessment 4</span><span class="dd-caret">▾</span>
-        </button>
-        <div class="dd-block-content">
-          <div id="dd-benefit-body"><p class="hint">Loading benefit score…</p></div>
-        </div>
-      </section>`;
-}
-
-// A labelled 0–100 bar with a hover tooltip explaining that component.
-function benefitBar(label, val, color, tip) {
-  const v = val == null ? null : Math.max(0, Math.min(100, Number(val)));
-  return `<div class="dd-benefit-bar" title="${tip.replace(/"/g, "&quot;")}">
-    <div class="dd-bb-top"><span>${label}</span><span>${v == null ? "—" : Math.round(v)}</span></div>
-    <div class="dd-bb-track"><div class="dd-bb-fill" style="width:${v == null ? 0 : v}%;background:${color}"></div></div>
-  </div>`;
-}
-
-async function loadStationBenefit(crs) {
-  const body = document.getElementById("dd-benefit-body");
-  if (!body) return;
+// Fetch the precomputed station_assessments row for a station profile and use it
+// as the AUTHORITATIVE source for the Need (regeneration) headline and catchment
+// population — the same values the sift uses. The live vector-tile read-outs are
+// fragile (they depend on which LSOA tiles are loaded), so this guarantees the
+// deep dive always scores and stays consistent with the sift. Replaces the old
+// composite "socio-economic benefit" section (removed per review — the Need block
+// now IS the broken-down IMD for the zone).
+async function loadStationAssessment(crs) {
   const sb = (typeof getSupabase === "function") ? getSupabase() : null;
-  if (!sb) { body.innerHTML = `<p class="hint">Benefit score needs the database (see config.js).</p>`; return; }
+  if (!sb || !crs) return;
   try {
     const { data, error } = await sb.from("station_assessments")
-      .select("benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, gp_ct, school_ct, pharmacy_ct, nursery_ct, bus_ct, dwelling_yield")
+      .select("catchment_imd, catchment_pop, catchment_income, catchment_health, catchment_education, regen_score")
       .eq("crs", crs).single();
     if (error) throw error;
-    if (!data) { body.innerHTML = `<p class="hint">No benefit score for this station.</p>`; return; }
-    const r = data;
-    const amen = `${r.gp_ct ?? 0} GP · ${r.pharmacy_ct ?? 0} pharmacy · ${r.school_ct ?? 0} school · ${r.nursery_ct ?? 0} nursery · ${(r.bus_ct ?? 0).toLocaleString()} bus stops`;
-    body.innerHTML = `
-      <div class="dd-benefit-head">
-        <div class="dd-score-big">${r.benefit_score == null ? "—" : Math.round(r.benefit_score)}<span>/100</span></div>
-        <div class="dd-score-cap">Socio-economic benefit<br><small>equal-weighted mean of the three components below</small></div>
-      </div>
-      ${benefitBar("Regeneration", r.regen_score, "#c0392b",
-        "Regeneration need. The population-weighted average deprivation of the LSOAs whose centroid falls within the 800 m catchment. Higher = more deprived = more regeneration benefit from new homes. Source: English Indices of Deprivation 2019 (MHCLG), LSOA overall score, normalised 0–100.")}
-      ${benefitBar("Sustainable access", r.access_score, "#1c7ed6",
-        "Sustainable access = 0.6 × local amenity completeness + 0.4 × rail-connectivity percentile. Amenity completeness gives 20 points each for a GP, pharmacy, school and nursery within 800 m, plus up to 20 for bus-stop density (20 at 10+ stops). Sources: NHS ODS (GPs, pharmacies), DfE Get Information About Schools (schools, nurseries), NaPTAN/DfT (bus stops); rail connectivity from the National Rail timetable.")}
-      ${benefitBar("Housing contribution", r.housing_score, "#2f9e44",
-        "Housing contribution = this station's dwelling-yield percentile across all 2,019 England stations. Yield = net developable hectares × NPPF density floor (50 dph if well-connected, else 40 dph).")}
-      <div class="dd-benefit-facts">
-        <span>Catchment IMD <b>${r.catchment_imd ?? "—"}</b>/100</span>
-        <span>Catchment pop <b>${(r.catchment_pop ?? 0).toLocaleString()}</b></span>
-      </div>
-      <p class="hint" style="margin-top:6px">Amenities within 800 m: ${amen}.</p>
-      <p class="hint" style="margin-top:6px"><strong>How this is built:</strong> benefit = mean(regeneration, access, housing), each scored 0–100. It is regeneration-led (rewards deprived, well-served catchments with real housing capacity), not a property-value score. Sources: MHCLG English Indices of Deprivation 2019; NHS ODS; DfE GIAS; DfT NaPTAN; National Rail timetable; ONS LSOA populations. All Open Government Licence v3.0.</p>`;
+    if (!data) return;
+    deep.assessment = data;
+    // Population fallback: if the tile-derived estimate came back empty, use the
+    // precomputed catchment population.
+    if (deep.population == null && data.catchment_pop != null) {
+      deep.population = Number(data.catchment_pop);
+      deep.popFromDb = true;
+      renderCatchmentStats();
+    }
+    // Re-render the Need headline / breakdown now the DB fallback is available.
+    renderDeprivationScore();
   } catch (err) {
-    console.error("benefit load failed", err);
-    body.innerHTML = `<p class="hint">Couldn't load the benefit score for this station.</p>`;
+    console.warn("station assessment load failed", err.message);
   }
 }
 
@@ -5756,7 +5711,13 @@ function renderDeprivationScore() {
   const listEl = document.getElementById("dd-domain-list");
   if (!valEl) return;
 
-  const score = combinedScoreFromDomains(domains, state.weights);
+  // Live, weight-driven score from the LSOA vector tiles. For a STATION profile
+  // this can be null if the tiles for the catchment aren't loaded yet — fall back
+  // to the precomputed catchment IMD percentile from station_assessments (the same
+  // value the sift uses), so the Need headline always scores.
+  let score = combinedScoreFromDomains(domains, state.weights);
+  const dbImd = deep.assessment && deep.assessment.catchment_imd;
+  if ((score == null || isNaN(score)) && dbImd != null) score = Number(dbImd);
   valEl.innerHTML = (score == null || isNaN(score))
     ? `—<span>/100</span>`
     : `${score.toFixed(0)}<span>/100</span>`;
@@ -5783,7 +5744,25 @@ function renderDeprivationScore() {
 
   // Per-domain breakdown bars.
   if (listEl) {
-    if (!domains) { listEl.innerHTML = ""; return; }
+    if (!domains) {
+      // Tiles not available — show the precomputed catchment sub-domains we hold
+      // in station_assessments (income / health / education) as a fallback so the
+      // zone's deprivation is still broken down.
+      const a = deep.assessment;
+      if (a && (a.catchment_income != null || a.catchment_health != null || a.catchment_education != null)) {
+        const row = (label, v) => v == null ? "" : `
+          <div class="dd-domain-row" title="${depBand(Number(v))}">
+            <span class="dd-domain-label">${label}</span>
+            <span class="dd-domain-bar"><span style="width:${Math.max(0, Math.min(100, Number(v))).toFixed(0)}%"></span></span>
+            <span class="dd-domain-val">${Number(v).toFixed(0)}</span>
+          </div>`;
+        listEl.innerHTML = row("Income", a.catchment_income) + row("Health & disability", a.catchment_health) +
+          row("Education & skills", a.catchment_education);
+      } else {
+        listEl.innerHTML = "";
+      }
+      return;
+    }
     listEl.innerHTML = DOMAINS.map(d => {
       const v = domains[d.key];
       if (v == null || isNaN(v)) return "";
