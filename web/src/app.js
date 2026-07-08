@@ -6318,9 +6318,8 @@ const SIFT = {
   step: 0,             // current wizard step (index into SIFT_STEPS)
   crit: { requireFrequency: true, requireWellConnected: false, exemptInSettlement: true,
           tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
-          maxFriction: 1, minBenefit: 0, minProfitOnCost: -30, minDeliverability: 0 },
-  sort: "composite",   // yield | benefit | viability | deliverability | composite
-  weights: { benefit: 1, viability: 1, deliverability: 1 },
+          maxProtectedPct: 100, deprivedTopPct: 100, minProfitOnCost: -30 },
+  sort: "viability",   // yield | regen | viability
   assumptions: Object.assign({}, VIABILITY_DEFAULTS),
   shortlist: new Set(mmStore.get("shortlist", [])),  // pinned station CRSs (persisted)
 };
@@ -6332,13 +6331,12 @@ const SIFT = {
   if (!saved) return;
   Object.assign(SIFT.crit, saved.crit || {});
   Object.assign(SIFT.assumptions, saved.assumptions || {});
-  Object.assign(SIFT.weights, saved.weights || {});
   if (saved.sort) SIFT.sort = saved.sort;
 })();
 
 function persistSiftConfig() {
   mmStore.set("siftConfig", { crit: SIFT.crit, assumptions: SIFT.assumptions,
-    weights: SIFT.weights, sort: SIFT.sort });
+    sort: SIFT.sort });
 }
 function persistShortlist() { mmStore.set("shortlist", Array.from(SIFT.shortlist)); }
 function toggleShortlist(crs) {
@@ -6378,34 +6376,12 @@ function computeViability(row) {
   return { profitOnCost: poc, rag, score, price: Math.round(price), local: localPsf != null };
 }
 
-// Deliverability composite (0–100): low soft-constraint friction is the main
-// driver; a permitted Tier-B Green Belt site scores a bonus (NPPF-favoured),
-// a Tier-A Green Belt overlap a small penalty. LA land-supply / ownership drivers
-// are parameterised placeholders (neutral) until sourced — flagged in the UI.
-function computeDeliverability(row) {
-  const a = SIFT.assumptions;
-  const friction = row.friction == null ? 0 : row.friction;
-  let d = 100 * (1 - friction);
-  if (row.tier === "B" && row.greenBeltHa > 0) d += (a.gbTierBBonus || 0);
-  else if (row.tier === "A" && row.greenBeltHa > 0) d -= 5;
-  return Math.max(0, Math.min(100, d));
-}
-
-// Three-axis weighted composite (0–100) over benefit × viability × deliverability.
-function computeComposite(row) {
-  const w = SIFT.weights;
-  const sum = (w.benefit + w.viability + w.deliverability) || 1;
-  const b = row.benefit == null ? 0 : row.benefit;
-  return (w.benefit * b + w.viability * row._viab.score
-          + w.deliverability * row._deliv) / sum;
-}
-
-// Attach the computed 5/6/composite fields to every row (called before filter/sort).
+// Attach the computed viability appraisal to every row (called before filter/sort).
+// Deliverability & a 3-axis composite were removed per review — the funnel now ends
+// on viability; they will return when deliverability is rebuilt.
 function scoreSiftRows() {
   for (const r of SIFT.rows) {
     r._viab = computeViability(r);
-    r._deliv = computeDeliverability(r);
-    r._composite = computeComposite(r);
   }
 }
 
@@ -6476,6 +6452,10 @@ async function loadSiftData() {
 // shows only the current step's controls; the funnel count narrows step by step.
 const SIFT_STEPS = [
   { key: "connectivity", title: "1 · Connectivity gate",
+    about: {
+      what: "The first filter. Only stations with a genuine turn-up-and-go service pass — unless the station sits inside a settlement, which the draft NPPF treats as a 'default yes' regardless of frequency.",
+      source: "Draft NPPF (2024 consultation), development around well-connected stations. The service test used is 'at least 4 services per hour overall, or 2 per hour in each direction' through the daytime; 'well-connected' additionally requires the station's Travel-to-Work Area to be economically significant.",
+      calc: "meets_frequency = sustained trains/trams ≥ 4 per hour (or ≥ 2 per hour per direction), from the GB rail timetable. well_connected = meets_frequency AND the station's TTWA is in the top 60 by GVA (ONS). With the in-settlement exemption on, these tests apply only to out-of-settlement stations." },
     // NPPF gives in-settlement stations a "default yes" regardless of service
     // frequency; exemptInSettlement (default on) mirrors that, so the frequency /
     // well-connected requirements apply only to out-of-settlement stations. Turn
@@ -6488,31 +6468,53 @@ const SIFT_STEPS = [
       return true;
     } },
   { key: "eligibility", title: "2 · Eligibility & tier",
+    about: {
+      what: "Assigns each station an NPPF tier and a density floor. Tier A = inside a settlement; Tier B = well-connected but outside a settlement (where the draft NPPF now permits Green Belt release); otherwise ineligible.",
+      source: "Draft NPPF two-tier approach to station-adjacent development. Density floors: 40 dwellings/hectare as a baseline minimum, 50 dph in the most accessible / well-connected locations.",
+      calc: "‘In settlement’ is deliberately NOT a point-in-polygon test — a station often sits in the railway gap of a built-up-area polygon, which wrongly flagged dense urban stations (e.g. South Bermondsey) as out-of-settlement. Instead we measure the BUILT-UP FRACTION of the 800 m catchment: the share of the 800 m circle covered by OS Open Built-Up Areas. A station is in-settlement when that fraction ≥ 40%, OR ≥ 20% with a built-up area within 100 m. Tier A = in-settlement; Tier B = out-of-settlement AND well-connected; else ineligible. Density floor = 50 dph if well-connected, else 40 dph." },
     pred: (r, c) => (r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
                     (r.tier === "ineligible" && c.ineligible) },
   { key: "developable", title: "3 · Developable land",
+    about: {
+      what: "The net land physically available for homes within an ~800 m (10-minute) walk of the station, and the dwelling capacity that implies.",
+      source: "NPPF 'reasonable walking distance' of a station; the net-developable-area method (start from the catchment, erase undevelopable land) is standard practice in Housing & Economic Land Availability Assessments (HELAA).",
+      calc: "800 m circular catchment MINUS (PostGIS ST_Difference) built-up land, green space, transport corridors (roads + railway curtilage), flood zone 3 and hard environmental designations. dwelling_yield = net developable hectares × the density floor from step 2." },
     pred: (r, c) => r.developableHa >= c.minDevHa && r.yield >= c.minYield },
-  { key: "constraints", title: "4 · NPPF constraints",
-    pred: (r, c) => r.friction == null || r.friction <= c.maxFriction },
-  { key: "benefit", title: "5 · Socio-economic benefit",
-    pred: (r, c) => r.benefit == null || r.benefit >= (c.minBenefit || 0) },
+  { key: "protected", title: "4 · Protected land %",
+    about: {
+      what: "Of the land left after hard exclusions, how much sits under a SOFT heritage or landscape designation — one that doesn't stop development outright but adds planning friction, delay and cost.",
+      source: "NPPF Chapter 16 (heritage — conservation areas, listed-building settings) and Chapter 15 (National Landscapes / AONB, valued landscapes), plus locally registered parks & gardens. These are 'material considerations' weighed in the planning balance, not absolute constraints — unlike SSSIs, SACs, SPAs, Ramsar, ancient woodland and scheduled monuments, which are hard exclusions already removed in step 3.",
+      calc: "Protected land % = the share of the net developable polygon (from step 3) that intersects soft designations — conservation areas, AONB / National Landscapes, registered parks & gardens and listed-building setting buffers — measured by area. The slider caps how much of a site may be so designated." },
+    pred: (r, c) => r.friction == null || r.friction * 100 <= c.maxProtectedPct },
+  { key: "regen", title: "5 · Regeneration need",
+    about: {
+      what: "Focuses the shortlist on the places that would benefit most from investment — the most deprived station catchments.",
+      source: "English Indices of Multiple Deprivation 2019 (MHCLG / ONS), at LSOA level. IMD combines seven domains: income, employment, health, education, crime, barriers to housing & services, and living environment.",
+      calc: "Each station's catchment deprivation = the population-weighted average IMD of the LSOAs within 800 m, expressed as a NATIONAL PERCENTILE (0 = least deprived, 100 = most deprived). The filter keeps only stations whose catchment falls in the top X% most deprived — e.g. 'top 10%' keeps percentile ≥ 90." },
+    pred: (r, c) => {
+      const top = c.deprivedTopPct == null ? 100 : c.deprivedTopPct;
+      if (top >= 100) return true;                 // filter off — keep all
+      if (r.regen == null) return true;            // no score — don't drop
+      return r.regen >= (100 - top);               // top X% most deprived
+    } },
   { key: "viability", title: "6 · Viability",
+    about: {
+      what: "A residual land-appraisal test of whether a policy-compliant scheme stacks up financially. This is the final gate — the sift ends here (deliverability will return once rebuilt).",
+      source: "NPPF para 58 and Planning Practice Guidance 'Viability': residual appraisal, profit on cost, and benchmark land value.",
+      calc: "GDV (net homes × average unit ft² × local £/ft², blended down for the affordable share) − build cost − soft costs − land = profit; profit on cost % = profit ÷ total cost. The local £/ft² is each station's catchment-weighted HM Land Registry £/m² (Price Paid × EPC floor area) over the LSOAs within 800 m — so value reflects the actual neighbourhood, not a broad region. Every assumption is adjustable below." },
     // Filter on profit on cost %. A null appraisal (no dwelling yield) only passes
     // when the floor is effectively off (≤ -100).
     pred: (r, c) => c.minProfitOnCost == null ? true
       : (r._viab.profitOnCost == null ? c.minProfitOnCost <= -100
         : r._viab.profitOnCost >= c.minProfitOnCost) },
-  { key: "deliverability", title: "7 · Deliverability",
-    pred: (r, c) => r._deliv >= (c.minDeliverability || 0) },
-  { key: "ranking", title: "8 · Rank & shortlist", pred: () => true },
 ];
 
 function siftSortKey() {
   return {
-    yield: r => r.yield || 0, benefit: r => r.benefit || 0,
-    viability: r => r._viab.score, deliverability: r => r._deliv,
-    composite: r => r._composite,
-  }[SIFT.sort] || (r => r.yield || 0);
+    yield: r => r.yield || 0,
+    regen: r => r.regen || 0,
+    viability: r => r._viab.profitOnCost == null ? -1e9 : r._viab.profitOnCost,
+  }[SIFT.sort] || (r => r._viab.profitOnCost == null ? -1e9 : r._viab.profitOnCost);
 }
 
 // Rows passing every step predicate up to and including stepIdx, sorted.
@@ -6544,7 +6546,7 @@ function siftNumField(id, label, val, step, tip) {
 
 // Controls HTML for one step only (keeps the panel uncluttered).
 function siftStepControlsHTML(key) {
-  const A = SIFT.assumptions, C = SIFT.crit, W = SIFT.weights;
+  const A = SIFT.assumptions, C = SIFT.crit;
   const chk = v => v ? " checked" : "";
   switch (key) {
     case "connectivity":
@@ -6554,7 +6556,7 @@ function siftStepControlsHTML(key) {
         `<label class="dd-row"><input type="checkbox" id="sc-exempt"${chk(C.exemptInSettlement)}> <span>Exempt in-settlement stations (mirror NPPF 'default yes')</span></label>` +
         `<p class="hint" style="margin-top:4px">With the exemption on, the tests above apply only to out-of-settlement stations. Turn it off to gate every station on connectivity (stricter than the NPPF).</p>`;
     case "eligibility":
-      return `<p class="hint">Two-tier NPPF test. Density floor is by connectivity: <strong>50 dph</strong> for well-connected stations, else <strong>40 dph</strong> — applied to the net developable area.</p>` +
+      return `<p class="hint">Two-tier NPPF test. 'In settlement' = the 800 m catchment is ≥40% built-up (OS Open Built-Up Areas), or ≥20% with built-up land within 100 m — a robust rule that no longer mislabels dense urban stations. Density floor by connectivity: <strong>50 dph</strong> well-connected, else <strong>40 dph</strong>.</p>` +
         `<label class="dd-row"><input type="checkbox" id="sift-tierA"${chk(C.tierA)}> <span>Tier A · in-settlement</span></label>` +
         `<label class="dd-row"><input type="checkbox" id="sift-tierB"${chk(C.tierB)}> <span>Tier B · well-connected, out-of-settlement (Green Belt permitted)</span></label>` +
         `<label class="dd-row"><input type="checkbox" id="sift-inelig"${chk(C.ineligible)}> <span>Include ineligible</span></label>`;
@@ -6562,12 +6564,13 @@ function siftStepControlsHTML(key) {
       return `<p class="hint">Net developable area within 800 m after erasing built-up land, green space, transport (roads + railway curtilage), flood zone 3 and hard environmental designations.</p>` +
         siftNumField("sift-minha", "Min developable ha", C.minDevHa || 0, 1) +
         siftNumField("sift-minyield", "Min dwelling yield", C.minYield || 0, 50);
-    case "constraints":
-      return `<p class="hint">Hard designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased above. This caps residual soft-constraint friction (conservation areas, AONB, parks &amp; gardens, listed-building settings).</p>` +
-        `<label class="sift-field"><span>Max soft friction <b id="sift-fric-val">${(C.maxFriction).toFixed(2)}</b></span><input type="range" id="sift-maxfric" min="0" max="1" step="0.05" value="${C.maxFriction}"></label>`;
-    case "benefit":
-      return `<p class="hint">Benefit (0–100) = regeneration (catchment deprivation) + sustainable access (amenities + rail connectivity) + housing contribution (yield percentile), equally weighted.</p>` +
-        `<label class="sift-field"><span>Min benefit <b id="sift-benefit-val">${C.minBenefit || 0}</b></span><input type="range" id="sift-minbenefit" min="0" max="100" step="1" value="${C.minBenefit || 0}"></label>`;
+    case "protected":
+      return `<p class="hint">Hard designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased in step 3. This caps how much of the remaining developable land sits under a <strong>soft</strong> designation — conservation areas, AONB / National Landscapes, registered parks &amp; gardens and listed-building settings — which don't block development but add planning friction.</p>` +
+        `<label class="sift-field"><span>Max protected land <b id="sift-prot-val">${Math.round(C.maxProtectedPct)}%</b></span><input type="range" id="sift-maxprot" min="0" max="100" step="5" value="${C.maxProtectedPct}"></label>`;
+    case "regen":
+      return `<p class="hint">Target the most deprived catchments. Each station's catchment deprivation is a national percentile of the population-weighted IMD (2019) of its LSOAs — <strong>100 = most deprived</strong>. Keep only stations in the top X% most deprived.</p>` +
+        `<label class="sift-field"><span>Show top <b id="sift-depriv-val">${Math.round(C.deprivedTopPct)}%</b> most deprived</span><input type="range" id="sift-depriv" min="5" max="100" step="5" value="${C.deprivedTopPct}"></label>` +
+        `<p class="hint" style="margin-top:4px">100% keeps every station; 10% keeps only catchments in the most-deprived national decile.</p>`;
     case "viability":
       return `<p class="hint"><strong>Viability</strong> runs a residual appraisal per scheme: <em>Gross Development Value − (build + soft costs + land)</em> = <strong>profit on cost %</strong>. GDV uses each station's <strong>local sales value</strong> — the catchment-weighted £/m² from HM Land Registry (Price Paid × EPC floor area) over the LSOAs within 800 m, converted to £/ft² — so value reflects the actual neighbourhood, not a broad region. Where local price data isn't loaded yet it falls back to the base £/ft² below.</p>` +
         siftNumField("v-salesadj", "Local price adjustment %", A.salesAdjPct, 5,
@@ -6587,24 +6590,9 @@ function siftStepControlsHTML(key) {
         siftNumField("v-target", "Profit target %", A.profitTargetPct, 0.5,
           "Your required profit on cost. Schemes at/above this are 'viable' (green), down to half of it 'marginal' (amber), below that 'unviable' (red) in the results table.") +
         siftNumField("v-minpoc", "Min profit on cost %", C.minProfitOnCost, 1,
-          "FILTER: only keep stations whose scheme achieves at least this profit on cost. Set it to your profit target to keep only viable schemes, or leave low (e.g. -30) to keep everything and just rank by viability.");
-    case "deliverability":
-      return `<p class="hint"><strong>Deliverability (0–100)</strong> = how buildable the site is in practice. It starts from 100 and is reduced by residual soft-constraint friction (conservation areas, AONB, parks &amp; gardens, listed-building settings covering the developable land); a permitted Tier-B Green Belt site gets a bonus, a Tier-A Green Belt overlap a small penalty. LA land-supply &amp; land-ownership drivers are placeholders pending data.</p>` +
-        siftNumField("d-gb", "Tier-B Green Belt bonus", A.gbTierBBonus, 1,
-          "Points added to deliverability for a well-connected (Tier B) station whose developable land is in the Green Belt — the draft NPPF gives these a 'default yes'.") +
-        siftNumField("d-min", "Min deliverability", C.minDeliverability || 0, 1,
-          "FILTER: only keep stations scoring at least this on deliverability (0–100). Leave at 0 to keep everything and just rank by it.");
-    case "ranking":
-      return `<p class="hint">The final ranking blends the three scored axes — <strong>Benefit × Viability × Deliverability</strong> — into a 0–100 composite using the weights below. Click a row to profile that station.</p>` +
-        siftNumField("w-ben", "Benefit weight", W.benefit, 0.5,
-          "Relative weight of the socio-economic benefit score in the composite.") +
-        siftNumField("w-via", "Viability weight", W.viability, 0.5,
-          "Relative weight of viability (profit on cost, scored 0–100) in the composite.") +
-        siftNumField("w-del", "Deliverability weight", W.deliverability, 0.5,
-          "Relative weight of deliverability in the composite.") +
-        `<label class="sift-field"><span>Rank by</span><select id="sift-sort">` +
-        ["composite:3-axis composite", "yield:Dwelling yield", "benefit:Benefit",
-         "viability:Viability", "deliverability:Deliverability"]
+          "FILTER: only keep stations whose scheme achieves at least this profit on cost. Set it to your profit target to keep only viable schemes, or leave low (e.g. -30) to keep everything and just rank by viability.") +
+        `<label class="sift-field"><span>Rank shortlist by</span><select id="sift-sort">` +
+        ["viability:Viability (profit on cost)", "regen:Regeneration need", "yield:Dwelling yield"]
           .map(o => { const [v, t] = o.split(":"); return `<option value="${v}"${SIFT.sort === v ? " selected" : ""}>${t}</option>`; })
           .join("") + `</select></label>`;
   }
@@ -6615,7 +6603,7 @@ function siftStepControlsHTML(key) {
 // the persistent SIFT state. Absent inputs leave their state untouched.
 function readSiftControls() {
   const g = id => document.getElementById(id);
-  const C = SIFT.crit, A = SIFT.assumptions, W = SIFT.weights;
+  const C = SIFT.crit, A = SIFT.assumptions;
   const numv = (id, d) => { const el = g(id); if (!el) return d; const v = parseFloat(el.value); return isNaN(v) ? d : v; };
   if (g("sc-freq")) C.requireFrequency = g("sc-freq").checked;
   if (g("sc-wc")) C.requireWellConnected = g("sc-wc").checked;
@@ -6625,23 +6613,19 @@ function readSiftControls() {
   if (g("sift-inelig")) C.ineligible = g("sift-inelig").checked;
   if (g("sift-minha")) C.minDevHa = numv("sift-minha", 0);
   if (g("sift-minyield")) C.minYield = numv("sift-minyield", 0);
-  if (g("sift-maxfric")) C.maxFriction = numv("sift-maxfric", 1);
-  if (g("sift-minbenefit")) C.minBenefit = numv("sift-minbenefit", 0);
+  if (g("sift-maxprot")) C.maxProtectedPct = numv("sift-maxprot", 100);
+  if (g("sift-depriv")) C.deprivedTopPct = numv("sift-depriv", 100);
   if (g("v-minpoc")) C.minProfitOnCost = numv("v-minpoc", -30);
-  if (g("d-min")) C.minDeliverability = numv("d-min", 0);
   [["v-sales", "salesPsf"], ["v-salesadj", "salesAdjPct"], ["v-build", "buildPsf"],
    ["v-unit", "unitSizeFt2"], ["v-soft", "softCostPct"], ["v-aff", "affordablePct"],
-   ["v-blv", "blvPerUnit"], ["v-target", "profitTargetPct"], ["d-gb", "gbTierBBonus"]].forEach(([id, key]) => {
+   ["v-blv", "blvPerUnit"], ["v-target", "profitTargetPct"]].forEach(([id, key]) => {
     if (g(id)) A[key] = numv(id, A[key]);
   });
-  if (g("w-ben")) W.benefit = numv("w-ben", 1);
-  if (g("w-via")) W.viability = numv("w-via", 1);
-  if (g("w-del")) W.deliverability = numv("w-del", 1);
   if (g("sift-sort")) SIFT.sort = g("sift-sort").value;
   // live slider labels
   const lbl = (id, v) => { const el = g(id); if (el) el.textContent = v; };
-  if (g("sift-maxfric")) lbl("sift-fric-val", C.maxFriction.toFixed(2));
-  if (g("sift-minbenefit")) lbl("sift-benefit-val", String(C.minBenefit));
+  if (g("sift-maxprot")) lbl("sift-prot-val", Math.round(C.maxProtectedPct) + "%");
+  if (g("sift-depriv")) lbl("sift-depriv-val", Math.round(C.deprivedTopPct) + "%");
   persistSiftConfig();   // remember the configuration across reloads
 }
 
@@ -6650,8 +6634,8 @@ function readSiftControls() {
 function exportSiftCsv() {
   const rows = siftSurvivorsUpTo(SIFT.step);
   const cols = ["rank", "crs", "name", "region", "tier", "density_floor", "developable_ha",
-    "dwelling_yield", "friction", "green_belt_ha", "benefit", "regen", "access", "housing",
-    "viability_profit_on_cost_pct", "viability_rag", "deliverability", "composite"];
+    "dwelling_yield", "protected_land_pct", "green_belt_ha", "regeneration_need_pctile",
+    "viability_profit_on_cost_pct", "viability_rag"];
   const esc = v => {
     const s = v == null ? "" : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -6659,9 +6643,10 @@ function exportSiftCsv() {
   const lines = [cols.join(",")];
   rows.forEach((r, i) => {
     lines.push([i + 1, r.crs, r.name, r.region, r.tier, r.densityFloor ?? "", r.developableHa,
-      r.yield, r.friction ?? "", r.greenBeltHa, r.benefit ?? "", r.regen ?? "", r.access ?? "",
-      r.housing ?? "", r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1),
-      r._viab.rag, Math.round(r._deliv), Math.round(r._composite)].map(esc).join(","));
+      r.yield, r.friction == null ? "" : Math.round(r.friction * 100), r.greenBeltHa,
+      r.regen == null ? "" : Math.round(r.regen),
+      r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1),
+      r._viab.rag].map(esc).join(","));
   });
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -6677,12 +6662,12 @@ function exportShortlistCsv() {
   const rows = SIFT.rows.filter(r => set.has(r.crs));
   scoreSiftRows();
   const cols = ["crs", "name", "region", "tier", "density_floor", "dwelling_yield",
-    "benefit", "viability_profit_on_cost_pct", "deliverability", "composite"];
+    "regeneration_need_pctile", "viability_profit_on_cost_pct"];
   const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const lines = [cols.join(",")];
   rows.forEach(r => lines.push([r.crs, r.name, r.region, r.tier, r.densityFloor ?? "", r.yield,
-    r.benefit ?? "", r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1),
-    Math.round(r._deliv), Math.round(r._composite)].map(esc).join(",")));
+    r.regen == null ? "" : Math.round(r.regen),
+    r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1)].map(esc).join(",")));
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -6707,6 +6692,7 @@ function renderSiftStep() {
   crit.innerHTML =
     `<div class="sift-stepper">${stepper}</div>` +
     `<div class="sift-step-body"><div class="sift-stage-h">${escapeSift(def.title)}</div>` +
+    siftAboutHTML(def) +
     siftStepControlsHTML(def.key) + `</div>` +
     `<div class="sift-nav">` +
     `<button type="button" class="ghost" id="sift-back"${step === 0 ? " disabled" : ""}>← Back</button>` +
@@ -6748,6 +6734,19 @@ function escapeSift(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+// Expandable (collapsed) "about this step" panel: what it is, where it's from
+// (source / quote) and exactly how it's calculated here. Every sift step has one.
+function siftAboutHTML(def) {
+  const a = def.about;
+  if (!a) return "";
+  return `<details class="sift-about"><summary>ⓘ About this step — what it is, its source &amp; how it's calculated</summary>` +
+    `<div class="sift-about-body">` +
+    `<p><b>What it is.</b> ${escapeSift(a.what)}</p>` +
+    `<p><b>Source.</b> ${escapeSift(a.source)}</p>` +
+    `<p><b>How it's calculated here.</b> ${escapeSift(a.calc)}</p>` +
+    `</div></details>`;
+}
+
 // Dispatcher: (re)build the current step, then compute the funnel/table.
 function renderSift() {
   const summary = document.getElementById("sift-summary");
@@ -6764,9 +6763,8 @@ function renderSift() {
 
 // The ranked survivors table (shared by every step).
 function renderSiftTable(surv, results) {
-  const SORT_LABELS = { yield: "dwelling yield", benefit: "benefit", viability: "viability",
-    deliverability: "deliverability", composite: "3-axis composite" };
-  const sortLabel = SORT_LABELS[SIFT.sort] || "composite";
+  const SORT_LABELS = { yield: "dwelling yield", regen: "regeneration need", viability: "viability" };
+  const sortLabel = SORT_LABELS[SIFT.sort] || "viability";
   const top = surv.slice(0, 100);
   const vcell = (r) => {
     const v = r._viab;
@@ -6788,12 +6786,11 @@ function renderSiftTable(surv, results) {
     `<th title="Shortlist — click a row's ★ to pin it. The shortlist is saved in your browser and exportable as CSV."></th>` +
     `<th title="Rank position within the current survivors, ordered by the 'Rank by' setting on the final step.">#</th>` +
     `<th title="Station name and region. Heavy-rail stations from the National Rail dataset (2,019 stations in England).">Station</th>` +
-    `<th title="NPPF tier. A = in a built-up area (OS Open Built Up Areas, point-in-polygon). B = well-connected station outside a settlement (Green Belt permitted). Sets eligibility.">Tier</th>` +
+    `<th title="NPPF tier. A = in-settlement (≥40% of the 800 m catchment is built-up, per OS Open Built-Up Areas — or ≥20% with built-up land within 100 m). B = well-connected station outside a settlement (Green Belt permitted). Sets eligibility.">Tier</th>` +
     `<th title="Dwelling yield = net developable hectares × NPPF density floor (50 dph if well-connected, else 40 dph). Developable ha = 800 m catchment minus built-up land, green space, roads + railway, flood zone 3, and hard environmental designations (PostGIS ST_Difference). Hover a cell for the ha and dph used.">Yield</th>` +
-    `<th title="Socio-economic benefit, 0–100 (equal weight): regeneration = population-weighted catchment IMD deprivation (ONS 2019, LSOA); access = local amenities (GP/school/pharmacy/nursery/bus within 800 m) + rail connectivity percentile; housing = dwelling-yield percentile. Hover a cell for the three components.">Ben</th>` +
-    `<th title="Viability — profit on cost from a residual appraisal (GDV − build − soft costs − land). Sales value scales by region off your base £/ft²; all assumptions are set on step 6. Colour = viable / marginal / unviable vs your profit target.">Via</th>` +
-    `<th title="Deliverability, 0–100. Driven by residual soft-constraint friction (conservation areas, AONB, parks & gardens, listed-building settings covering the developable land); a permitted Tier-B Green Belt site scores a bonus. ⬡ = developable land overlaps Green Belt. LA land-supply & ownership drivers are placeholders pending data.">Del</th>` +
-    `<th title="3-axis composite, 0–100 = your weighted blend of Benefit × Viability × Deliverability (weights on the final step).">Σ</th></tr></thead><tbody>` +
+    `<th title="Regeneration need — the station's catchment deprivation as a national percentile (population-weighted IMD 2019 of LSOAs within 800 m). 100 = most deprived. ⬡ marks developable land in the Green Belt.">Need</th>` +
+    `<th title="Viability — profit on cost from a residual appraisal (GDV − build − soft costs − land). GDV uses each station's local Land Registry £/m²; all assumptions are set on the Viability step. Colour = viable / marginal / unviable vs your profit target.">Via</th>` +
+    `</tr></thead><tbody>` +
     top.map((r, i) =>
       `<tr data-crs="${escapeSift(r.crs)}">` +
       `<td class="sift-star${SIFT.shortlist.has(r.crs) ? " on" : ""}" data-star="${escapeSift(r.crs)}" title="Shortlist">${star(r.crs)}</td>` +
@@ -6801,10 +6798,9 @@ function renderSiftTable(surv, results) {
       `<td>${escapeSift(r.name)}<small>${escapeSift(r.region || r.ttwa)}</small></td>` +
       `<td><span class="sift-tier sift-tier-${r.tier}">${r.tier === "ineligible" ? "—" : r.tier}</span></td>` +
       `<td title="${r.developableHa.toFixed(1)} developable ha · ${r.densityFloor || "?"} dph">${(r.yield || 0).toLocaleString()}</td>` +
-      `<td>${r.benefit == null ? "—" : `<span class="sift-benefit" title="regen ${r.regen ?? "?"} · access ${r.access ?? "?"} · housing ${r.housing ?? "?"}">${Math.round(r.benefit)}</span>`}</td>` +
+      `<td>${r.regen == null ? "—" : `<span class="sift-need" title="catchment IMD percentile ${Math.round(r.regen)} (100 = most deprived)${r.friction == null ? "" : ` · ${Math.round(r.friction * 100)}% protected land`}">${Math.round(r.regen)}</span>`}${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha developable in Green Belt">⬡</span>` : ""}</td>` +
       vcell(r) +
-      `<td>${Math.round(r._deliv)}${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha developable in Green Belt · friction ${r.friction == null ? "—" : r.friction.toFixed(2)}">⬡</span>` : ""}</td>` +
-      `<td><strong>${Math.round(r._composite)}</strong></td></tr>`
+      `</tr>`
     ).join("") +
     `</tbody></table>` +
     (surv.length > 100 ? `<p class="hint">Showing the top 100 by ${sortLabel} of ${surv.length.toLocaleString()}.</p>` : "");
