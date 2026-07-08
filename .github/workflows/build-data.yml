@@ -89,6 +89,12 @@ jobs:
           echo "Adding rural/urban class (England LSOA RUC; Scotland stays null -> density fallback)..."
           python pipeline/build_station_ruc.py || echo "::warning::RUC step failed (non-fatal)"
 
+      - name: Merge house-price choropleth onto the LSOA polygons
+        run: |
+          echo "Joining committed per-LSOA £/m² onto the polygon layer for the"
+          echo "full-map House-prices value overlay (no download; uses points data)..."
+          python pipeline/build_price_choropleth.py || echo "::warning::price choropleth skipped (no LSOA price data present)"
+
       - name: Install tippecanoe (for vector tiles)
         run: pip install tippecanoe
 

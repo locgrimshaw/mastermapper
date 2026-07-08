@@ -40,7 +40,7 @@ KEEP_ATTRS = [
     "lsoa_code", "lsoa_name", "lad_name",
     "income_norm", "employment_norm", "education_norm", "health_norm",
     "crime_norm", "housing_norm", "environment_norm",
-    "price_norm", "price_median", "price_count",
+    "price_norm", "price_ppm2", "price_median", "price_count",
     "population",   # resident population — drives catchment population + density
     "households",   # existing households (≈ occupied dwellings) — existing-homes baseline
 ]
@@ -70,17 +70,19 @@ def write_breaks():
     for d in DOMAINS + ["price"]:
         out[d] = quantiles(f["properties"].get(f"{d}_norm") for f in feats)
 
-    # Price band (16th-84th percentile of medians) for the legend label.
-    medians = sorted(
-        f["properties"]["price_median"]
-        for f in feats
-        if f["properties"].get("price_median") is not None
-    )
-    if medians:
-        out["price_band"] = [
-            medians[int(0.16 * (len(medians) - 1))],
-            medians[int(0.84 * (len(medians) - 1))],
-        ]
+    # Legend bands (16th-84th percentile) for the labels: sale price (£) and,
+    # since the choropleth is ranked by £/m², a £/m² band too.
+    def band(field):
+        vals = sorted(f["properties"][field] for f in feats
+                      if f["properties"].get(field) is not None)
+        if not vals:
+            return None
+        return [vals[int(0.16 * (len(vals) - 1))], vals[int(0.84 * (len(vals) - 1))]]
+
+    if band("price_median"):
+        out["price_band"] = band("price_median")
+    if band("price_ppm2"):
+        out["price_ppm2_band"] = band("price_ppm2")
 
     # Flag whether this is synthetic sample data (codes start with "S"),
     # so the frontend can show the right data-source note without loading

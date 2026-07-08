@@ -1468,16 +1468,28 @@ function buildReport(plot) {
   // freak sale doesn't dominate.
   let priceLine = "";
   if (state.hasPrice) {
-    let wsum = 0, psum = 0, sales = 0;
+    // Prefer £/m² (the value metric the map is coloured by), averaged across the
+    // LSOAs the plot overlaps; weight by sale count when the source carries it,
+    // otherwise a straight mean. Median sale price shown alongside when present.
+    let ppmSum = 0, ppmW = 0, saleSum = 0, saleW = 0, sales = 0;
     for (const o of overlaps) {
-      const m = o.props.price_median, c = o.props.price_count || 0;
-      if (m != null && c > 0) { psum += m * c; wsum += c; sales += c; }
+      const ppm = o.props.price_ppm2, m = o.props.price_median, c = o.props.price_count || 0;
+      const w = c > 0 ? c : 1;
+      if (ppm != null) { ppmSum += ppm * w; ppmW += w; }
+      if (m != null)   { saleSum += m * w; saleW += w; }
+      sales += c;
     }
-    priceLine = wsum > 0
-      ? `<div class="price-line"><span>Median sale price</span>
-           <strong>${priceFmt(psum / wsum)}</strong>
-           <span class="dim">${sales} sales · 2024</span></div>`
-      : `<div class="price-line dim">No 2024 sales recorded in this plot</div>`;
+    if (ppmW > 0) {
+      const salePart = saleW > 0 ? ` · ${priceFmt(saleSum / saleW)} median sale` : "";
+      priceLine = `<div class="price-line"><span>House price</span>
+           <strong>${ppm2Fmt(ppmSum / ppmW)}</strong>
+           <span class="dim">${sales > 0 ? sales + " sales" : ""}${salePart}</span></div>`;
+    } else if (saleW > 0) {
+      priceLine = `<div class="price-line"><span>Median sale price</span>
+           <strong>${priceFmt(saleSum / saleW)}</strong></div>`;
+    } else {
+      priceLine = `<div class="price-line dim">No price data in this plot</div>`;
+    }
   }
 
   const rows = DOMAINS.map(d => {
@@ -1538,11 +1550,14 @@ function inspectLSOA(propsOrCode, point) {
   map.setFilter("lsoa-selected", ["==", "lsoa_code", code]);
 
   const combined = combinedScore(p, state.weights);
-  const priceLine = p.price_median != null
-    ? `<div class="price-line"><span>Median sale price</span>
-         <strong>${priceFmt(p.price_median)}</strong>
-         <span class="dim">${p.price_count} sales · 2024</span></div>`
-    : (state.hasPrice ? `<div class="price-line dim">No 2024 sales recorded</div>` : "");
+  const priceLine = p.price_ppm2 != null
+    ? `<div class="price-line"><span>House price</span>
+         <strong>${ppm2Fmt(p.price_ppm2)}</strong>
+         <span class="dim">${p.price_median != null ? priceFmt(p.price_median) + " median sale" : ""}</span></div>`
+    : (p.price_median != null
+        ? `<div class="price-line"><span>Median sale price</span>
+             <strong>${priceFmt(p.price_median)}</strong></div>`
+        : (state.hasPrice ? `<div class="price-line dim">No price data for this LSOA</div>` : ""));
 
   // Population for the single LSOA (exact — straight from the zone's own
   // figure). Density is omitted here since the floating card is compact; the
@@ -2238,14 +2253,16 @@ function buildLegend() {
   const swatches = ramp.map(c => `<span style="background:${c}"></span>`).join("");
   let header;
   if (state.layer === "price") {
-    const band = state.breaksData?.price_band;
-    const note = band
-      ? `Land Registry 2024 · ${priceFmt(band[0])}–${priceFmt(band[1])} typical band`
-      : `Land Registry 2024`;
+    const ppm2 = state.breaksData?.price_ppm2_band;
+    const sale = state.breaksData?.price_band;
+    const note = ppm2
+      ? `HM Land Registry £/m² · typical ${ppm2Fmt(ppm2[0])}–${ppm2Fmt(ppm2[1])}`
+        + (sale ? ` · sale ${priceFmt(sale[0])}–${priceFmt(sale[1])}` : "")
+      : `HM Land Registry £/m²`;
     header = `
-      <div class="title">Median sale price</div>
+      <div class="title">House price (£/m²)</div>
       <div class="ramp">${swatches}</div>
-      <div class="scale"><span>lower</span><span>higher</span></div>
+      <div class="scale"><span>lower value</span><span>higher value</span></div>
       <div class="legend-note">${note}</div>`;
   } else {
     const breaks = currentBreaks();
@@ -2334,6 +2351,12 @@ function priceFmt(v) {
   if (v == null) return "—";
   if (v >= 1e6) return "£" + (v / 1e6).toFixed(1) + "m";
   return "£" + Math.round(v / 1000) + "k";
+}
+
+// £ per square metre, the value metric the house-price choropleth is ranked by.
+function ppm2Fmt(v) {
+  if (v == null) return "—";
+  return "£" + Math.round(v).toLocaleString() + "/m²";
 }
 
 // ---- Deep dive ------------------------------------------------------------
