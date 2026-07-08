@@ -696,8 +696,11 @@ def build_scotland_file(out_kind, env_var, defaults, mask_27700):
         return None
     print(f"  [{out_kind} · Scotland] reading {path.name} ...")
     try:
+        # Read WITHOUT the spatial mask: these downloads are EPSG:4326 (WFS/ArcGIS
+        # f=geojson) but mask_27700 is in EPSG:27700, so a mask-filtered read would
+        # (wrongly) return nothing. Reproject to 27700, then _finish clips to the mask.
         gdf = _to_27700(_read_source(path, _pick_layer(path, [out_kind, "features", "layer"]),
-                                     mask_27700))
+                                     None))
     except Exception as exc:
         print(f"    read failed: {exc}")
         return None
