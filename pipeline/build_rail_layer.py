@@ -74,11 +74,20 @@ OVERPASS_ENDPOINTS = [
 ]
 
 
-def overpass_query() -> str:
-    """One combined query for all four modes' lines + the non-heavy-rail stops.
-    Heavy-rail stops come from the CSV, so we don't fetch railway=station for
-    plain rail here (avoids dragging in every mainline station unnamed)."""
-    s, w, n, e = GB_BBOX
+# A single GB-wide Overpass query for all rail/subway/light_rail/tram ways is too
+# large and times out, which silently drops every line from the map. Split it into
+# manageable latitude strips (England/Wales, then Scotland) and merge with de-dup.
+LINE_BBOXES = [
+    (49.8, -6.5, 55.9, 1.9),    # England & Wales (the original, known-good box)
+    (55.4, -8.7, 61.1, -1.0),   # Scotland (incl. inner isles); overlaps ~0.5° for de-dup
+]
+
+
+def overpass_query(bbox) -> str:
+    """Combined query for all four modes' lines + the non-heavy-rail stops within
+    ONE bbox. Heavy-rail stops come from the CSV, so we don't fetch railway=station
+    for plain rail here (avoids dragging in every mainline station unnamed)."""
+    s, w, n, e = bbox
     b = f"{s},{w},{n},{e}"
     return f"""
 [out:json][timeout:240];
@@ -118,34 +127,53 @@ def _mode_for_stop(tags: dict) -> str:
     return ""
 
 
-def fetch_osm() -> tuple:
-    """Return (lines, stops) GeoJSON features from OSM, or raise on failure."""
-    query = overpass_query()
-    data = None
+def _overpass_fetch_one(bbox):
+    """Fetch one bbox from Overpass (trying each endpoint), return parsed JSON or
+    raise. Kept small so GB is fetched as strips, not one oversized query."""
+    query = overpass_query(bbox)
     last_err = None
     for endpoint in OVERPASS_ENDPOINTS:
         try:
-            print(f"Querying Overpass: {endpoint}")
+            print(f"Querying Overpass {bbox}: {endpoint}")
             body = urllib.parse.urlencode({"data": query}).encode("utf-8")
             req = urllib.request.Request(
-                endpoint, data=body,
-                headers={"User-Agent": "mastermapper-rail/1.0"},
-            )
+                endpoint, data=body, headers={"User-Agent": "mastermapper-rail/1.0"})
             with urllib.request.urlopen(req, timeout=260) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            break
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+                return json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
             last_err = exc
             print(f"  endpoint failed ({exc}); trying next...")
             time.sleep(2)
-    if data is None:
-        raise RuntimeError(f"All Overpass endpoints failed: {last_err}")
+    raise RuntimeError(f"All Overpass endpoints failed for {bbox}: {last_err}")
+
+
+def fetch_osm() -> tuple:
+    """Return (lines, stops) GeoJSON features from OSM across the GB strips, merged
+    and de-duplicated. Raises only if EVERY strip fails; a single strip failing
+    still returns what the others gave (so lines never silently vanish)."""
+    elements, ok, errs = [], 0, []
+    for bbox in LINE_BBOXES:
+        try:
+            data = _overpass_fetch_one(bbox)
+            elements.extend(data.get("elements", []))
+            ok += 1
+        except RuntimeError as exc:
+            errs.append(str(exc))
+            print(f"  strip {bbox} failed: {exc}")
+    if ok == 0:
+        raise RuntimeError("All Overpass strips failed: " + " | ".join(errs))
 
     lines, stops = [], []
-    for el in data.get("elements", []):
+    seen_lines, seen_stops = set(), set()
+    for el in elements:
         tags = el.get("tags", {})
         etype = el.get("type")
         if etype == "way":
+            eid = el.get("id")
+            if eid is not None:
+                if eid in seen_lines:
+                    continue          # same way returned by an overlapping strip
+                seen_lines.add(eid)
             geom = el.get("geometry")
             if not geom or len(geom) < 2:
                 continue
@@ -164,6 +192,11 @@ def fetch_osm() -> tuple:
                 },
             })
         elif etype == "node":
+            eid = el.get("id")
+            if eid is not None:
+                if eid in seen_stops:
+                    continue
+                seen_stops.add(eid)
             mode = _mode_for_stop(tags)
             if not mode:
                 continue
