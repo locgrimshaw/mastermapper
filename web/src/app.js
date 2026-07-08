@@ -3895,9 +3895,10 @@ async function refreshDevelopable() {
 // the active one highlighted.
 function renderDevelopableSummary() {
   const el = document.getElementById("dd-developable-summary");
+  const hero = document.getElementById("dd-developable-hero");
   if (!el) return;
   const r = deep.developableResult;
-  if (!deep.developableVisible || !r) { el.innerHTML = ""; return; }
+  if (!deep.developableVisible || !r) { el.innerHTML = ""; if (hero) hero.innerHTML = ""; return; }
 
   const catchHa = Number(r.catchment_ha) || 0;
   const devHa = Number(r.developable_ha) || 0;
@@ -3906,12 +3907,27 @@ function renderDevelopableSummary() {
   const pct = catchHa > 0 ? (devHa / catchHa) * 100 : 0;
 
   if (devHa <= 0) {
+    if (hero) hero.innerHTML = `<div class="dd-dev-hero-num">0</div><div class="dd-dev-hero-lbl">no developable land for the current constraints</div>`;
     el.innerHTML = `<p class="hint" style="margin-top:8px">No developable land within this radius for the current constraints — try removing a constraint or widening the radius.</p>`;
     return;
   }
 
   const dw = developableDwellings() || { rural: 0, suburban: 0, urban: 0 };
   const active = activeDevelopableRegime();
+  // Punchy hero: the headline dwelling capacity for the active regime + the two
+  // supporting figures. This is the whole point of the tool, so it leads.
+  if (hero) {
+    const capName = active ? active.charAt(0).toUpperCase() + active.slice(1) : "—";
+    hero.innerHTML =
+      `<div class="dd-dev-hero-main">` +
+        `<div class="dd-dev-hero-num">~${(dw[active] || 0).toLocaleString()}</div>` +
+        `<div class="dd-dev-hero-lbl">potential dwellings · ${capName} density</div>` +
+      `</div>` +
+      `<div class="dd-dev-hero-side">` +
+        `<div><b>${devHa.toFixed(1)}</b><span>ha developable</span></div>` +
+        `<div><b>${pct.toFixed(0)}%</b><span>of catchment</span></div>` +
+      `</div>`;
+  }
   const density = deep.developableDensity;
   const autoClass = autoDevelopableRegime();
   const autoSrc = autoDevelopableRegimeSource();
@@ -3995,11 +4011,12 @@ function developableSectionHTML(station) {
     <label class="dd-bf-check"><input type="checkbox" class="dd-dev-sub" data-kind="${k.key}" ${cfg.subtract[k.key] ? "checked" : ""} /> ${k.label}</label>`).join("");
 
   return `
-      <section class="dd-block" data-section="developable">
+      <section class="dd-block dd-hero" data-section="developable">
         <button class="dd-block-head" type="button" aria-expanded="true">
-          <span class="dd-h">Developable land &amp; capacity</span><span class="dd-caret">▾</span>
+          <span class="dd-h">◆ Developable land &amp; capacity</span><span class="dd-caret">▾</span>
         </button>
         <div class="dd-block-content">
+          <div id="dd-developable-hero" class="dd-dev-hero"></div>
           ${nppfNote}
           <label class="dd-row dd-row-all">
             <input type="checkbox" class="enable" id="dd-developable-show" />
@@ -5525,10 +5542,9 @@ function buildDeepDivePanel(meta) {
     </div>
 
     <div class="dd-body">
+      ${meta.station ? developableSectionHTML(meta.station) : ""}
       ${meta.station ? `<section class="dd-synthesis" id="dd-synthesis"></section>` : ""}
       ${meta.station ? stationSectionHTML(meta.station) : ""}
-
-      ${meta.station ? developableSectionHTML(meta.station) : ""}
 
       <section class="dd-block" data-section="score">
         <button class="dd-block-head" type="button" aria-expanded="true">
@@ -5678,6 +5694,12 @@ function buildDeepDivePanel(meta) {
   // Fetch the precomputed catchment IMD + population and use them as the
   // authoritative Need / Catchment read-outs (consistent with the sift).
   if (meta.station && meta.station.crs) loadStationAssessment(meta.station.crs);
+  // Developable land is the headline of a station profile — auto-run it so the
+  // hero box populates on open (rather than waiting for a manual tick).
+  if (meta.station) {
+    const devCb = panel.querySelector("#dd-developable-show");
+    if (devCb) { devCb.checked = true; toggleDevelopable(true); }
+  }
 }
 
 // Fetch the precomputed station_assessments row for a station profile and use it
