@@ -1,0 +1,82 @@
+name: Load Scotland constraints into Supabase
+
+# Loads Scotland-specific designations into planning_constraints under the SAME
+# canonical kinds as England (sssi, sac, spa, ramsar, ancient_woodland,
+# scheduled_monument, listed_building, conservation_area, park_garden, green_belt,
+# flood_zone_2/3) plus national_scenic_area + national_park. The OS GB base layers
+# (built_land, green_space, transport, water) are NOT here — they come from the
+# normal load-constraints run, whose station clip mask already covers Scotland.
+#
+# Supply a JSON map of {scot_kind: download_url} in `sources`. Each is fetched to
+# data/raw/<scot_kind>.geojson, which build_constraints ingests. Sources (OGL):
+#   NatureScot (opendata.nature.scot): scot_sssi, scot_sac, scot_spa, scot_ramsar,
+#     scot_ancient_woodland, scot_national_scenic_area, scot_national_park
+#   Historic Environment Scotland (portal.historicenvironment.scot):
+#     scot_scheduled_monument, scot_listed_building, scot_conservation_area,
+#     scot_park_garden (gardens & designed landscapes)
+#   Improvement Service / spatialdata.gov.scot: scot_green_belt
+#   SEPA (www2.sepa.scot/flooddata): scot_flood_3 (high), scot_flood_2 (medium)
+# Example sources value:
+#   {"scot_green_belt":"https://…/green_belt.geojson","scot_national_park":"https://…"}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: 'JSON map {scot_kind: url} of Scottish designation downloads'
+        type: string
+        default: "{}"
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Download Scottish sources from the JSON map
+        run: |
+          mkdir -p data/raw
+          python - <<'PY'
+          import json, os, subprocess, sys
+          try:
+              srcs = json.loads(os.environ.get("SOURCES","{}") or "{}")
+          except Exception as e:
+              print("::error::sources is not valid JSON:", e); sys.exit(1)
+          kinds = []
+          for kind, url in srcs.items():
+              if not url: continue
+              out = f"data/raw/{kind}.geojson"
+              print(f"Fetching {kind} <- {url}")
+              rc = subprocess.call(["curl","-fL","--retry","3","--retry-delay","5","-o",out,url])
+              if rc == 0:
+                  kinds.append(kind)
+              else:
+                  print(f"::warning::download failed for {kind}")
+          open("data/raw/_scot_kinds.txt","w").write(",".join(kinds))
+          print("Kinds to build:", ",".join(kinds) or "(none)")
+          PY
+        env:
+          SOURCES: ${{ inputs.sources }}
+
+      - name: Build the Scotland constraints CSV
+        run: |
+          K=$(cat data/raw/_scot_kinds.txt 2>/dev/null || echo "")
+          if [ -z "$K" ]; then echo "::error::No Scottish sources downloaded."; exit 1; fi
+          CONSTRAINT_KINDS="$K" python pipeline/build_constraints.py
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets"; exit 1; fi
+          python supabase/loaders/load_constraints.py

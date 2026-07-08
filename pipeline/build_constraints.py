@@ -649,6 +649,71 @@ def build_water(mask_27700, mask_geom_27700):
     return _finish(gdf, "water", mask_27700, dissolve=True)
 
 
+# Scotland-specific constraint sources. Each Scottish `scot_*` kind ingests a
+# downloaded GeoJSON/Shapefile/GPKG and emits rows under the CANONICAL kind, so
+# Scottish designations sit alongside the English ones in planning_constraints and
+# the developable RPC erases/penalises them with no schema change. The workflow
+# supplies each file (best-effort; missing ones skip). Sources (all OGL):
+#   NatureScot (opendata.nature.scot / ogc.nature.scot WFS): SSSI, SAC, SPA,
+#     Ramsar, Ancient Woodland Inventory, National Scenic Areas, National Parks.
+#   Historic Environment Scotland (portal.historicenvironment.scot): Scheduled
+#     Monuments, Listed Buildings, Conservation Areas, Gardens & Designed Landscapes.
+#   Improvement Service / spatialdata.gov.scot: Green Belts (Scotland).
+#   SEPA (www2.sepa.scot/flooddata): river + coastal flood extents.
+#   scot_kind -> (canonical_kind, env_var, [default filenames])
+SCOTLAND_SOURCES = {
+    "scot_sssi":              ("sssi",               "SCOT_SSSI_SRC",  ["scot_sssi.geojson", "sssi_scotland.geojson"]),
+    "scot_sac":               ("sac",                "SCOT_SAC_SRC",   ["scot_sac.geojson", "sac_scotland.geojson"]),
+    "scot_spa":               ("spa",                "SCOT_SPA_SRC",   ["scot_spa.geojson", "spa_scotland.geojson"]),
+    "scot_ramsar":            ("ramsar",             "SCOT_RAMSAR_SRC",["scot_ramsar.geojson", "ramsar_scotland.geojson"]),
+    "scot_ancient_woodland":  ("ancient_woodland",   "SCOT_AWI_SRC",   ["scot_ancient_woodland.geojson", "awi_scotland.geojson"]),
+    "scot_national_scenic_area": ("national_scenic_area", "SCOT_NSA_SRC", ["scot_nsa.geojson", "national_scenic_areas.geojson"]),
+    "scot_national_park":     ("national_park",      "SCOT_NP_SRC",    ["scot_national_parks.geojson", "national_parks_scotland.geojson"]),
+    "scot_scheduled_monument":("scheduled_monument", "SCOT_SM_SRC",    ["scot_scheduled_monuments.geojson", "scheduled_monuments_scotland.geojson"]),
+    "scot_listed_building":   ("listed_building",    "SCOT_LB_SRC",    ["scot_listed_buildings.geojson", "listed_buildings_scotland.geojson"]),
+    "scot_conservation_area": ("conservation_area",  "SCOT_CA_SRC",    ["scot_conservation_areas.geojson", "conservation_areas_scotland.geojson"]),
+    "scot_park_garden":       ("park_garden",        "SCOT_GDL_SRC",   ["scot_gardens_designed_landscapes.geojson", "gdl_scotland.geojson"]),
+    "scot_green_belt":        ("green_belt",         "SCOT_GREENBELT_SRC", ["scot_green_belt.geojson", "green_belt_scotland.geojson"]),
+    "scot_flood_3":           ("flood_zone_3",       "SCOT_FLOOD_HIGH_SRC", ["sepa_flood_high.geojson", "scot_flood_high.geojson"]),
+    "scot_flood_2":           ("flood_zone_2",       "SCOT_FLOOD_MED_SRC",  ["sepa_flood_medium.geojson", "scot_flood_medium.geojson"]),
+}
+# Also accept a uniform data/raw/<scot_kind>.geojson name so a workflow can
+# download every source without knowing each per-kind default filename.
+for _sk, (_o, _e, _d) in list(SCOTLAND_SOURCES.items()):
+    if f"{_sk}.geojson" not in _d:
+        SCOTLAND_SOURCES[_sk] = (_o, _e, [f"{_sk}.geojson"] + _d)
+
+
+def build_scotland_file(out_kind, env_var, defaults, mask_27700):
+    """Generic ingest of one downloaded Scottish designation file -> canonical
+    `out_kind` rows. Auto-detects CRS (Scottish OS data is usually EPSG:27700;
+    ArcGIS/geojson exports 4326), clips to the station mask, emits MultiPolygons.
+    Line/point inputs (e.g. listed buildings as points) are buffered slightly so
+    they carry a footprint; polygons pass through."""
+    path = _src_path(env_var, defaults)
+    if not path:
+        _skip(out_kind + " (Scotland)", f"downloaded Scottish source for {out_kind}", env_var)
+        return None
+    print(f"  [{out_kind} · Scotland] reading {path.name} ...")
+    try:
+        gdf = _to_27700(_read_source(path, _pick_layer(path, [out_kind, "features", "layer"]),
+                                     mask_27700))
+    except Exception as exc:
+        print(f"    read failed: {exc}")
+        return None
+    if gdf is None or gdf.empty:
+        print("    no features read; skipping.")
+        return None
+    # Point/line designations (some HES listed buildings are points) -> a small
+    # footprint so they register as a constraint. 30 m ~ a building curtilage.
+    gt = gdf.geometry.geom_type
+    nonpoly = ~gt.isin(["Polygon", "MultiPolygon"])
+    if nonpoly.any():
+        gdf.loc[nonpoly, "geometry"] = gdf.loc[nonpoly].geometry.buffer(30)
+    gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
+    return _finish(gdf, out_kind, mask_27700, dissolve=True)
+
+
 def build_flood(zone, mask_27700, mask_geom_27700, mask_geom_4326):
     kind = f"flood_zone_{zone}"
     per = _src_path(f"FLOOD_ZONE_{zone}_SRC", [
@@ -750,6 +815,13 @@ BUILDERS = {
 for _pd_kind in PLANNING_DATA_KINDS:
     BUILDERS[_pd_kind] = (
         lambda m27, g27, g43, _k=_pd_kind: build_planning_data(_k, m27, g43)
+    )
+
+# Scotland-specific ingest kinds -> generic file builder (emit under canonical kind).
+ALL_KINDS = ALL_KINDS + list(SCOTLAND_SOURCES.keys())
+for _sk, (_out, _env, _defs) in SCOTLAND_SOURCES.items():
+    BUILDERS[_sk] = (
+        lambda m27, g27, g43, _o=_out, _e=_env, _d=_defs: build_scotland_file(_o, _e, _d, m27)
     )
 
 

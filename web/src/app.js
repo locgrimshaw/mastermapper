@@ -6350,6 +6350,7 @@ const SIFT = {
           tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
           maxProtectedPct: 100, deprivedTopPct: 100, minProfitOnCost: -30 },
   sort: "viability",   // yield | regen | viability
+  country: mmStore.get("siftCountry", "england"),  // england | scotland (sifted separately)
   assumptions: Object.assign({}, VIABILITY_DEFAULTS),
   shortlist: new Set(mmStore.get("shortlist", [])),  // pinned station CRSs (persisted)
 };
@@ -6440,7 +6441,7 @@ async function loadSiftData() {
     for (;;) {
       const { data: page, error } = await sb
         .from("station_assessments")
-        .select("crs, tier, in_settlement, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, catchment_ppm2, catchment_median_price, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
+        .select("crs, country, tier, in_settlement, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, catchment_ppm2, catchment_median_price, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
         .order("dwelling_yield", { ascending: false })
         .range(from, from + PAGE - 1);
       if (error) throw error;
@@ -6449,7 +6450,7 @@ async function loadSiftData() {
       from += PAGE;
     }
     SIFT.rows = (data || []).map(r => ({
-      crs: r.crs, tier: r.tier, inSettlement: !!r.in_settlement, densityFloor: r.density_floor,
+      crs: r.crs, country: r.country || "england", tier: r.tier, inSettlement: !!r.in_settlement, densityFloor: r.density_floor,
       developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
       wellConnected: !!(r.stations && r.stations.well_connected),
       meetsFrequency: !!(r.stations && r.stations.meets_frequency),
@@ -6547,12 +6548,18 @@ function siftSortKey() {
   }[SIFT.sort] || (r => r._viab.profitOnCost == null ? -1e9 : r._viab.profitOnCost);
 }
 
+// Stations of the currently-selected country (England / Scotland are sifted
+// separately — different frameworks, non-comparable metrics).
+function siftCountryRows() {
+  return SIFT.rows.filter(r => (r.country || "england") === SIFT.country);
+}
+
 // Rows passing every step predicate up to and including stepIdx, sorted.
 function siftSurvivorsUpTo(stepIdx) {
   const c = SIFT.crit;
   scoreSiftRows();
   const steps = SIFT_STEPS.slice(0, stepIdx + 1);
-  const out = SIFT.rows.filter(r => steps.every(s => s.pred(r, c)));
+  const out = siftCountryRows().filter(r => steps.every(s => s.pred(r, c)));
   const key = siftSortKey();
   out.sort((a, b) => key(b) - key(a));
   return out;
@@ -6563,7 +6570,7 @@ function siftSurvivors() { return siftSurvivorsUpTo(SIFT.step); }
 function siftFunnelCounts() {
   const c = SIFT.crit;
   scoreSiftRows();
-  let pool = SIFT.rows;
+  let pool = siftCountryRows();
   return SIFT_STEPS.map(s => { pool = pool.filter(r => s.pred(r, c)); return pool.length; });
 }
 
@@ -6719,7 +6726,9 @@ function renderSiftStep() {
     `<span class="ssc-n">${i + 1}</span><span class="ssc-c">${counts[i].toLocaleString()}</span></button>`).join("");
   const def = SIFT_STEPS[step];
   const last = SIFT_STEPS.length - 1;
+  const csel = (v, label) => `<button type="button" class="sift-country-btn${SIFT.country === v ? " active" : ""}" data-country="${v}">${label}</button>`;
   crit.innerHTML =
+    `<div class="sift-country" title="England and Scotland are sifted separately — different planning frameworks (NPPF vs NPF4) and deprivation indices (IMD vs SIMD), so their metrics are not directly comparable.">${csel("england", "🏴 England")}${csel("scotland", "🏴 Scotland")}</div>` +
     `<div class="sift-stepper">${stepper}</div>` +
     `<div class="sift-step-body"><div class="sift-stage-h">${escapeSift(def.title)}</div>` +
     siftAboutHTML(def) +
@@ -6729,6 +6738,13 @@ function renderSiftStep() {
     `<span class="sift-nav-count" id="sift-stepcount"></span>` +
     `<button type="button" class="plot-mode-btn sift-next" id="sift-next"${step >= last ? " disabled" : ""}>Next →</button>` +
     `</div>`;
+  crit.querySelectorAll(".sift-country-btn").forEach(b =>
+    b.addEventListener("click", () => {
+      if (SIFT.country === b.dataset.country) return;
+      SIFT.country = b.dataset.country;
+      mmStore.set("siftCountry", SIFT.country);
+      renderSift();
+    }));
   crit.querySelectorAll(".sift-step-chip").forEach(b =>
     b.addEventListener("click", () => { SIFT.step = +b.dataset.step; renderSift(); }));
   crit.querySelector("#sift-back").addEventListener("click", () => { if (SIFT.step > 0) { SIFT.step--; renderSift(); } });
@@ -6750,8 +6766,9 @@ function updateSiftFunnel() {
   const surv = siftSurvivorsUpTo(SIFT.step);
   const totalYield = surv.reduce((s, r) => s + (r.yield || 0), 0);
   const stepTitle = SIFT_STEPS[SIFT.step].title.replace(/^\d+ · /, "");
+  const countryTotal = siftCountryRows().length;
   summary.innerHTML =
-    `<strong>${surv.length.toLocaleString()}</strong> of ${SIFT.rows.length.toLocaleString()} stations remain after ` +
+    `<strong>${surv.length.toLocaleString()}</strong> of ${countryTotal.toLocaleString()} ${SIFT.country === "scotland" ? "Scottish" : "English"} stations remain after ` +
     `<em>${escapeSift(stepTitle)}</em> · ~<strong>${totalYield.toLocaleString()}</strong> dwellings`;
   const sc = document.getElementById("sift-stepcount");
   if (sc) sc.textContent = `${surv.length.toLocaleString()} remain`;

@@ -1,0 +1,60 @@
+name: Build SIMD points (Scotland deprivation)
+
+# Builds web/data/simd_points.geojson — one point per Scottish Data Zone carrying
+# SIMD 2020 as 0..100 percentiles (100 = most deprived) + population. This is
+# Scotland's analogue of lsoa_imd_points.geojson. After it commits (redeploying to
+# Pages), http-load public.simd from the published file and run
+# public.rebuild_station_scotland().
+
+on:
+  workflow_dispatch:
+    inputs:
+      simd_arcgis_url:
+        description: "ArcGIS SIMD2020 layer base (…/MapServer/<id>); blank = ScotGov default"
+        type: string
+        default: ""
+      pop_url:
+        description: "Optional Data Zone population CSV URL (data_zone,population)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Fetch optional population CSV
+        run: |
+          mkdir -p data/raw
+          if [ -n "${{ inputs.pop_url }}" ]; then
+            curl -fL --retry 3 --retry-delay 5 -o data/raw/simd_population.csv \
+              "${{ inputs.pop_url }}" || echo "::warning::population CSV download failed"
+          fi
+
+      - name: Build SIMD points
+        env:
+          SIMD_ARCGIS_URL: ${{ inputs.simd_arcgis_url }}
+        run: python pipeline/build_simd.py
+
+      - name: Commit the SIMD points layer
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          if git diff --quiet -- web/data/simd_points.geojson 2>/dev/null && [ -f web/data/simd_points.geojson ]; then
+            echo "No change to simd_points.geojson."
+          else
+            git add -f web/data/simd_points.geojson
+            git commit -m "Build SIMD points (Scotland Data Zone deprivation)" || echo "nothing to commit"
+            git push
+          fi

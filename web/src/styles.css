@@ -217,6 +217,13 @@ html, body {
 .sift-tier-ineligible { background: var(--ink-line); color: var(--text-dim); }
 .sift-gb { color: #2b8a3e; font-weight: 700; }
 
+/* England / Scotland selector — the two sift separately. */
+.sift-country { display: flex; gap: 6px; margin-bottom: 10px; }
+.sift-country-btn { flex: 1 1 0; padding: 6px 8px; border: 1px solid var(--ink-line);
+  background: var(--panel, #fff); border-radius: 7px; cursor: pointer; font-size: 12px;
+  font-weight: 600; color: var(--text-dim); }
+.sift-country-btn.active { border-color: #2f6fb0; background: rgba(47,111,176,0.10); color: #2f6fb0; }
+
 /* Sequential sift wizard: stepper + per-step body + nav. */
 .sift-stepper { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
 .sift-step-chip { flex: 1 1 auto; min-width: 30px; display: flex; flex-direction: column;
