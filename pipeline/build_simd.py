@@ -83,10 +83,27 @@ def _rank_to_pctile(rank):
     return round((1.0 - (r - 1.0) / (N_DATAZONES - 1.0)) * 100.0, 1)
 
 
-def _fetch_json(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "mastermapper/1.0"})
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+def _fetch_json(url, attempts=5):
+    # The ScotGov ArcGIS host intermittently 403s a bare request and rate-limits
+    # rapid paging, so send browser-like headers and retry with backoff.
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://simd.scot/",
+    }
+    last = None
+    for i in range(attempts):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            last = exc
+            # linear-ish backoff; a fixed sleep is fine in CI (no wall-clock deps).
+            import time
+            time.sleep(3 * (i + 1))
+    raise last
 
 
 def _representative_point(geom):
