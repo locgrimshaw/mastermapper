@@ -2,30 +2,28 @@ name: Load Scotland constraints into Supabase
 
 # Loads Scotland-specific designations into planning_constraints under the SAME
 # canonical kinds as England (sssi, sac, spa, ramsar, ancient_woodland,
-# scheduled_monument, listed_building, conservation_area, park_garden, green_belt,
-# flood_zone_2/3) plus national_scenic_area + national_park. The OS GB base layers
-# (built_land, green_space, transport, water) are NOT here — they come from the
-# normal load-constraints run, whose station clip mask already covers Scotland.
-#
-# Supply a JSON map of {scot_kind: download_url} in `sources`. Each is fetched to
-# data/raw/<scot_kind>.geojson, which build_constraints ingests. Sources (OGL):
-#   NatureScot (opendata.nature.scot): scot_sssi, scot_sac, scot_spa, scot_ramsar,
-#     scot_ancient_woodland, scot_national_scenic_area, scot_national_park
-#   Historic Environment Scotland (portal.historicenvironment.scot):
-#     scot_scheduled_monument, scot_listed_building, scot_conservation_area,
-#     scot_park_garden (gardens & designed landscapes)
-#   Improvement Service / spatialdata.gov.scot: scot_green_belt
-#   SEPA (www2.sepa.scot/flooddata): scot_flood_3 (high), scot_flood_2 (medium)
-# Example sources value:
-#   {"scot_green_belt":"https://…/green_belt.geojson","scot_national_park":"https://…"}
+# scheduled_monument, listed_building, conservation_area, park_garden) plus
+# national_scenic_area + national_park. NatureScot (WFS) and Historic Environment
+# Scotland (ArcGIS) are discovered + paged automatically by
+# build_scot_designations.py. Green belt + SEPA flood are optional URL inputs.
+# The OS GB base layers (built_land/green_space/transport/water) come from the
+# normal load-constraints run, whose station mask already covers Scotland.
 
 on:
   workflow_dispatch:
     inputs:
-      sources:
-        description: 'JSON map {scot_kind: url} of Scottish designation downloads'
+      green_belt_url:
+        description: "Optional: Scottish green belt GeoJSON URL"
         type: string
-        default: "{}"
+        default: ""
+      flood_high_url:
+        description: "Optional: SEPA river+coastal HIGH-likelihood flood GeoJSON URL (-> flood_zone_3)"
+        type: string
+        default: ""
+      flood_med_url:
+        description: "Optional: SEPA river+coastal MEDIUM-likelihood flood GeoJSON URL (-> flood_zone_2)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -41,35 +39,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r pipeline/requirements.txt
 
-      - name: Download Scottish sources from the JSON map
+      - name: Download Scottish designations (NatureScot WFS + HES ArcGIS)
+        run: python pipeline/build_scot_designations.py || echo "::warning::some designations failed"
+
+      - name: Fetch optional green belt + SEPA flood
         run: |
           mkdir -p data/raw
-          python - <<'PY'
-          import json, os, subprocess, sys
-          try:
-              srcs = json.loads(os.environ.get("SOURCES","{}") or "{}")
-          except Exception as e:
-              print("::error::sources is not valid JSON:", e); sys.exit(1)
-          kinds = []
-          for kind, url in srcs.items():
-              if not url: continue
-              out = f"data/raw/{kind}.geojson"
-              print(f"Fetching {kind} <- {url}")
-              rc = subprocess.call(["curl","-fL","--retry","3","--retry-delay","5","-o",out,url])
-              if rc == 0:
-                  kinds.append(kind)
-              else:
-                  print(f"::warning::download failed for {kind}")
-          open("data/raw/_scot_kinds.txt","w").write(",".join(kinds))
-          print("Kinds to build:", ",".join(kinds) or "(none)")
-          PY
-        env:
-          SOURCES: ${{ inputs.sources }}
+          if [ -n "${{ inputs.green_belt_url }}" ]; then
+            curl -fL --retry 3 -o data/raw/scot_green_belt.geojson "${{ inputs.green_belt_url }}" || echo "::warning::green belt failed"
+          fi
+          if [ -n "${{ inputs.flood_high_url }}" ]; then
+            curl -fL --retry 3 -o data/raw/scot_flood_3.geojson "${{ inputs.flood_high_url }}" || echo "::warning::flood high failed"
+          fi
+          if [ -n "${{ inputs.flood_med_url }}" ]; then
+            curl -fL --retry 3 -o data/raw/scot_flood_2.geojson "${{ inputs.flood_med_url }}" || echo "::warning::flood med failed"
+          fi
 
       - name: Build the Scotland constraints CSV
         run: |
-          K=$(cat data/raw/_scot_kinds.txt 2>/dev/null || echo "")
-          if [ -z "$K" ]; then echo "::error::No Scottish sources downloaded."; exit 1; fi
+          K=$(cd data/raw && ls scot_*.geojson 2>/dev/null | sed 's/\.geojson$//' | paste -sd, -)
+          if [ -z "$K" ]; then echo "::error::No Scottish designation files produced."; exit 1; fi
+          echo "Building kinds: $K"
           CONSTRAINT_KINDS="$K" python pipeline/build_constraints.py
 
       - name: Load into Supabase
