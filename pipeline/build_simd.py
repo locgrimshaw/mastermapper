@@ -139,7 +139,7 @@ def _load_pop_csv():
 
 
 def main() -> int:
-    base = os.environ.get("SIMD_ARCGIS_URL", DEFAULT_URL).rstrip("/")
+    base = (os.environ.get("SIMD_ARCGIS_URL") or DEFAULT_URL).rstrip("/")
     query = base + "/query"
     pop_csv = _load_pop_csv()
 
