@@ -51,10 +51,13 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          if git diff --quiet -- web/data/simd_points.geojson 2>/dev/null && [ -f web/data/simd_points.geojson ]; then
+          if [ ! -f web/data/simd_points.geojson ]; then
+            echo "::error::simd_points.geojson was not produced."; exit 1
+          fi
+          git add -f web/data/simd_points.geojson
+          if git diff --cached --quiet; then
             echo "No change to simd_points.geojson."
           else
-            git add -f web/data/simd_points.geojson
-            git commit -m "Build SIMD points (Scotland Data Zone deprivation)" || echo "nothing to commit"
+            git commit -m "Build SIMD points (Scotland Data Zone deprivation)"
             git push
           fi
