@@ -131,7 +131,8 @@ const DPH_DEFAULTS = { rural: 40, suburban: 50, urbanOuter: 50, urbanInner: 100 
 const DEVELOPABLE_SUBTRACT_KINDS = [
   { key: "built_land",   label: "Built-up land",  on: true  },
   { key: "green_space",  label: "Green space",    on: true  },
-  { key: "transport",    label: "Transport land", on: true  },
+  { key: "transport",    label: "Roads &amp; rail",  on: true  },
+  { key: "water",        label: "Water bodies",   on: true  },
   { key: "flood_zone_3", label: "Flood zone 3",   on: true  },
   { key: "flood_zone_2", label: "Flood zone 2",   on: false },
   { key: "green_belt",   label: "Green belt",     on: false },

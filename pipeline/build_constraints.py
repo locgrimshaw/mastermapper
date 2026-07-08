@@ -110,7 +110,7 @@ SIMPLIFY_M = 1.0
 # Coordinate precision kept in the output WKT (~0.1 m at 6 dp).
 COORD_DP = 6
 
-ALL_KINDS = ["built_land", "green_space", "transport",
+ALL_KINDS = ["built_land", "green_space", "transport", "water",
              "flood_zone_2", "flood_zone_3", "green_belt",
              # Gate 3 heritage/environmental designations (planning.data.gov.uk,
              # all OGL v3.0, all already EPSG:4326). Hard exclusions remove land;
@@ -244,6 +244,24 @@ def _pick_layer(path, candidates):
                 return l
     # Fall back to the first layer so a single-layer GPKG still reads.
     return layers[0] if layers else None
+
+
+def _pick_layer_strict(path, candidates):
+    """Like _pick_layer but returns None when nothing matches (no first-layer
+    fallback) — for multi-layer containers where the wrong layer must never be
+    grabbed (e.g. picking a water layer out of OS OpenMap Local's ~20 layers)."""
+    layers = _list_layers(path)
+    if not layers:
+        return None
+    low = {l.lower(): l for l in layers}
+    for c in candidates:
+        if c.lower() in low:
+            return low[c.lower()]
+    for c in candidates:
+        for l in layers:
+            if c.lower() in l.lower():
+                return l
+    return None
 
 
 def _read_source(path, layer, mask_geom):
@@ -591,6 +609,46 @@ def build_transport(mask_27700, mask_geom_27700):
     return rows
 
 
+def build_water(mask_27700, mask_geom_27700):
+    """Inland + tidal water bodies (lakes, reservoirs, rivers wide enough to be
+    polygons, estuaries) from OS OpenMap Local — same GeoPackage as the transport
+    roads/rail, so no extra download. These are hard exclusions: you can't build on
+    open water, and they were previously left in the developable area (lakes not
+    subtracted)."""
+    default_openmap = [
+        "os_openmap_local.gpkg", "os_open_map_local.gpkg",
+        "opmplc_gb.gpkg", "openmap_local.gpkg",
+    ]
+    path = _src_path("WATER_SRC", default_openmap) or _src_path("TRANSPORT_ROAD_SRC", default_openmap)
+    if not path:
+        _skip("water", "OS OpenMap Local (SurfaceWater_Area + TidalWater)", "WATER_SRC")
+        return None
+    print(f"  [water] reading water areas from {path.name} ...")
+    frames = []
+    for cand in (["SurfaceWater_Area", "surfacewater_area", "SurfaceWater",
+                  "Surface_Water_Area", "surface_water", "surfacewater"],
+                 ["TidalWater", "tidalwater", "Tidal_Water", "tidal_water"]):
+        layer = _pick_layer_strict(path, cand)
+        if not layer:
+            continue
+        try:
+            g = _to_27700(_read_source(path, layer, mask_geom_27700))
+        except Exception as exc:
+            print(f"    ({cand[0]} read failed: {exc})")
+            continue
+        if g is not None and not g.empty:
+            g = g[g.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
+            print(f"    {len(g)} features from layer {layer!r}")
+            if not g.empty:
+                frames.append(g)
+    if not frames:
+        print("    no SurfaceWater_Area / TidalWater layers found; skipping water.")
+        return None
+    gdf = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=27700)
+    # dissolve=True: merge adjacent water polygons into few corridors/bodies.
+    return _finish(gdf, "water", mask_27700, dissolve=True)
+
+
 def build_flood(zone, mask_27700, mask_geom_27700, mask_geom_4326):
     kind = f"flood_zone_{zone}"
     per = _src_path(f"FLOOD_ZONE_{zone}_SRC", [
@@ -682,6 +740,7 @@ BUILDERS = {
     "built_land": lambda m27, g27, g43: build_built_land(m27, g27),
     "green_space": lambda m27, g27, g43: build_green_space(m27, g27),
     "transport": lambda m27, g27, g43: build_transport(m27, g27),
+    "water": lambda m27, g27, g43: build_water(m27, g27),
     "flood_zone_2": lambda m27, g27, g43: build_flood(2, m27, g27, g43),
     "flood_zone_3": lambda m27, g27, g43: build_flood(3, m27, g27, g43),
     "green_belt": lambda m27, g27, g43: build_green_belt(m27, g43),

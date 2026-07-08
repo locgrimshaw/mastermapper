@@ -113,13 +113,18 @@ jobs:
           osdl BuiltUpAreas   BUILT_LAND_SRC
           osdl OpenGreenspace GREEN_SPACE_SRC
           # OpenMap Local is a 3.3 GB GeoPackage — only fetch it when 'transport'
-          # is explicitly requested via the kinds input (keeps default runs fast).
-          if echo "${{ inputs.kinds }}" | grep -q transport; then
+          # or 'water' is requested via the kinds input (both read it; keeps
+          # default runs fast). Roads + rail (transport) AND water bodies come from
+          # this one file.
+          if echo "${{ inputs.kinds }}" | grep -qE 'transport|water'; then
             osdl OpenMapLocal TRANSPORT_ROAD_SRC
             rd=$(find data/raw/os/OpenMapLocal -iname '*.gpkg' 2>/dev/null | head -1)
-            if [ -n "$rd" ]; then echo "TRANSPORT_RAIL_SRC=$rd" >> "$GITHUB_ENV"; fi
+            if [ -n "$rd" ]; then
+              echo "TRANSPORT_RAIL_SRC=$rd" >> "$GITHUB_ENV"
+              echo "WATER_SRC=$rd" >> "$GITHUB_ENV"
+            fi
           else
-            echo "transport not in kinds -> skipping the 3.3 GB OpenMap Local download."
+            echo "transport/water not in kinds -> skipping the 3.3 GB OpenMap Local download."
           fi
           # --- EA Flood Map for Planning Flood Zones (best effort) ------------
           # The Defra DSP national download is not a stable unauthenticated URL;
