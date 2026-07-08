@@ -174,8 +174,12 @@ let greenbeltAttributionShown = false;
 function defaultDevelopableConfig() {
   const subtract = {};
   for (const k of DEVELOPABLE_SUBTRACT_KINDS) subtract[k.key] = k.on;
-  return { radius_m: 800, inner_radius_m: 200, subtract };
+  // minPlotAc: drop developable plots below this many acres (0 = keep all).
+  // largestOnly: keep only the single largest contiguous developable plot.
+  return { radius_m: 800, inner_radius_m: 200, subtract, minPlotAc: 0, largestOnly: false };
 }
+
+const M2_PER_ACRE = 4046.856;
 
 // A MapLibre 'match' expression mapping the per-feature `mode` attribute to its
 // colour. Used for both line-colour and stop-fill so a mode reads consistently.
@@ -3685,6 +3689,8 @@ async function loadDevelopable() {
     radius_m: cfg.radius_m,
     inner_radius_m: cfg.inner_radius_m,
     subtract: developableSubtractArray(),
+    min_plot_m2: (cfg.minPlotAc > 0 ? cfg.minPlotAc * M2_PER_ACRE : 0),
+    largest_only: !!cfg.largestOnly,
   };
   const { data, error } = await sb.rpc("developable_land_near_station", params);
   if (error) {
@@ -4018,6 +4024,15 @@ function developableSectionHTML(station) {
             <span class="dd-dev-sub-label">Subtract constraints</span>
             <div class="dd-dev-checks">${subs}</div>
           </div>
+          <div class="dd-bf-filters">
+            <label class="dd-bf-filter" title="Ignore developable plots smaller than this. Filters out the awkward little green fragments that can't realistically be developed at scale. 0 = keep every plot.">
+              <span>Min plot (acres)</span>
+              <input type="number" id="dd-developable-minplot" min="0" max="50" step="0.25" value="${cfg.minPlotAc}" />
+            </label>
+            <label class="dd-bf-check" title="Keep only the single largest contiguous developable plot in the catchment (ignores the scatter of smaller parcels).">
+              <input type="checkbox" id="dd-developable-largest" ${cfg.largestOnly ? "checked" : ""} /> Largest plot only
+            </label>
+          </div>
           <div class="dd-bf-filters dd-dev-dph">
             <label class="dd-bf-filter"><span>Rural dph</span><input type="number" id="dd-dph-rural" min="1" max="1000" value="${dph.rural}" /></label>
             <label class="dd-bf-filter"><span>Suburban dph</span><input type="number" id="dd-dph-suburban" min="1" max="1000" value="${dph.suburban}" /></label>
@@ -4050,6 +4065,19 @@ function wireDevelopableControls(panel) {
       deep.developable.subtract[e.target.dataset.kind] = e.target.checked;
       refreshDevelopable();
     });
+  });
+
+  const minPlot = panel.querySelector("#dd-developable-minplot");
+  if (minPlot) minPlot.addEventListener("change", (e) => {
+    const v = parseFloat(e.target.value);
+    deep.developable.minPlotAc = (isNaN(v) || v < 0) ? 0 : v;
+    refreshDevelopable();
+  });
+
+  const largest = panel.querySelector("#dd-developable-largest");
+  if (largest) largest.addEventListener("change", (e) => {
+    deep.developable.largestOnly = e.target.checked;
+    refreshDevelopable();
   });
 
   const regime = panel.querySelector("#dd-developable-regime");
