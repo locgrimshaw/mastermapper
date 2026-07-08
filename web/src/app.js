@@ -873,6 +873,11 @@ const MAP_OVERLAYS = [
   { key: "flood",             label: "Flood zones 2 & 3",       color: "#1c7ed6", kinds: ["flood_zone_2", "flood_zone_3"] },
   { key: "transport",         label: "Transport corridors (road + rail)", color: "#868e96", kinds: ["transport"] },
   { key: "brownfield",        label: "Brownfield sites",        color: "#e8590c", brownfield: true },
+  // Public land ownership (context overlay). Genuinely-open OGL sources today are
+  // the public forest estates; Network Rail / MoD / councils need HM Land
+  // Registry's licensed National Polygon Service (£20k/yr) to map owner->parcel.
+  { key: "land_forestry",     label: "Public land — forest estate (Forestry England + FLS)", color: "#2b8a3e",
+    ownership: true, bodies: ["forestry_england", "forestry_scotland"] },
 ];
 const OVERLAY_MIN_ZOOM = 10.5;      // below this, the bbox is too big to fetch
 const overlayState = {};            // key -> { on: bool }
@@ -933,6 +938,8 @@ async function fetchMapOverlay(key) {
   try {
     const { data, error } = def.brownfield
       ? await sb.rpc("brownfield_in_bbox", { w, s, e, n })
+      : def.ownership
+      ? await sb.rpc("land_ownership_in_bbox", { p_bodies: def.bodies || null, w, s, e, n })
       : await sb.rpc("constraints_in_bbox", { p_kinds: def.kinds, w, s, e, n });
     if (error) throw error;
     const fc = data || { type: "FeatureCollection", features: [] };

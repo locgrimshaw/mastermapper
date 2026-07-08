@@ -1,0 +1,59 @@
+name: Load public land ownership
+
+# Loads public-body land-ownership polygons into public.land_ownership for the
+# "Public land ownership" map overlay. Genuinely-open OGL sources today: Forestry
+# England Ownership + National Forest Estate Ownership Scotland (Forestry
+# Commission Open Data / ArcGIS Hub). Network Rail / MoD / councils need HM Land
+# Registry's licensed National Polygon Service to link owner->polygon (£20k/yr) —
+# they can be added under the same schema later.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fe_url:
+        description: "Forestry England Ownership GeoJSON URL"
+        type: string
+        default: "https://hub.arcgis.com/api/download/v1/items/88527fff4fcb4e08b8e90a43979ffc87/geojson?layers=0"
+      fls_url:
+        description: "National Forest Estate Ownership Scotland GeoJSON URL"
+        type: string
+        default: "https://hub.arcgis.com/api/download/v1/items/f5b65ef014464c16b24f4cfc9c9a5bf6/geojson?layers=0"
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Download Forestry ownership layers
+        run: |
+          mkdir -p data/raw
+          if [ -n "${{ inputs.fe_url }}" ]; then
+            curl -fL --retry 3 --retry-delay 5 -o data/raw/land_forestry_england.geojson "${{ inputs.fe_url }}" \
+              || echo "::warning::Forestry England download failed"
+          fi
+          if [ -n "${{ inputs.fls_url }}" ]; then
+            curl -fL --retry 3 --retry-delay 5 -o data/raw/land_forestry_scotland.geojson "${{ inputs.fls_url }}" \
+              || echo "::warning::Forestry Scotland download failed"
+          fi
+          echo "=== downloaded ==="; ls -lh data/raw/land_forestry_*.geojson 2>/dev/null || true
+
+      - name: Build the land-ownership import CSV
+        run: python pipeline/build_land_ownership.py
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets"; exit 1; fi
+          python supabase/loaders/load_land_ownership.py
