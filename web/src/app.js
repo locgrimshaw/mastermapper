@@ -521,6 +521,34 @@ async function loadData() {
     },
   });
 
+  // Scotland SIMD choropleth (Data Zone polygons in the same pmtiles, layer
+  // 'simd'). Same source + same combined-score paint as England — access_norm
+  // is baked in as environment_norm so no per-country colour maths is needed.
+  // Renders nothing if the tiles predate SIMD (harmless).
+  map.addLayer({
+    id: "simd-fill",
+    type: "fill",
+    source: "lsoa",
+    "source-layer": "simd",
+    paint: {
+      "fill-color": fillColorExpression(),
+      "fill-opacity": state.imdOn ? state.fillOpacity : 0,
+      "fill-outline-color": fillColorExpression(),
+    },
+  });
+  map.addLayer({
+    id: "simd-line",
+    type: "line",
+    source: "lsoa",
+    "source-layer": "simd",
+    layout: { visibility: state.imdOn ? "visible" : "none" },
+    paint: {
+      "line-color": LINE_COLOR(),
+      "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0, 11, 0.4, 14, 0.7, 17, 1.2],
+      "line-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0, 11, 0.5, 14, 0.8, 17, 0.9],
+    },
+  });
+
   // Highlight outline for the LSOA pinned by click-to-inspect.
   map.addLayer({
     id: "lsoa-selected",
@@ -824,10 +852,10 @@ function buildGreenbeltToggle(count) {
 // flip opacity, not visibility. The boundary line and legend follow.
 function setImdVisible(on) {
   state.imdOn = on;
-  if (map.getLayer("lsoa-fill"))
-    map.setPaintProperty("lsoa-fill", "fill-opacity", on ? state.fillOpacity : 0);
-  if (map.getLayer("lsoa-line"))
-    map.setLayoutProperty("lsoa-line", "visibility", on ? "visible" : "none");
+  for (const id of ["lsoa-fill", "simd-fill"])
+    if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", on ? state.fillOpacity : 0);
+  for (const id of ["lsoa-line", "simd-line"])
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
   const legend = document.getElementById("legend");
   if (legend) legend.style.display = on ? "" : "none";
 }
@@ -987,8 +1015,11 @@ function removeOverlayLayers(key) {
 // only if it matches the fill exactly).
 function applyFillColor() {
   const expr = fillColorExpression();
-  map.setPaintProperty("lsoa-fill", "fill-color", expr);
-  map.setPaintProperty("lsoa-fill", "fill-outline-color", expr);
+  for (const id of ["lsoa-fill", "simd-fill"]) {
+    if (!map.getLayer(id)) continue;
+    map.setPaintProperty(id, "fill-color", expr);
+    map.setPaintProperty(id, "fill-outline-color", expr);
+  }
 }
 
 function restyle() {
@@ -2313,7 +2344,8 @@ function buildLegend() {
     b.addEventListener("click", () => setTheme(b.dataset.theme)));
   el.querySelector("#opacity-slider").addEventListener("input", (e) => {
     state.fillOpacity = parseFloat(e.target.value);
-    map.setPaintProperty("lsoa-fill", "fill-opacity", state.fillOpacity);
+    for (const id of ["lsoa-fill", "simd-fill"])
+      if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", state.fillOpacity);
   });
 }
 
@@ -2334,7 +2366,8 @@ function setTheme(theme) {
     : "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png";
   if (map.getSource("carto")) map.getSource("carto").setTiles([url]);
   // Boundary + selection lines are tuned per theme so areas stay cohesive.
-  if (map.getLayer("lsoa-line")) map.setPaintProperty("lsoa-line", "line-color", LINE_COLOR());
+  for (const id of ["lsoa-line", "simd-line"])
+    if (map.getLayer(id)) map.setPaintProperty(id, "line-color", LINE_COLOR());
   if (map.getLayer("lsoa-selected")) map.setPaintProperty("lsoa-selected", "line-color", SELECT_COLOR());
   // Rail line/stop fill colours are per-mode (theme-independent); only the
   // stop outline and labels need to flip for contrast against the basemap.
@@ -2731,7 +2764,8 @@ function runDeepDive(catchment, meta) {
   // The mask dims everything outside the catchment, so we keep the choropleth
   // reasonably visible (it shows through inside the catchment) rather than
   // dimming it everywhere.
-  if (state.imdOn && map.getLayer("lsoa-fill")) map.setPaintProperty("lsoa-fill", "fill-opacity", 0.6);
+  if (state.imdOn) for (const id of ["lsoa-fill", "simd-fill"])
+    if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", 0.6);
   closeDetail();
   const bbox = turf.bbox(deep.catchment);
   const rightPad = window.innerWidth <= 720 ? 40 : 420;
@@ -3145,8 +3179,9 @@ function setAccessRow(kind, label, value) {
 function exitDeepDive() {
   deep.active = false;
   clearDeepDiveMapArtifacts();
-  if (map.getLayer("lsoa-fill"))
-    map.setPaintProperty("lsoa-fill", "fill-opacity", state.imdOn ? state.fillOpacity : 0);
+  for (const id of ["lsoa-fill", "simd-fill"])
+    if (map.getLayer(id))
+      map.setPaintProperty(id, "fill-opacity", state.imdOn ? state.fillOpacity : 0);
   setDeepPanelOpen(false);
   const panel = document.getElementById("deepdive-panel");
   if (panel) panel.innerHTML = "";
@@ -5909,16 +5944,32 @@ const plot = {
 // the count of contributing LSOAs. Storing PER-DOMAIN values (not a single
 // number) is what lets the headline score and breakdown update live when the
 // user changes the weighting — exactly like the main map.
+// Zone polygons currently in the tiles across BOTH deprivation layers — England
+// LSOAs (layer 'lsoa') and Scotland Data Zones (layer 'simd') — so catchment
+// aggregations work either side of the border. SIMD's access domain is baked in
+// as environment_norm, so the same per-domain code applies to both.
+function catchmentZoneFeatures() {
+  const out = [];
+  for (const sl of [SOURCE_LAYER, "simd"]) {
+    let fs = [];
+    try { fs = map.querySourceFeatures("lsoa", { sourceLayer: sl }); } catch (_) {}
+    for (const f of fs) out.push(f);
+  }
+  return out;
+}
+// Stable id for a zone feature: England LSOA code or Scotland Data Zone code.
+function zoneId(props) { return (props && (props.lsoa_code || props.data_zone)) || null; }
+
 function areaWeightedScore(catchment) {
   if (!window.turf) return { domains: null, parts: 0 };
-  const feats = map.querySourceFeatures("lsoa", { sourceLayer: SOURCE_LAYER });
+  const feats = catchmentZoneFeatures();
   if (!feats.length) return { domains: null, parts: 0 };
 
   const seen = new Set();
   let totalArea = 0;
   const contribs = [];   // { a, props }
   for (const f of feats) {
-    const code = f.properties && f.properties.lsoa_code;
+    const code = zoneId(f.properties);
     if (!code || seen.has(code)) continue;
     seen.add(code);
     let inter;
@@ -5967,7 +6018,7 @@ function areaWeightedPopulation(catchment) {
   try { area_m2 = turf.area(catchment); } catch (_) { area_m2 = 0; }
   out.area_km2 = area_m2 > 0 ? area_m2 / 1e6 : null;
 
-  const feats = map.querySourceFeatures("lsoa", { sourceLayer: SOURCE_LAYER });
+  const feats = catchmentZoneFeatures();
   if (!feats.length) return out;
 
   const seen = new Set();
@@ -5981,7 +6032,7 @@ function areaWeightedPopulation(catchment) {
   let ppmSum = 0, ppmW = 0, mpSum = 0, mpW = 0;
   for (const f of feats) {
     const props = f.properties || {};
-    const code = props.lsoa_code;
+    const code = zoneId(props);
     if (!code || seen.has(code)) continue;
     seen.add(code);
 

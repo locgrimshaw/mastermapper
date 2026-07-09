@@ -35,7 +35,7 @@ jobs:
       # inputs, not site assets — drop only those so each deploy stays small.
       - name: Trim build-only data from the publish folder
         run: |
-          rm -f web/data/lsoa_imd.geojson web/data/rail.geojson
+          rm -f web/data/lsoa_imd.geojson web/data/rail.geojson web/data/simd.geojson
           echo "Publishing web/ with:"
           ls -lh web/data/ || true
       - uses: actions/upload-pages-artifact@v3

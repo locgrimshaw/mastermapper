@@ -32,7 +32,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "web" / "data" / "simd_points.geojson"
+OUT = ROOT / "web" / "data" / "simd_points.geojson"      # Data Zone CENTROIDS (DB + catchment)
+OUT_POLY = ROOT / "web" / "data" / "simd.geojson"        # Data Zone POLYGONS (map choropleth)
 RAW = ROOT / "data" / "raw"
 
 # ScotGov SIMD2020 layer (Data Zone polygons + ranks). Override via env.
@@ -155,29 +156,72 @@ def _load_pop_csv():
     return out
 
 
+def _object_ids(query):
+    """All OBJECTIDs for the layer. Offset paging (resultOffset) on the ScotGov
+    SIMD layer silently caps at ~4,000 of 6,976 zones; harvesting by objectId
+    batches instead returns every zone. Returns (ids, oid_field) or ([], None)."""
+    url = query + "?" + urllib.parse.urlencode({"where": "1=1", "returnIdsOnly": "true", "f": "json"})
+    try:
+        data = _fetch_json(url)
+    except Exception as exc:
+        print(f"  SIMD id-query failed: {exc}")
+        return [], None
+    if isinstance(data, dict) and data.get("error"):
+        print(f"  SIMD id-query error: {data['error']}")
+        return [], None
+    return data.get("objectIds") or [], data.get("objectIdFieldName") or "OBJECTID"
+
+
+def _iter_pages(query):
+    """Yield GeoJSON feature pages covering every zone. Prefers objectId batches
+    (complete); falls back to offset paging if the id-query is unavailable."""
+    ids, oid_field = _object_ids(query)
+    if ids:
+        print(f"  SIMD: {len(ids)} object ids -> harvesting in batches")
+        for i in range(0, len(ids), PAGE):
+            chunk = ids[i:i + PAGE]
+            params = {"objectIds": ",".join(str(x) for x in chunk),
+                      "outFields": "*", "returnGeometry": "true",
+                      "outSR": "4326", "f": "geojson"}
+            try:
+                data = _fetch_json(query + "?" + urllib.parse.urlencode(params))
+            except Exception as exc:
+                print(f"  SIMD batch {i} failed: {exc}"); continue
+            if isinstance(data, dict) and data.get("error"):
+                print(f"  SIMD batch {i} error: {data['error']}"); continue
+            yield data.get("features", [])
+        return
+    # Fallback: offset paging.
+    print("  SIMD: no object ids returned — falling back to offset paging")
+    offset = 0
+    while True:
+        params = {"where": "1=1", "outFields": "*", "returnGeometry": "true",
+                  "outSR": "4326", "f": "geojson",
+                  "resultOffset": offset, "resultRecordCount": PAGE}
+        try:
+            data = _fetch_json(query + "?" + urllib.parse.urlencode(params))
+        except Exception as exc:
+            print(f"  SIMD fetch failed at offset {offset}: {exc}"); break
+        page = data.get("features", [])
+        if not page:
+            break
+        yield page
+        if len(page) < PAGE:
+            break
+        offset += PAGE
+
+
 def main() -> int:
     base = (os.environ.get("SIMD_ARCGIS_URL") or DEFAULT_URL).rstrip("/")
     query = base + "/query"
     pop_csv = _load_pop_csv()
 
-    feats = []
-    offset = 0
+    points, polys = [], []     # centroid features (DB) + polygon features (choropleth)
     fld_map = None
-    while True:
-        params = {
-            "where": "1=1", "outFields": "*", "returnGeometry": "true",
-            "outSR": "4326", "f": "geojson",
-            "resultOffset": offset, "resultRecordCount": PAGE,
-        }
-        url = query + "?" + urllib.parse.urlencode(params)
-        try:
-            data = _fetch_json(url)
-        except Exception as exc:
-            print(f"  SIMD fetch failed at offset {offset}: {exc}")
-            break
-        page = data.get("features", [])
+    seen = set()
+    for page in _iter_pages(query):
         if not page:
-            break
+            continue
         if fld_map is None:
             keys = list((page[0].get("properties") or {}).keys())
             fld_map = {
@@ -196,12 +240,13 @@ def main() -> int:
             g = f.get("geometry")
             if not g:
                 continue
+            dz = (p.get(fld_map["dz"]) or "").strip()
+            if not dz or dz in seen:
+                continue
             pt = _representative_point(g)
             if not pt:
                 continue
-            dz = (p.get(fld_map["dz"]) or "").strip()
-            if not dz:
-                continue
+            seen.add(dz)
             pop = None
             if fld_map["pop"] and p.get(fld_map["pop"]) not in (None, ""):
                 try:
@@ -216,23 +261,30 @@ def main() -> int:
             for dom in RANK_COLS:
                 col = fld_map.get(dom)
                 props[f"{dom}_norm"] = _rank_to_pctile(p.get(col)) if col else None
-            feats.append({"type": "Feature",
-                          "geometry": {"type": "Point", "coordinates": pt},
-                          "properties": props})
-        print(f"  fetched {len(page)} zones (offset {offset}); total {len(feats)}")
-        if len(page) < PAGE:
-            break
-        offset += PAGE
+            points.append({"type": "Feature",
+                           "geometry": {"type": "Point", "coordinates": pt},
+                           "properties": props})
+            # Polygon feature for the map choropleth (only real polygon geometry).
+            if g.get("type") in ("Polygon", "MultiPolygon"):
+                polys.append({"type": "Feature", "geometry": g, "properties": props})
+        print(f"  total zones so far: {len(points)}")
 
-    if not feats:
+    if not points:
         print("No SIMD features built (check SIMD_ARCGIS_URL / network). Nothing written.")
         return 1
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("w", encoding="utf-8") as fh:
-        json.dump({"type": "FeatureCollection", "features": feats}, fh, separators=(",", ":"))
-    n_pop = sum(1 for f in feats if f["properties"]["population"] is not None)
-    print(f"Wrote {OUT.relative_to(ROOT)}: {len(feats)} Data Zones ({n_pop} with population).")
+        json.dump({"type": "FeatureCollection", "features": points}, fh, separators=(",", ":"))
+    n_pop = sum(1 for f in points if f["properties"]["population"] is not None)
+    print(f"Wrote {OUT.relative_to(ROOT)}: {len(points)} Data Zones ({n_pop} with population).")
+
+    if polys:
+        with OUT_POLY.open("w", encoding="utf-8") as fh:
+            json.dump({"type": "FeatureCollection", "features": polys}, fh, separators=(",", ":"))
+        print(f"Wrote {OUT_POLY.relative_to(ROOT)}: {len(polys)} Data Zone polygons (map choropleth).")
+    else:
+        print("  (no polygon geometry returned — simd.geojson not written; choropleth needs it)")
     return 0
 
 

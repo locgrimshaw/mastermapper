@@ -27,8 +27,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "web" / "data" / "lsoa_imd.geojson"
 RAIL_SRC = ROOT / "web" / "data" / "rail.geojson"   # optional overlay (lines+stations)
+SIMD_SRC = ROOT / "web" / "data" / "simd.geojson"   # optional Scotland SIMD Data-Zone polygons
 OUT = ROOT / "web" / "data" / "lsoa.pmtiles"
 BREAKS = ROOT / "web" / "data" / "breaks.json"
+
+# Scotland SIMD Data Zone attributes kept in the tiles. SIMD's 7th domain is
+# 'access to services' (access_norm); we ALIAS it to environment_norm so the
+# frontend's single combined-score / choropleth expression colours the England
+# (lsoa) and Scotland (simd) layers identically — only the label differs per
+# country. data_zone doubles as the layer's stable id (like lsoa_code).
+SIMD_KEEP = ["data_zone", "council_name", "population", "overall_norm",
+             "income_norm", "employment_norm", "education_norm", "health_norm",
+             "crime_norm", "housing_norm", "environment_norm", "access_norm"]
 
 DOMAINS = ["income", "employment", "education", "health",
            "crime", "housing", "environment"]
@@ -123,6 +133,16 @@ def write_breaks():
         except (ValueError, KeyError):
             pass
 
+    # Flag Scotland SIMD presence so the frontend enables the 'simd' choropleth
+    # layer. SIMD norms are 0-100 percentiles like IMD, so the England colour
+    # breaks apply unchanged — we only need to know the layer is there.
+    if SIMD_SRC.exists():
+        try:
+            simd = json.loads(SIMD_SRC.read_text())
+            out["meta"]["simd"] = {"zones": len(simd.get("features", []))}
+        except (ValueError, KeyError):
+            pass
+
     BREAKS.write_text(json.dumps(out))
     print(f"Wrote {BREAKS} (colour breaks for {len(feats)} features)")
 
@@ -176,11 +196,34 @@ def main() -> int:
         except (ValueError, KeyError) as exc:
             print(f"Could not read {RAIL_SRC.name} ({exc}); building without rail.")
 
+    # Optional Scotland SIMD choropleth layer (Data Zone polygons). Same shape as
+    # the England lsoa layer — a separate source-layer 'simd' the frontend colours
+    # with the same combined-score expression. access_norm is aliased to
+    # environment_norm so no per-country colour maths is needed.
+    simd_layer_flags = []
+    if SIMD_SRC.exists():
+        try:
+            sgj = json.loads(SIMD_SRC.read_text())
+            sfeats = sgj.get("features", [])
+            for f in sfeats:
+                props = f.get("properties", {})
+                if props.get("environment_norm") is None and props.get("access_norm") is not None:
+                    props["environment_norm"] = props["access_norm"]   # shared 7th slot
+                f["properties"] = {k: props[k] for k in SIMD_KEEP if k in props}
+            simd_trimmed = ROOT / "web" / "data" / "_simd_trimmed.geojson"
+            simd_trimmed.write_text(json.dumps(sgj))
+            rail_tmp.append(simd_trimmed)
+            simd_layer_flags = ["-L", "simd:" + str(simd_trimmed)]
+            print(f"SIMD overlay: {len(sfeats)} Data Zone polygons -> layer 'simd'.")
+        except (ValueError, KeyError) as exc:
+            print(f"Could not read {SIMD_SRC.name} ({exc}); building without SIMD.")
+
     cmd = [
         "tippecanoe",
         "-o", str(OUT),
         "-f",                       # overwrite if exists
         "-L", "lsoa:" + str(lsoa_trimmed),   # trimmed choropleth layer
+        *simd_layer_flags,
         "-Z", "5",                  # min zoom (whole-of-England view)
         "-z", "14",                 # max zoom — deeper so close-up stays crisp
         # --- Border integrity (fixes the "fragmented / gappy" look) ----------

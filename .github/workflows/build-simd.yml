@@ -55,9 +55,17 @@ jobs:
             echo "::error::simd_points.geojson was not produced."; exit 1
           fi
           git add -f web/data/simd_points.geojson
-          if git diff --cached --quiet; then
-            echo "No change to simd_points.geojson."
+          # Data Zone POLYGONS for the map choropleth (baked into tiles by
+          # build_tiles.py, then trimmed from the Pages publish like lsoa_imd).
+          if [ -f web/data/simd.geojson ]; then
+            git add -f web/data/simd.geojson
+            echo "Staged simd.geojson ($(du -h web/data/simd.geojson | cut -f1))"
           else
-            git commit -m "Build SIMD points (Scotland Data Zone deprivation)"
+            echo "::warning::simd.geojson (polygons) not produced — the map choropleth needs it."
+          fi
+          if git diff --cached --quiet; then
+            echo "No change to SIMD layers."
+          else
+            git commit -m "Build SIMD Scotland deprivation (Data Zone points + choropleth polygons)"
             git push
           fi
