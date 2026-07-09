@@ -18,6 +18,18 @@ on:
         description: "Optional override URL for National Forest Estate Ownership Scotland GeoJSON (else auto-tries the known ArcGIS Hub forms)"
         type: string
         default: ""
+      ns_url:
+        description: "Optional override URL for NatureScot National Nature Reserves GeoJSON (else auto-tries the ArcGIS Hub item)"
+        type: string
+        default: ""
+      ces_url:
+        description: "Crown Estate Scotland rural-estates GeoJSON URL (from the CES Spatial Hub — no reliable default, so supply it here)"
+        type: string
+        default: ""
+      hes_url:
+        description: "Optional override URL for HES Properties in Care GeoJSON (else auto-tries the inspire.hes.scot query endpoints)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -72,7 +84,31 @@ jobs:
             "https://hub.arcgis.com/api/download/v1/items/${FLS_ITEM}/geojson?layers=0" \
             || echo "::warning::Forestry Scotland download failed (all candidate URLs)"
 
-          echo "=== downloaded ==="; ls -lh data/raw/land_forestry_*.geojson 2>/dev/null || true
+          # --- Scotland Tier-A public bodies ----------------------------------
+          echo "=== NatureScot (National Nature Reserves) ==="
+          NS_ITEM=822047d5c80c4a6d9019c26897bc250f
+          fetch_first data/raw/land_naturescot.geojson \
+            "${{ inputs.ns_url }}" \
+            "https://opendata.arcgis.com/api/v3/datasets/${NS_ITEM}_0/downloads/data?format=geojson&spatialRefId=4326" \
+            "https://hub.arcgis.com/api/download/v1/items/${NS_ITEM}/geojson?layers=0" \
+            || echo "::warning::NatureScot NNR download failed"
+
+          echo "=== Crown Estate Scotland (rural estates) ==="
+          # No stable anonymous item id known — supply ces_url from the CES Spatial
+          # Hub (crown-estate-scotland-spatial-hub-coregis.hub.arcgis.com), else skip.
+          fetch_first data/raw/land_crown_estate_scotland.geojson \
+            "${{ inputs.ces_url }}" \
+            || echo "::warning::Crown Estate Scotland skipped (no ces_url supplied)"
+
+          echo "=== Historic Environment Scotland (Properties in Care) ==="
+          # inspire.hes.scot ArcGIS query endpoints; polygon service first, points fallback.
+          fetch_first data/raw/land_hes_properties_in_care.geojson \
+            "${{ inputs.hes_url }}" \
+            "https://inspire.hes.scot/arcgis/rest/services/HES/Properties_in_care/MapServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson" \
+            "https://inspire.hes.scot/arcgis/rest/services/HES/Properties_in_care_points/MapServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson" \
+            || echo "::warning::HES Properties in Care download failed"
+
+          echo "=== downloaded ==="; ls -lh data/raw/land_*.geojson 2>/dev/null || true
 
       - name: Build the land-ownership import CSV
         run: python pipeline/build_land_ownership.py

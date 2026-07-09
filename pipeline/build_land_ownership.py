@@ -40,10 +40,17 @@ RAW = ROOT / "data" / "raw"
 SIMPLIFY_M = 10.0     # light simplify in EPSG:27700 to keep the table compact
 COORD_DP = 6
 
-# body -> (env var, default filename, human owner label)
+# body -> (env var, default filename, human owner label). All Open Government
+# Licence. Scotland's public estate is unusually open: each landowning public body
+# publishes its own holdings, so we ingest them per-body under the same schema.
 SOURCES = {
-    "forestry_england":  ("LAND_FE_SRC",  "land_forestry_england.geojson",  "Forestry England"),
-    "forestry_scotland": ("LAND_FLS_SRC", "land_forestry_scotland.geojson",  "Forestry and Land Scotland"),
+    "forestry_england":     ("LAND_FE_SRC",  "land_forestry_england.geojson",  "Forestry England"),
+    "forestry_scotland":    ("LAND_FLS_SRC", "land_forestry_scotland.geojson",  "Forestry and Land Scotland"),
+    # Scotland Tier-A public bodies (see docs/DATASETS.md). Polygons only; point
+    # datasets (e.g. some HES monuments) are dropped by _to_multipolygon.
+    "naturescot_scotland":  ("LAND_NS_SRC",  "land_naturescot.geojson",         "NatureScot (National Nature Reserves)"),
+    "crown_estate_scotland":("LAND_CES_SRC", "land_crown_estate_scotland.geojson", "Crown Estate Scotland"),
+    "hes_scotland":         ("LAND_HES_SRC", "land_hes_properties_in_care.geojson", "Historic Environment Scotland (Properties in Care)"),
 }
 
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
