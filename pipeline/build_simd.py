@@ -84,15 +84,16 @@ def _rank_to_pctile(rank):
     return round((1.0 - (r - 1.0) / (N_DATAZONES - 1.0)) * 100.0, 1)
 
 
-def _fetch_json(url, attempts=5):
-    # The ScotGov ArcGIS host intermittently 403s a bare request and rate-limits
-    # rapid paging, so send browser-like headers and retry with backoff.
+def _fetch_json(url, attempts=8):
+    # The ScotGov ArcGIS host intermittently 403s / rate-limits rapid paging, so
+    # send browser-like headers and retry with a longer exponential-ish backoff.
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://simd.scot/",
     }
+    import time
     last = None
     for i in range(attempts):
         try:
@@ -101,9 +102,7 @@ def _fetch_json(url, attempts=5):
                 return json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
             last = exc
-            # linear-ish backoff; a fixed sleep is fine in CI (no wall-clock deps).
-            import time
-            time.sleep(3 * (i + 1))
+            time.sleep(min(45, 4 * (i + 1)))   # back off harder on a 403 storm
     raise last
 
 
@@ -173,26 +172,14 @@ def _object_ids(query):
 
 
 def _iter_pages(query):
-    """Yield GeoJSON feature pages covering every zone. Prefers objectId batches
-    (complete); falls back to offset paging if the id-query is unavailable."""
-    ids, oid_field = _object_ids(query)
-    if ids:
-        print(f"  SIMD: {len(ids)} object ids -> harvesting in batches")
-        for i in range(0, len(ids), PAGE):
-            chunk = ids[i:i + PAGE]
-            params = {"objectIds": ",".join(str(x) for x in chunk),
-                      "outFields": "*", "returnGeometry": "true",
-                      "outSR": "4326", "f": "geojson"}
-            try:
-                data = _fetch_json(query + "?" + urllib.parse.urlencode(params))
-            except Exception as exc:
-                print(f"  SIMD batch {i} failed: {exc}"); continue
-            if isinstance(data, dict) and data.get("error"):
-                print(f"  SIMD batch {i} error: {data['error']}"); continue
-            yield data.get("features", [])
-        return
-    # Fallback: offset paging.
-    print("  SIMD: no object ids returned — falling back to offset paging")
+    """Yield GeoJSON feature pages covering every zone. OFFSET paging is the
+    primary path (proven to work against the ScotGov layer with browser headers);
+    a transient failure stops paging but we keep whatever we already collected
+    rather than losing everything. If offset paging caps short of all 6,976 zones
+    (some ArcGIS servers limit resultOffset — historically ~4,000 here), we TOP UP
+    via objectId batches. The id-query is 403-prone, so it's only a supplement,
+    never the sole source."""
+    got = 0
     offset = 0
     while True:
         params = {"where": "1=1", "outFields": "*", "returnGeometry": "true",
@@ -201,14 +188,32 @@ def _iter_pages(query):
         try:
             data = _fetch_json(query + "?" + urllib.parse.urlencode(params))
         except Exception as exc:
-            print(f"  SIMD fetch failed at offset {offset}: {exc}"); break
+            print(f"  SIMD offset {offset} failed after retries: {exc}"); break
         page = data.get("features", [])
         if not page:
             break
+        got += len(page)
         yield page
         if len(page) < PAGE:
             break
         offset += PAGE
+
+    # Top up any shortfall via objectId batches (main() de-dups by data_zone).
+    if 0 < got < N_DATAZONES:
+        print(f"  offset paging returned {got}/{N_DATAZONES} zones — topping up via object ids")
+        ids, _ = _object_ids(query)
+        for i in range(0, len(ids), PAGE):
+            chunk = ids[i:i + PAGE]
+            params = {"objectIds": ",".join(str(x) for x in chunk),
+                      "outFields": "*", "returnGeometry": "true",
+                      "outSR": "4326", "f": "geojson"}
+            try:
+                data = _fetch_json(query + "?" + urllib.parse.urlencode(params))
+            except Exception as exc:
+                print(f"  topup batch {i} failed: {exc}"); continue
+            if isinstance(data, dict) and data.get("error"):
+                print(f"  topup batch {i} error: {data['error']}"); continue
+            yield data.get("features", [])
 
 
 def main() -> int:
