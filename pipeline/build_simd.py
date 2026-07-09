@@ -216,7 +216,23 @@ def _iter_pages(query):
             yield data.get("features", [])
 
 
+def _direct_pages(url):
+    """Yield a single page from a direct GeoJSON download (a whole
+    FeatureCollection — e.g. an ArcGIS Hub 'download/v1' export or any pre-exported
+    file). Bypasses ArcGIS query paging entirely, which sidesteps the maps.gov.scot
+    rate-limit block: point SIMD_GEOJSON_URL at an alternate host (the govscot
+    ArcGIS Hub item, a mirror, or a committed file's raw URL)."""
+    print(f"  SIMD direct download: {url}")
+    data = _fetch_json(url)
+    feats = data.get("features", []) if isinstance(data, dict) else []
+    print(f"  got {len(feats)} features")
+    yield feats
+
+
 def main() -> int:
+    # Preferred override: a direct GeoJSON URL (SIMD_GEOJSON_URL). Else an ArcGIS
+    # query base (SIMD_ARCGIS_URL), else the ScotGov default.
+    direct = os.environ.get("SIMD_GEOJSON_URL", "").strip()
     base = (os.environ.get("SIMD_ARCGIS_URL") or DEFAULT_URL).rstrip("/")
     query = base + "/query"
     pop_csv = _load_pop_csv()
@@ -224,7 +240,8 @@ def main() -> int:
     points, polys = [], []     # centroid features (DB) + polygon features (choropleth)
     fld_map = None
     seen = set()
-    for page in _iter_pages(query):
+    pages = _direct_pages(direct) if direct else _iter_pages(query)
+    for page in pages:
         if not page:
             continue
         if fld_map is None:

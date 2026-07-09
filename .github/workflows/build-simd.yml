@@ -9,6 +9,10 @@ name: Build SIMD points (Scotland deprivation)
 on:
   workflow_dispatch:
     inputs:
+      simd_geojson_url:
+        description: "Direct GeoJSON download URL (whole FeatureCollection, e.g. a govscot ArcGIS Hub export) — routes around the maps.gov.scot block. Takes priority."
+        type: string
+        default: ""
       simd_arcgis_url:
         description: "ArcGIS SIMD2020 layer base (…/MapServer/<id>); blank = ScotGov default"
         type: string
@@ -44,6 +48,7 @@ jobs:
 
       - name: Build SIMD points
         env:
+          SIMD_GEOJSON_URL: ${{ inputs.simd_geojson_url }}
           SIMD_ARCGIS_URL: ${{ inputs.simd_arcgis_url }}
         run: python pipeline/build_simd.py
 
