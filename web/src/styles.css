@@ -2158,3 +2158,11 @@ footer {
 #layers-tree .info { margin-left: 2px; }
 #layers-tree .info .tip { left: auto; right: -8px; }
 #layers-tree .info .tip::after { left: auto; right: 10px; transform: none; }
+
+/* Click-to-inspect card for dataset overlay features (power assets etc.) */
+.ovp { font: 12px/1.5 var(--font-ui); color: #1c2533; max-width: 300px; }
+.ovp-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.ovp-table { border-collapse: collapse; width: 100%; }
+.ovp-table td { padding: 2px 6px 2px 0; vertical-align: top; }
+.ovp-k { color: #5d6b80; font-family: var(--font-data); font-size: 10.5px; white-space: nowrap; }
+.ovp-v { word-break: break-word; }

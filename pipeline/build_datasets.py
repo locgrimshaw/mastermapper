@@ -650,6 +650,13 @@ def build_power_group():
         if fix.any():
             subs.loc[fix, "geometry"] = subs.loc[fix].geometry.apply(
                 _closed_line_to_polygon)
+        # The frontend renders substations as a CIRCLE layer, which draws
+        # Points only — a polygon footprint would be invisible. Collapse every
+        # non-point to a representative interior point.
+        gt = subs.geometry.geom_type
+        poly = ~gt.isin(["Point"])
+        if poly.any():
+            subs.loc[poly, "geometry"] = subs.loc[poly].geometry.representative_point()
     out["power_substation"] = _emit(
         subs, "power_substation", name_col=name_col, want="any",
         props_fn=lambda f: {"voltage": _cell(f, volt_col),

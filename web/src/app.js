@@ -1051,8 +1051,13 @@ const MAP_OVERLAYS = [
   { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
   { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5 },
   // Power grid
-  { key: "power_line",       group: "grid", label: "Transmission & HV lines (OSM)", color: "#e8590c", dataset: "power_line",       render: "line",  minZoom: 5 },
-  { key: "power_substation", group: "grid", label: "Substations (OSM)",             color: "#d9480f", dataset: "power_substation", render: "point", minZoom: 6 },
+  // Power layers thin by VOLTAGE at wide zooms (via the RPC's numeric prop
+  // filter) — a national view shows the 275/400 kV backbone, zooming in adds
+  // 132 kV then everything — so the row cap almost never bites arbitrarily.
+  { key: "power_line",       group: "grid", label: "Transmission & HV lines (OSM)", color: "#e8590c", dataset: "power_line",       render: "line",  minZoom: 5, lim: 8000,
+    numFilter: z => z < 7 ? { key: "kv", min: 200 } : z < 9.5 ? { key: "kv", min: 90 } : null },
+  { key: "power_substation", group: "grid", label: "Substations (OSM)",             color: "#d9480f", dataset: "power_substation", render: "point", minZoom: 6, lim: 8000,
+    numFilter: z => z < 8 ? { key: "kv", min: 90 } : z < 10.5 ? { key: "kv", min: 20 } : null },
   { key: "gsp_boundary",     group: "grid", label: "Grid Supply Point boundaries",  color: "#845ef7", dataset: "gsp_boundary",     render: "line",  minZoom: 4 },
   { key: "tec_register",     group: "grid", label: "Connection queue (TEC register)", color: "#f59f00", dataset: "tec_register",   render: "point", minZoom: 5 },
   // Site factors
@@ -1097,8 +1102,8 @@ const LAYER_INFO = {
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, graded 0–6b. Greater London only.", source: "TfL / London Datastore (OGL)" },
   la_rents:            { about: "Average monthly private rents by local authority, including per-bedroom breakdowns where published.", source: "ONS Price Index of Private Rents (OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
-  power_line:          { about: "High-voltage transmission and distribution lines; line weight scales with voltage (33–400 kV).", source: "© OpenStreetMap contributors (ODbL)" },
-  power_substation:    { about: "Grid and primary substations — where new large connections plug in.", source: "© OpenStreetMap contributors (ODbL)" },
+  power_line:          { about: "High-voltage lines, weight-scaled by voltage. Wide zooms show the 275/400 kV backbone; zoom in for 132 kV and below. Click a line for its details.", source: "© OpenStreetMap contributors (ODbL)" },
+  power_substation:    { about: "Grid and primary substations — where new large connections plug in. Wide zooms show transmission-scale sites; zoom in for the rest. Click one for its details.", source: "© OpenStreetMap contributors (ODbL)" },
   gsp_boundary:        { about: "Grid Supply Point boundaries — where the national transmission grid hands over to regional distribution networks.", source: "NESO Data Portal (open licence)" },
   tec_register:        { about: "The transmission connection queue: projects holding capacity agreements, with MW and status. Shows where the grid is contested.", source: "NESO TEC Register (open licence)" },
   alc:                 { about: "Agricultural Land Classification grades 1–5. Grades 1–3a are 'best and most versatile' — policy steers development away.", source: "Natural England (OGL v3)" },
@@ -1196,8 +1201,11 @@ async function fetchMapOverlay(key) {
   // needs a refetch for crisper detail; zooming OUT grows the bbox and
   // triggers a refetch naturally.)
   const zsnap = Math.round(zoom * 2) / 2;
+  const nf = def.numFilter ? def.numFilter(zoom) : null;
+  const nfMin = nf ? nf.min : null;
   const c = st.fetched;
-  if (c && vw >= c.w && vs >= c.s && ve <= c.e && vn <= c.n && zsnap <= c.z + 1.5) return;
+  if (c && vw >= c.w && vs >= c.s && ve <= c.e && vn <= c.n && zsnap <= c.z + 1.5
+      && (c.nfMin ?? null) === nfMin) return;
   const dw = (ve - vw) * OVERLAY_FETCH_MARGIN, dh = (vn - vs) * OVERLAY_FETCH_MARGIN;
   const w = vw - dw, s = vs - dh, e = ve + dw, n = vn + dh;
   if (stat) stat.textContent = "…";
@@ -1210,14 +1218,19 @@ async function fetchMapOverlay(key) {
       : def.ownership
       ? await sb.rpc("land_ownership_in_bbox", { p_bodies: def.bodies || null, w, s, e, n, p_zoom })
       : def.dataset
-      ? await sb.rpc("features_in_bbox", { p_dataset: def.dataset, w, s, e, n, p_zoom })
+      ? await sb.rpc("features_in_bbox", { p_dataset: def.dataset, w, s, e, n, p_zoom,
+          lim: def.lim || 4000,
+          p_num_key: nf ? nf.key : null, p_num_min: nfMin })
       : await sb.rpc("constraints_in_bbox", { p_kinds: def.kinds, w, s, e, n, p_zoom });
     if (error) throw error;
     const fc = data || { type: "FeatureCollection", features: [] };
     if (!Array.isArray(fc.features)) fc.features = [];
-    st.fetched = { w, s, e, n, z: zsnap };
+    st.fetched = { w, s, e, n, z: zsnap, nfMin };
     renderOverlay(key, def, fc);
-    if (stat) stat.textContent = `${fc.features.length}`;
+    // A count AT the row cap almost certainly means truncation — say so.
+    const cap = def.lim || (def.dataset ? 4000 : def.ownership ? 3000 : 1500);
+    if (stat) stat.textContent = fc.features.length >= cap
+      ? `${fc.features.length.toLocaleString()}+` : `${fc.features.length.toLocaleString()}`;
   } catch (err) {
     console.error("overlay fetch failed", key, err);
     if (stat) stat.textContent = "err";
@@ -1295,6 +1308,20 @@ function wireOverlayTooltip(key, layerId) {
   });
   map.on("mousemove", layerId, (e) => pop.setLngLat(e.lngLat));
   map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; pop.remove(); });
+  // Click pins a card with EVERY attribute the feature carries (voltage,
+  // operator, substation class, queued MW, ...). Same pattern as brownfield.
+  map.on("click", layerId, (e) => {
+    const p = e.features[0].properties || {};
+    const skip = new Set(["dataset"]);
+    const rows = Object.entries(p)
+      .filter(([k, v]) => !skip.has(k) && v != null && v !== "" && v !== "null")
+      .map(([k, v]) => `<tr><td class="ovp-k">${k}</td><td class="ovp-v">${v}</td></tr>`)
+      .join("");
+    pop.remove();
+    openClickPopup({ closeButton: true, maxWidth: "320px", offset: 10 }, e.lngLat,
+      `<div class="ovp"><div class="ovp-title">${p.name || overlayDef(key)?.label || key}</div>` +
+      `<table class="ovp-table">${rows}</table></div>`);
+  });
 }
 
 // ODbL requires visible attribution while OSM-derived power layers are shown.
