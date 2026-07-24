@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws51-isochrones" />
+  <link rel="stylesheet" href="src/styles.css?v=ws52-stacked-catchments" />
 </head>
 <body>
   <div id="app">
@@ -157,11 +157,12 @@
             <div id="pbsa-feeders"></div>
             <div id="pbsa-catchment" class="pbsa-catchment" hidden>
               <div class="pbsa-sec">Build catchment</div>
-              <p class="hint">Everywhere a student could live and still reach this campus inside the time budget. The zone stays full-strength; the rest of the map fades back.</p>
-              <div class="catch-modes" role="group" aria-label="Catchment mode">
-                <button type="button" class="catch-mode" data-mode="walk">Walk</button>
-                <button type="button" class="catch-mode" data-mode="cycle">Cycle</button>
-                <button type="button" class="catch-mode on" data-mode="rail">Rail + walk</button>
+              <p class="hint">Everywhere a student could live and still reach this campus inside the time budget. Toggle modes to STACK their zones — each draws in its own colour with a translucent fill, and the map outside all of them fades back.</p>
+              <div class="catch-modes" role="group" aria-label="Catchment modes (stackable)">
+                <button type="button" class="catch-mode" data-mode="walk"><i class="cm-dot" style="background:#2f9e44"></i>Walk</button>
+                <button type="button" class="catch-mode" data-mode="cycle"><i class="cm-dot" style="background:#0ca678"></i>Cycle</button>
+                <button type="button" class="catch-mode" data-mode="rail"><i class="cm-dot" style="background:#7048e8"></i>Rail + walk</button>
+                <button type="button" class="catch-mode" data-mode="bus" disabled title="Needs the national bus timetables (BODS) — planned"><i class="cm-dot" style="background:#adb5bd"></i>Bus</button>
               </div>
               <label class="pbsa-crit"><span>Travel time</span>
                 <input type="range" id="catch-mins" min="10" max="60" step="5" value="30" />
@@ -169,8 +170,7 @@
               <label class="catch-precise"><input type="checkbox" id="catch-precise" />
                 <span>Street-network isochrones <span class="cp-dim">— true walkable shapes via free OSM routing (slower to build)</span></span></label>
               <div class="catch-actions">
-                <button type="button" id="catch-build">Build catchment</button>
-                <button type="button" class="ghost" id="catch-clear" hidden>Remove</button>
+                <button type="button" class="ghost" id="catch-clear" hidden>Clear all</button>
               </div>
               <p class="hint" id="catch-note"></p>
             </div>
@@ -278,6 +278,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws51-isochrones"></script>
+  <script type="module" src="src/app.js?v=ws52-stacked-catchments"></script>
 </body>
 </html>

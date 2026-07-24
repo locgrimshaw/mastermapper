@@ -7673,11 +7673,11 @@ const pbsa = {
   data: null,          // uni_rail_access payload
   maxMin: 45,
   minTrains: 10,
-  catchMode: "rail",   // walk | cycle | rail
+  catchModes: { walk: false, cycle: false, rail: false },  // ADDITIVE toggles
+  catchZones: {},      // mode -> built zone (GeoJSON feature)
+  catchSeqs: {},       // mode -> build token (newer build supersedes in-flight)
   catchMins: 30,
-  catchOn: false,
   catchPrecise: false, // true = street-network isochrones instead of rings
-  catchSeq: 0,         // build token: a newer build supersedes in-flight fetches
 };
 
 const PBSA_BANDS = [
@@ -7780,13 +7780,22 @@ function wirePbsaBox() {
     pbsaClearViz();
   });
 
-  // --- Build catchment controls ---
+  // --- Build catchment controls (ADDITIVE: each mode stacks its own zone) ---
   document.querySelectorAll(".catch-mode").forEach(btn =>
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".catch-mode").forEach(b => b.classList.remove("on"));
-      btn.classList.add("on");
-      pbsa.catchMode = btn.dataset.mode;
-      if (pbsa.catchOn) pbsaBuildCatchment(false);
+      if (btn.disabled) return;
+      const m = btn.dataset.mode;
+      const on = !pbsa.catchModes[m];
+      pbsa.catchModes[m] = on;
+      btn.classList.toggle("on", on);
+      if (on) {
+        const firstZone = !Object.values(pbsa.catchZones).some(Boolean);
+        pbsaBuildCatchment(m, firstZone);
+      } else {
+        delete pbsa.catchZones[m];
+        pbsa.catchSeqs[m] = (pbsa.catchSeqs[m] || 0) + 1;   // cancel in-flight build
+        pbsaCatchRedraw();
+      }
     }));
   const catchMins = document.getElementById("catch-mins");
   const catchMinsVal = document.getElementById("catch-mins-val");
@@ -7794,20 +7803,22 @@ function wirePbsaBox() {
   if (catchMins) catchMins.addEventListener("input", () => {
     pbsa.catchMins = parseInt(catchMins.value, 10);
     if (catchMinsVal) catchMinsVal.textContent = `${pbsa.catchMins} min`;
-    if (pbsa.catchOn) {
-      clearTimeout(catchDebounce);
-      catchDebounce = setTimeout(() => pbsaBuildCatchment(false), 350);
-    }
+    clearTimeout(catchDebounce);
+    catchDebounce = setTimeout(pbsaRebuildCatchments, 400);
   });
   const precise = document.getElementById("catch-precise");
   if (precise) precise.addEventListener("change", () => {
     pbsa.catchPrecise = precise.checked;
-    if (pbsa.catchOn) pbsaBuildCatchment(false);
+    pbsaRebuildCatchments();
   });
-  const buildBtn = document.getElementById("catch-build");
-  if (buildBtn) buildBtn.addEventListener("click", () => pbsaBuildCatchment(true));
   const catchClear = document.getElementById("catch-clear");
   if (catchClear) catchClear.addEventListener("click", pbsaCatchClear);
+}
+
+// Rebuild every active mode's zone (slider / precise-toggle changes).
+function pbsaRebuildCatchments() {
+  for (const m of Object.keys(pbsa.catchModes))
+    if (pbsa.catchModes[m]) pbsaBuildCatchment(m, false);
 }
 
 async function pbsaSelect(u) {
@@ -7983,7 +7994,7 @@ const CATCH_CYCLE_MPM = 185;  // effective straight-line metres/min at ~15 km/h
 const CATCH_INTERCHANGE_MIN = 5;
 const CATCH_COLORS = { walk: "#2f9e44", cycle: "#0ca678", rail: "#7048e8" };
 
-async function pbsaBuildCatchment(fit) {
+async function pbsaBuildCatchment(mode, fit) {
   const d = pbsa.data;
   const note = document.getElementById("catch-note");
   if (!d || !d.university) return;
@@ -7991,10 +8002,9 @@ async function pbsaBuildCatchment(fit) {
     if (note) note.textContent = "Catchment maths needs the Turf library, which didn't load — check the network and refresh.";
     return;
   }
-  const seq = ++pbsa.catchSeq;          // newer build supersedes this one
+  const seq = pbsa.catchSeqs[mode] = (pbsa.catchSeqs[mode] || 0) + 1;
   const uni = d.university;
   const T = pbsa.catchMins;
-  const mode = pbsa.catchMode;
   const circle = (lng, lat, meters) =>
     turf.circle([lng, lat], Math.max(meters, 150) / 1000, { steps: 40, units: "kilometers" });
 
@@ -8048,15 +8058,15 @@ async function pbsaBuildCatchment(fit) {
     const restSites = ordered.slice(MAX_ISO);
     let isoReal = 0, isoApprox = 0;
     for (let i = 0; i < isoSites.length; i++) {
-      if (pbsa.catchSeq !== seq) return;          // superseded mid-fetch
-      if (note) note.textContent = `Fetching street isochrones… ${i + 1}/${isoSites.length}`;
+      if (pbsa.catchSeqs[mode] !== seq) return;   // superseded mid-fetch
+      if (note) note.textContent = `Fetching ${mode} street isochrones… ${i + 1}/${isoSites.length}`;
       const s2 = isoSites[i];
       let poly = null;
       try {
         poly = await fetchIsochrone(s2.lng, s2.lat, isoMode,
           Math.max(2, Math.round(s2.mins)), { forceNetwork: true });
       } catch (_) {}
-      if (pbsa.catchSeq !== seq) return;
+      if (pbsa.catchSeqs[mode] !== seq) return;
       if (poly && !(poly.properties && (poly.properties._approx || poly.properties._circle))) {
         discs.push(poly); isoReal++;
       } else {
@@ -8086,12 +8096,10 @@ async function pbsaBuildCatchment(fit) {
     if (!merged) { try { merged = turf.union(zone, discs[i]); } catch (_) {} }
     if (merged) zone = merged;
   }
-  if (!zone || pbsa.catchSeq !== seq) return;
+  if (!zone || pbsa.catchSeqs[mode] !== seq) return;
 
-  pbsaCatchDraw(zone, CATCH_COLORS[mode]);
-  pbsa.catchOn = true;
-  const clearBtn = document.getElementById("catch-clear");
-  if (clearBtn) clearBtn.hidden = false;
+  pbsa.catchZones[mode] = zone;
+  pbsaCatchRedraw();
   if (note) note.textContent = noteText;
   if (fit) {
     try {
@@ -8110,40 +8118,68 @@ function pbsaCatchMask(zone) {
            geometry: { type: "Polygon", coordinates: [worldRing, ...outers] } };
 }
 
-function pbsaCatchDraw(zone, color) {
-  const maskF = pbsaCatchMask(zone);
+const CATCH_MODE_ORDER = ["walk", "cycle", "rail"];
+
+function _pbsaCatchLayerIds() {
+  const ids = ["pbsa-catch-dim"];
+  for (const m of CATCH_MODE_ORDER) ids.push(`pbsa-catch-${m}-fill`, `pbsa-catch-${m}-line`);
+  return ids;
+}
+
+// Redraw the whole catchment stack from pbsa.catchZones. Layer order matters:
+// translucent mode fills first (so overlaps blend), then the dim mask (holes =
+// union of every active zone), then each mode's boundary line on top.
+function pbsaCatchRedraw() {
+  for (const id of _pbsaCatchLayerIds()) if (map.getLayer(id)) map.removeLayer(id);
+  const active = CATCH_MODE_ORDER.filter(m => pbsa.catchZones[m]);
+  const clearBtn = document.getElementById("catch-clear");
+  if (!active.length) {
+    for (const m of CATCH_MODE_ORDER)
+      if (map.getSource(`pbsa-catch-${m}`)) map.removeSource(`pbsa-catch-${m}`);
+    if (map.getSource("pbsa-catch-mask")) map.removeSource("pbsa-catch-mask");
+    if (clearBtn) clearBtn.hidden = true;
+    const note = document.getElementById("catch-note");
+    if (note && !Object.values(pbsa.catchModes).some(Boolean)) note.textContent = "";
+    return;
+  }
   const setOrAdd = (id, data) => {
     if (map.getSource(id)) map.getSource(id).setData(data);
     else map.addSource(id, { type: "geojson", data });
   };
-  setOrAdd("pbsa-catch-mask", maskF);
-  setOrAdd("pbsa-catch", zone);
-  // Mask goes on TOP of every current layer (no beforeId) so the whole map —
-  // basemap, choropleths, overlays — fades back outside the zone. Data layers
-  // toggled later insert beneath the station dots, so they stay under it too.
-  if (!map.getLayer("pbsa-catch-dim"))
-    map.addLayer({ id: "pbsa-catch-dim", type: "fill", source: "pbsa-catch-mask",
-      paint: { "fill-color": "#0b0d10", "fill-opacity": 0.5 } });
-  // Thick boundary: white casing + mode colour, crisp on any background.
-  if (!map.getLayer("pbsa-catch-case"))
-    map.addLayer({ id: "pbsa-catch-case", type: "line", source: "pbsa-catch",
+  // Translucent fills, in a fixed order so colours blend predictably.
+  for (const m of active) {
+    setOrAdd(`pbsa-catch-${m}`, pbsa.catchZones[m]);
+    map.addLayer({ id: `pbsa-catch-${m}-fill`, type: "fill", source: `pbsa-catch-${m}`,
+      paint: { "fill-color": CATCH_COLORS[m], "fill-opacity": 0.16 } });
+  }
+  // Dim wash outside the UNION of every active zone.
+  let union = pbsa.catchZones[active[0]];
+  for (let i = 1; i < active.length; i++) {
+    let merged = null;
+    try { merged = turf.union(turf.featureCollection([union, pbsa.catchZones[active[i]]])); } catch (_) {}
+    if (!merged) { try { merged = turf.union(union, pbsa.catchZones[active[i]]); } catch (_) {} }
+    if (merged) union = merged;
+  }
+  setOrAdd("pbsa-catch-mask", pbsaCatchMask(union));
+  map.addLayer({ id: "pbsa-catch-dim", type: "fill", source: "pbsa-catch-mask",
+    paint: { "fill-color": "#0b0d10", "fill-opacity": 0.5 } });
+  // Boundary lines above the mask, one colour per mode.
+  for (const m of active) {
+    map.addLayer({ id: `pbsa-catch-${m}-line`, type: "line", source: `pbsa-catch-${m}`,
       layout: { "line-join": "round" },
-      paint: { "line-color": "#ffffff", "line-width": 6, "line-opacity": 0.85 } });
-  if (!map.getLayer("pbsa-catch-line"))
-    map.addLayer({ id: "pbsa-catch-line", type: "line", source: "pbsa-catch",
-      layout: { "line-join": "round" },
-      paint: { "line-color": color, "line-width": 3, "line-opacity": 0.95 } });
-  else map.setPaintProperty("pbsa-catch-line", "line-color", color);
+      paint: { "line-color": CATCH_COLORS[m], "line-width": 2.8, "line-opacity": 0.95 } });
+  }
+  if (clearBtn) clearBtn.hidden = false;
 }
 
 function pbsaCatchClear() {
-  pbsa.catchOn = false;
-  for (const id of ["pbsa-catch-dim", "pbsa-catch-case", "pbsa-catch-line"])
-    if (map.getLayer(id)) map.removeLayer(id);
-  for (const id of ["pbsa-catch-mask", "pbsa-catch"])
-    if (map.getSource(id)) map.removeSource(id);
-  const clearBtn = document.getElementById("catch-clear");
-  if (clearBtn) clearBtn.hidden = true;
+  for (const m of Object.keys(pbsa.catchModes)) {
+    pbsa.catchModes[m] = false;
+    pbsa.catchSeqs[m] = (pbsa.catchSeqs[m] || 0) + 1;    // cancel in-flight builds
+  }
+  pbsa.catchZones = {};
+  document.querySelectorAll(".catch-mode").forEach(b => b.classList.remove("on"));
+  pbsaCatchRedraw();
   const note = document.getElementById("catch-note");
   if (note) note.textContent = "";
 }
