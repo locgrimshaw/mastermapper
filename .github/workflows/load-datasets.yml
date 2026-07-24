@@ -161,6 +161,7 @@ jobs:
           ALC_SRC: ${{ vars.ALC_SRC }}
           WATER_SRC: ${{ vars.WATER_SRC }}
           HESA_STUDENTS_SRC: ${{ vars.HESA_STUDENTS_SRC }}
+          HDT_SRC: ${{ vars.HDT_SRC }}
         run: |
           echo "Building supabase/datasets_import.csv (DATASETS='${DATASETS}')"
           python pipeline/build_datasets.py

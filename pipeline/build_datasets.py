@@ -182,7 +182,7 @@ ALL_DATASETS = [
     "uni_campus", "uni_campus_site", "uni_building", "ptal",
     "power_line", "power_substation", "gsp_boundary", "tec_register",
     "ukpn_sites", "nged_sites",
-    "lad_boundary", "la_rents", "alc", "water_availability",
+    "lad_boundary", "la_rents", "alc", "water_availability", "hdt",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -1306,6 +1306,81 @@ def build_rents_group():
     return out
 
 
+def build_hdt():
+    """Housing Delivery Test measurements joined onto LAD polygons — the
+    strongest single NPPF approval signal (<75% delivery triggers the
+    presumption in favour of sustainable development). Supply the latest
+    published HDT measurement CSV as HDT_SRC or a drop-in `hdt.csv`."""
+    key = "hdt"
+    hpath, hhow = _resolve_source(key, ["HDT_SRC"], None, "hdt.csv")
+    if hpath is None:
+        _warn(key, "no HDT CSV — download the latest Housing Delivery Test "
+                   "measurement from gov.uk (search 'housing delivery test "
+                   "measurement') and drop it in as hdt.csv or set HDT_SRC.")
+        _note(key, "HDT_SRC not set")
+        return {}
+    bpath, bhow = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries to join HDT onto")
+        _note(key, "no LAD boundaries")
+        return {}
+    print(f"  [{key}] reading {hpath.name} ({hhow}) ...")
+    df = _read_csv(hpath)
+    print(f"  [{key}] columns: {list(df.columns)[:10]}")
+    code_col = _find_col(df, ["area code", "ons code", "la code", "lpa code",
+                              "code"], contains=True)
+    meas_col = _find_col(df, ["measurement"], contains=True) \
+        or _find_col(df, ["hdt"], contains=True)
+    cons_col = _find_col(df, ["consequence"], contains=True)
+    name_hcol = _find_col(df, ["authority", "name"], contains=True)
+    if meas_col is None:
+        _warn(key, f"no measurement column in {hpath.name}")
+        _note(key, "no measurement column")
+        return {}
+    by_code, by_name = {}, {}
+    for _, r in df.iterrows():
+        m = _num(r, meas_col)
+        if m is None:
+            continue
+        if m <= 2:                      # published as a fraction, not a %
+            m = round(m * 100, 1)
+        entry = {"hdt_pct": m}
+        if cons_col:
+            entry["consequence"] = _cell(r, cons_col)
+        code = _cell(r, code_col) if code_col else ""
+        if code:
+            by_code[code.strip()] = entry
+        nm = _cell(r, name_hcol) if name_hcol else ""
+        if nm:
+            by_name[re.sub(r"[^a-z0-9]", "", nm.lower())] = entry
+    gdf = gpd.read_file(bpath)
+    gcode = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*cd", str(c).lower()):
+            gcode = c
+            break
+    gname = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*nm", str(c).lower()):
+            gname = c
+            break
+
+    def hdt_props(f):
+        e = by_code.get(_cell(f, gcode)) if gcode else None
+        if e is None and gname:
+            e = by_name.get(re.sub(r"[^a-z0-9]", "", _cell(f, gname).lower()))
+        return dict(e) if e else {}
+
+    keep = gdf[gdf.apply(lambda f: bool(hdt_props(f)), axis=1)]
+    print(f"  [{key}] {len(keep)}/{len(gdf)} authorities matched an HDT row")
+    rows = _emit(keep, key, name_col=gname, id_col=gcode, want="polygon",
+                 props_fn=hdt_props)
+    _note(key, hhow, len(rows))
+    return {key: rows}
+
+
 def build_alc():
     key = "alc"
     path, how = _resolve_arcgis_source(key, ["ALC_SRC"], ALC_DEFAULT_URL,
@@ -1396,6 +1471,7 @@ GROUPS = (
         (["lad_boundary", "la_rents"], build_rents_group, []),
         (["alc"], build_alc, []),
         (["water_availability"], build_water_availability, []),
+        (["hdt"], build_hdt, []),
     ]
 )
 

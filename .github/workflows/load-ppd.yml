@@ -1,0 +1,50 @@
+name: Load Price Paid sales into Supabase
+
+# Street-level price granularity: HM Land Registry Price Paid transactions for
+# the last N months (default 12, ~800k sales) as the `ppd_sales` point
+# dataset, geocoded by OS Code-Point Open. Re-run monthly — the loader fully
+# replaces the dataset so the window rolls forward.
+# Data: HM Land Registry Price Paid Data © Crown copyright and database right,
+# under the PPD licence (display use, with attribution).
+
+on:
+  workflow_dispatch:
+    inputs:
+      months:
+        description: "How many months of sales to keep (default 12)"
+        required: false
+        default: "12"
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Build the ppd_sales import CSV
+        env:
+          PPD_MONTHS: ${{ inputs.months }}
+        run: python pipeline/build_ppd.py
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: ppd_sales
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          python supabase/loaders/load_datasets.py

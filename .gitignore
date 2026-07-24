@@ -105,3 +105,6 @@ node_modules/
 !data/raw/water-availability.geojson
 !data/raw/nged-sites.csv
 !data/raw/ukpn-sites.geojson
+!data/raw/hdt.csv
+!data/raw/voa-rents.csv
+!data/raw/gla-ward-rents.csv

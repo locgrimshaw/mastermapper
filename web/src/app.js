@@ -1041,6 +1041,9 @@ const MAP_OVERLAYS = [
   { key: "article4",            group: "policy", label: "Article 4 direction areas",     color: "#c2255c", dataset: "article4",            minZoom: 8 },
   { key: "tpo_zone",            group: "policy", label: "Tree preservation zones",       color: "#2b8a3e", dataset: "tpo_zone",            minZoom: 9 },
   { key: "design_code_area",    group: "policy", label: "Design code areas",             color: "#e8590c", dataset: "design_code_area",    minZoom: 8 },
+  // NPPF approval-likelihood signal: red authorities are in presumption-in-
+  // favour territory — the tilted balance applies to their decisions.
+  { key: "hdt",                 group: "policy", label: "Housing Delivery Test",         color: "#e03131", dataset: "hdt", minZoom: 5 },
   // Universities & students
   { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5, icon: "uni" },
   { key: "uni_campus_site", group: "students", label: "Campus grounds (OSM)",     color: "#9775fa", dataset: "uni_campus_site", minZoom: 8 },
@@ -1048,6 +1051,13 @@ const MAP_OVERLAYS = [
   { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 11, lim: 8000 },
   // Market & boundaries
   { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
+  // Street-level price granularity: every Price Paid transaction in the last
+  // 12 months as a dot, colour-ramped by price. Dense — city zooms only.
+  { key: "ppd_sales",    group: "market", label: "Recent sales (12 months)",  color: "#d64550", dataset: "ppd_sales", render: "point", minZoom: 13, lim: 6000,
+    radius: ["interpolate", ["linear"], ["zoom"], 12, 2.5, 15, 5, 17, 7],
+    cap: { color: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "price"]], 0],
+           100000, "#f7b267", 300000, "#ef8354", 500000, "#d64550",
+           800000, "#a4243b", 1500000, "#6d1a36"] } },
   { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5 },
   // Power grid
   // Power layers thin by VOLTAGE at wide zooms (via the RPC's numeric prop
@@ -1139,6 +1149,8 @@ const LAYER_INFO = {
   alc:                 { about: "Agricultural Land Classification, coloured by grade — deep green Grade 1 (best and most versatile, policy steers development away) through amber Grade 4 and brown Grade 5; greys are urban/non-agricultural.", source: "Natural England (OGL v3)" },
   la_property:         { about: "Property titles owned by local authorities, aggregated to postcode points with a title count. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — green available, amber restricted, red not available. A proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
+  ppd_sales:           { about: "Every registered property sale in the last 12 months as a dot, colour-ramped from amber (~£100k) to deep red (£1.5m+). Street-level price truth beneath the LSOA averages. Positions are postcode-centroid based. Zoom right in — it's dense.", source: "HM Land Registry Price Paid Data © Crown copyright (PPD licence); OS Code-Point Open" },
+  hdt:                 { about: "The Housing Delivery Test: each authority's housing delivery vs target. Red (<75%) triggers the NPPF presumption in favour of sustainable development — the strongest single approval signal; orange = 20% buffer; amber = action plan; green = passing.", source: "MHCLG Housing Delivery Test measurement (OGL v3)" },
 };
 
 const OVERLAY_MIN_ZOOM = 7;           // default floor; per-layer minZoom overrides
@@ -1456,6 +1468,11 @@ function renderOverlay(key, def, fc) {
          "Grade 4", "#e0b64b", "Grade 5", "#a97e56",
          "Non Agricultural", "#b8bfc6", "Urban", "#8d959e",
          "Exclusion", "#d0d4d9", def.color]
+      : def.dataset === "hdt"
+      // NPPF consequence bands: <75% presumption (red), <85% buffer (orange),
+      // <95% action plan (amber), passing (green).
+      ? ["step", ["coalesce", ["to-number", ["get", "hdt_pct"]], 0],
+         "#e03131", 75, "#e8590c", 85, "#f59f00", 95, "#2f9e44"]
       : def.dataset === "la_rents"
       // Sequential rent choropleth: light teal cheap -> deep teal expensive.
       ? ["case", ["!", ["has", "rent_mean"]], "rgba(160,170,175,0.4)",
@@ -2689,6 +2706,19 @@ function hoverContentForOverlay(def, p) {
   } else if (d === "ptal") {
     title = `PTAL ${p.ptal ?? ""}`.trim();
     kind = "Public transport access";
+  } else if (d === "hdt") {
+    title = p.name || "Authority";
+    kind = "Housing Delivery Test";
+    const hp = Number(p.hdt_pct);
+    const band = hp < 75 ? "presumption in favour applies" : hp < 85 ? "20% buffer" : hp < 95 ? "action plan" : "passing";
+    rows = [row(p.hdt_pct != null ? `${p.hdt_pct}%` : null, "delivery vs target"),
+            row(p.consequence || band, "consequence")];
+  } else if (d === "ppd_sales") {
+    const PTYPE = { D: "Detached", S: "Semi-detached", T: "Terraced", F: "Flat", O: "Other" };
+    title = p.price != null ? `£${Number(p.price).toLocaleString()}` : "Sale";
+    kind = [p.date, PTYPE[p.ptype] || p.ptype, p.newb === "Y" ? "new build" : null,
+            p.tenure === "L" ? "leasehold" : "freehold"].filter(Boolean).join(" · ");
+    rows = [row(p.addr, "address")];
   } else if (d === "la_rents") {
     title = p.name || "Local authority";
     rows = [row(p.rent_mean != null ? `£${Number(p.rent_mean).toLocaleString()}/mo` : null, "avg rent"),
