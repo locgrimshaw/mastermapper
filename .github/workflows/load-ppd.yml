@@ -21,7 +21,7 @@ permissions:
 jobs:
   load:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +35,11 @@ jobs:
       - name: Build the ppd_sales import CSV
         env:
           PPD_MONTHS: ${{ inputs.months }}
+          # Optional EPC floor-area join (real £/m² instead of the type-mix
+          # estimate): free account at epc.opendatacommunities.org, then add
+          # these two repository secrets — see docs/MANUAL_TASKS.md 5c.
+          EPC_EMAIL: ${{ secrets.EPC_EMAIL }}
+          EPC_API_KEY: ${{ secrets.EPC_API_KEY }}
         run: python pipeline/build_ppd.py
 
       - name: Load into Supabase

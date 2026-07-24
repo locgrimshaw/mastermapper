@@ -1156,7 +1156,7 @@ const LAYER_INFO = {
   aonb:               { about: "Areas of Outstanding Natural Beauty / National Landscapes — nationally protected landscapes.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity. Sites in public ownership are flagged in the tooltip.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
   price_heat:         { about: "Median sold price over the last 3 years, aggregated into cells that resize with your zoom (~35 km countrywide down to ~550 m street blocks). Pale = cheap, deep red = expensive. Cells with fewer than 3–5 sales are hidden.", source: "HM Land Registry Price Paid Data © Crown copyright (display use, with attribution)" },
-  ppm2_heat:          { about: "ESTIMATED £ per m² over the last 3 years: each sale's price divided by the typical floor area for its property type (detached 104 m², semi 93, terrace 82, flat 57 — English Housing Survey averages), then the cell median. Normalises for housing-stock mix; exact per-sale £/m² arrives with the EPC floor-area join.", source: "HM Land Registry Price Paid Data © Crown copyright; EHS typical floor areas" },
+  ppm2_heat:          { about: "£ per m² over the last 3 years. Where sales address-match an EPC certificate, the cell shows the median of REAL price ÷ measured floor area (hover says how many matched sales). Cells without enough matches fall back to a property-type estimate (detached 104 m², semi 93, terrace 82, flat 57) marked with ~. EPC matching needs the free EPC account secrets — MANUAL_TASKS 5c.", source: "HM Land Registry Price Paid Data © Crown copyright; MHCLG EPC register (floor areas)" },
   spen_sites:         { about: "SP Energy Networks substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "SP Energy Networks open data portal (CC-BY/OGL-style licence)" },
   npg_sites:          { about: "Northern Powergrid substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "Northern Powergrid open data portal" },
   enwl_sites:         { about: "Electricity North West grid & primary substations with published demand headroom — click a dot for the full record.", source: "Electricity North West open data portal" },
@@ -2804,7 +2804,9 @@ function hoverContentForOverlay(def, p) {
   } else if (d === "price_grid") {
     title = p.med != null ? `£${Number(p.med).toLocaleString()} median` : "Price cell";
     kind = "Sold prices — last 3 years";
-    rows = [row(p.ppm2 != null ? `~£${Number(p.ppm2).toLocaleString()}/m²` : null, "est. by type mix"),
+    const epcReal = p.epc === true || p.epc === "true";
+    rows = [row(p.ppm2 != null ? `${epcReal ? "" : "~"}£${Number(p.ppm2).toLocaleString()}/m²` : null,
+                epcReal ? `measured (${p.m2n} EPC-matched sales)` : "est. by type mix"),
             row(p.n != null ? `${Number(p.n).toLocaleString()} sales` : null, "in this cell")];
   } else if (d === "ppd_sales") {
     const PTYPE = { D: "Detached", S: "Semi-detached", T: "Terraced", F: "Flat", O: "Other" };

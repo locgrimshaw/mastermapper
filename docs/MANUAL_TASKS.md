@@ -71,6 +71,22 @@ refresh: hand the new PIPR download to Claude (any format).
    LA-level sheet as CSV (delete preamble rows above the header).
 3. **Drop-in file** named **`ons-la-rents.csv`**.
 
+## 5c. EPC account → REAL £/m² in the sold-price heatmap
+
+The £/m² heatmap currently estimates floor areas from property type. With an
+EPC account it uses each home's actual certificated floor area instead:
+
+1. Register (free) at <https://epc.opendatacommunities.org/> — after signing
+   up, your **API key** is shown on your account page.
+2. Add TWO repository secrets at
+   <https://github.com/locgrimshaw/mastermapper/settings/secrets/actions>:
+   **`EPC_EMAIL`** (the account email) and **`EPC_API_KEY`**.
+3. Re-run the **"Load Price Paid sales into Supabase"** workflow with months
+   = 36. It downloads the national certificate file (~5 GB, stays inside the
+   runner), address-matches every sale, and the heatmap re-aggregates itself
+   — hover a cell to see "measured (N EPC-matched sales)" replace the ~
+   estimates.
+
 ## 6. EA water availability → data-centre water feasibility
 
 1. Go to <https://environment.data.gov.uk/dataset/62514eb5-e9d5-4d96-8b73-a40c5b702d43>
