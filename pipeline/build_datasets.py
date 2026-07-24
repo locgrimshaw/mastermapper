@@ -130,6 +130,10 @@ GSP_DEFAULT_URL = ("https://api.neso.energy/dataset/"
                    "2810092e-d4b2-472f-b955-d8bea01f9ec0/resource/"
                    "5dfab3dd-f192-40ab-b97f-b365a594293c/download/"
                    "gsp_regions_20260209.zip")
+# EA CAMS water availability: no verified stable URL yet — when the operator
+# supplies the zip's download link, set it here (or via WATER_SRC). None means
+# the builder looks for a local data/raw/water-availability.geojson drop-in.
+WATER_DEFAULT_URL = None
 LAD_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
                    "services/Local_Authority_Districts_December_2024_Boundaries"
                    "_UK_BGC/FeatureServer/0/query?where=1%3D1&outFields=*"
@@ -834,13 +838,14 @@ def build_power_group():
     return out
 
 
-def _maybe_unzip_geo(path, key):
+def _maybe_unzip_geo(path, key, prefer=()):
     """If `path` is actually a ZIP (checked by magic bytes, not extension —
     downloads are cached under a fixed name), extract it and return the best
-    vector member: prefer a GeoJSON whose name suggests WGS84/4326 (NESO ships
-    the same layer in British National Grid AND WGS84), else any member whose
-    first coordinate looks like lon/lat (|x| <= 360), else the first vector
-    file. Non-zip paths pass straight through."""
+    vector member. Ranking: 1) a member whose name contains one of the
+    `prefer` tokens (e.g. the EA CAMS zip ships six variants and we want the
+    Q95 low-flow one); 2) a name suggesting WGS84/4326 (NESO ships BNG and
+    WGS84 copies); 3) any member whose first coordinate looks like lon/lat
+    (|x| <= 360); 4) the first vector file. Non-zip paths pass through."""
     import zipfile
     try:
         with open(path, "rb") as fh:
@@ -857,6 +862,11 @@ def _maybe_unzip_geo(path, key):
     if not vecs:
         _warn(key, f"zip source {path.name} holds no vector file")
         return None
+    for tok in prefer:
+        hits = [f for f in vecs if tok.lower() in f.name.lower()]
+        if hits:
+            print(f"  [{key}] zip source: using preferred member {hits[0].name}")
+            return hits[0]
     named = [f for f in vecs if any(t in f.name.lower()
                                     for t in ("wgs84", "wgs_84", "4326"))]
     if named:
@@ -1135,9 +1145,11 @@ def build_alc():
 def build_water_availability():
     key = "water_availability"
     path, how = _resolve_source(key, ["WATER_AVAILABILITY_SRC", "WATER_SRC"],
-                                None, "water-availability.geojson")
+                                WATER_DEFAULT_URL, "water-availability.geojson")
     if path is not None:
-        path = _maybe_unzip_geo(path, key)
+        # The EA CAMS zip carries six variants; Q95 (low-flow availability) is
+        # THE screen for reliable new abstraction, so prefer it.
+        path = _maybe_unzip_geo(path, key, prefer=("q95", "cycle_2"))
     if path is None:
         _warn(key, "no source — set WATER_AVAILABILITY_SRC (or WATER_SRC) to"
                    " the EA CAMS 'water resource availability' GeoJSON/SHP"
