@@ -162,6 +162,10 @@ jobs:
           WATER_SRC: ${{ vars.WATER_SRC }}
           HESA_STUDENTS_SRC: ${{ vars.HESA_STUDENTS_SRC }}
           HDT_SRC: ${{ vars.HDT_SRC }}
+          # PlanIt fair-use tuning: request spacing (seconds) and an optional
+          # authority cap for smoke tests.
+          PLANIT_SLEEP: ${{ vars.PLANIT_SLEEP }}
+          PLANIT_MAX_AUTH: ${{ vars.PLANIT_MAX_AUTH }}
         run: |
           echo "Building supabase/datasets_import.csv (DATASETS='${DATASETS}')"
           python pipeline/build_datasets.py

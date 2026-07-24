@@ -91,7 +91,9 @@ import os
 import re
 import shutil
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -183,6 +185,7 @@ ALL_DATASETS = [
     "power_line", "power_substation", "gsp_boundary", "tec_register",
     "ukpn_sites", "nged_sites",
     "lad_boundary", "la_rents", "alc", "water_availability", "hdt",
+    "planit_rates",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -1381,6 +1384,122 @@ def build_hdt():
     return {key: rows}
 
 
+PLANIT_BASE = "https://www.planit.org.uk/api/applics/json"
+
+
+def _planit_count(params, sleep_s):
+    """One PlanIt count query -> int total, or None on failure. Sleeps
+    sleep_s before every request (their fair-use ask) and honours 429
+    Retry-After."""
+    url = PLANIT_BASE + "?" + urllib.parse.urlencode(params)
+    for attempt in range(3):
+        time.sleep(sleep_s)
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "mastermapper-pipeline/1.0",
+                              "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=90) as r:
+                j = json.loads(r.read().decode("utf-8", "replace"))
+            for k in ("total", "count", "total_results"):
+                v = j.get(k)
+                if isinstance(v, int):
+                    return v
+            print(f"  [planit_rates] unrecognised response keys: "
+                  f"{sorted(j.keys())[:8]}")
+            return None
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                wait = min(int(e.headers.get("Retry-After") or "30"), 180)
+                print(f"  [planit_rates] 429 rate-limited, waiting {wait}s")
+                time.sleep(wait)
+                continue
+            return None
+        except Exception:
+            time.sleep(3 * (attempt + 1))
+    return None
+
+
+def build_planit():
+    """LPA approval rates from PlanIt (planit.org.uk aggregates every
+    council's planning register, OGL-friendly, free with fair-use limits).
+    Three COUNT queries per authority (Permitted / Rejected / Withdrawn,
+    last 3 years) — no application records are pulled, so a national build
+    is ~1,200 tiny requests. Joined onto LAD polygons by name, like HDT.
+    PLANIT_SLEEP (seconds between requests, default 1.2) and
+    PLANIT_MAX_AUTH (bound for smoke tests) tune the run."""
+    key = "planit_rates"
+    bpath, _bhow = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries to join approval rates onto")
+        _note(key, "no LAD boundaries")
+        return {}
+    gdf = gpd.read_file(bpath)
+    gcode = next((c for c in gdf.columns
+                  if re.fullmatch(r"lad\d*cd", str(c).lower())), None)
+    gname = next((c for c in gdf.columns
+                  if re.fullmatch(r"lad\d*nm", str(c).lower())), None)
+    if gname is None:
+        _warn(key, "no LAD name column")
+        _note(key, "no LAD name column")
+        return {}
+
+    sleep_s = float(os.environ.get("PLANIT_SLEEP") or "1.2")
+    max_auth = int(os.environ.get("PLANIT_MAX_AUTH") or "0") or None
+    end = pd.Timestamp.now(tz="UTC").date()
+    start = end - pd.Timedelta(days=3 * 365)
+    window = {"start_date": start.isoformat(), "end_date": end.isoformat(),
+              "pg_sz": 1}
+
+    # England+Wales only (PlanIt coverage): skip Scottish (S...) codes to
+    # save ~100 wasted authorities' worth of requests.
+    rows_src = gdf[~gdf[gcode].astype(str).str.startswith("S")] \
+        if gcode else gdf
+    if max_auth:
+        rows_src = rows_src.head(max_auth)
+
+    stats, missed = {}, []
+    for i, (_, f) in enumerate(rows_src.iterrows()):
+        auth = _cell(f, gname)
+        if not auth:
+            continue
+        got = {}
+        for state in ("Permitted", "Rejected", "Withdrawn"):
+            n = _planit_count({**window, "auth": auth, "app_state": state},
+                              sleep_s)
+            if n is None:
+                break
+            got[state] = n
+        if len(got) < 3 or (got["Permitted"] + got["Rejected"]) == 0:
+            missed.append(auth)
+            continue
+        decided = got["Permitted"] + got["Rejected"]
+        stats[re.sub(r"[^a-z0-9]", "", auth.lower())] = {
+            "approved_3y": got["Permitted"], "refused_3y": got["Rejected"],
+            "withdrawn_3y": got["Withdrawn"],
+            "approval_pct": round(100 * got["Permitted"] / decided, 1),
+            "apps_year": round(decided / 3),
+        }
+        if (i + 1) % 25 == 0:
+            print(f"  [{key}] {i + 1}/{len(rows_src)} authorities queried, "
+                  f"{len(stats)} with data")
+    if missed:
+        print(f"  [{key}] no PlanIt data for {len(missed)} authorities "
+              f"(first few: {missed[:6]})")
+
+    def planit_props(f):
+        e = stats.get(re.sub(r"[^a-z0-9]", "", _cell(f, gname).lower()))
+        return dict(e) if e else {}
+
+    keep = gdf[gdf.apply(lambda f: bool(planit_props(f)), axis=1)]
+    print(f"  [{key}] {len(keep)}/{len(gdf)} authorities matched")
+    rows = _emit(keep, key, name_col=gname, id_col=gcode, want="polygon",
+                 props_fn=planit_props)
+    _note(key, "planit.org.uk counts", len(rows))
+    return {key: rows}
+
+
 def build_alc():
     key = "alc"
     path, how = _resolve_arcgis_source(key, ["ALC_SRC"], ALC_DEFAULT_URL,
@@ -1472,6 +1591,7 @@ GROUPS = (
         (["alc"], build_alc, []),
         (["water_availability"], build_water_availability, []),
         (["hdt"], build_hdt, []),
+        (["planit_rates"], build_planit, []),
     ]
 )
 

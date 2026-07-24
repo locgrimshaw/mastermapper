@@ -1059,6 +1059,8 @@ const MAP_OVERLAYS = [
   // NPPF approval-likelihood signal: red authorities are in presumption-in-
   // favour territory — the tilted balance applies to their decisions.
   { key: "hdt",                 group: "policy", label: "Housing Delivery Test",         color: "#e03131", dataset: "hdt", minZoom: 5 },
+  // Decision culture: share of applications approved over 3 years (PlanIt).
+  { key: "planit_rates",        group: "policy", label: "Approval rates (PlanIt)",       color: "#0b7285", dataset: "planit_rates", minZoom: 5 },
   // Universities & students
   { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5, icon: "uni" },
   { key: "uni_campus_site", group: "students", label: "Campus grounds (OSM)",     color: "#9775fa", dataset: "uni_campus_site", minZoom: 8 },
@@ -1137,6 +1139,7 @@ const LAYER_INFO = {
   conservation_area:  { about: "Areas of special architectural or historic interest where extra planning controls apply.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
   aonb:               { about: "Areas of Outstanding Natural Beauty / National Landscapes — nationally protected landscapes.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity. Sites in public ownership are flagged in the tooltip.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
+  planit_rates:       { about: "Share of planning applications APPROVED over the last 3 years per authority (approved ÷ (approved + refused); withdrawn excluded). Local decision culture in one number — pair with the Housing Delivery Test for the full NPPF picture.", source: "PlanIt (planit.org.uk) aggregation of council planning registers" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
   grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },
   sssi:               { about: "Sites of Special Scientific Interest — statutory wildlife and geology designation; a hard constraint on development.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
@@ -1506,6 +1509,11 @@ function renderOverlay(key, def, fc) {
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "rent_mean"]], 0],
           500, "#d5eef0", 800, "#a3d8dc", 1100, "#6dbcc5", 1500, "#3c96a6",
           2000, "#20707f", 3000, "#0d4a5c"]]
+      : def.dataset === "planit_rates"
+      // Approval-rate choropleth: red = refusal-happy, green = permissive.
+      ? ["case", ["!", ["has", "approval_pct"]], "rgba(160,170,175,0.4)",
+         ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "approval_pct"]], 0],
+          60, "#e03131", 75, "#f59f00", 85, "#ffd43b", 92, "#94d82d", 97, "#2f9e44"]]
       : def.dataset === "grey_belt_candidate"
       // Basis split: indigo = built-up area inside the Green Belt, orange =
       // registered brownfield inside it (the stronger signal).
@@ -2761,6 +2769,12 @@ function hoverContentForOverlay(def, p) {
     title = p.name || "Local authority";
     rows = [row(p.rent_mean != null ? `£${Number(p.rent_mean).toLocaleString()}/mo` : null, "avg rent"),
             row(p.annual_rent_change_pct != null ? `${p.annual_rent_change_pct > 0 ? "+" : ""}${p.annual_rent_change_pct}%` : null, "year on year")];
+  } else if (d === "planit_rates") {
+    title = p.name || "Authority";
+    kind = "Planning approval rate — last 3 years";
+    rows = [row(p.approval_pct != null ? `${p.approval_pct}%` : null, "approved"),
+            row(p.approved_3y != null ? `${Number(p.approved_3y).toLocaleString()} approved · ${Number(p.refused_3y).toLocaleString()} refused` : null, "decisions"),
+            row(p.apps_year != null ? `${Number(p.apps_year).toLocaleString()}/yr` : null, "decision volume")];
   } else if (d === "bus_stop") {
     title = p.name || "Bus stop";
     kind = p.locality ? `Bus stop — ${p.locality}` : "Bus stop";
@@ -3109,6 +3123,9 @@ async function showSpotSummary(lngLat, point) {
   }
   let planSec = chips.length ? `<div class="sp-chips">${chips.join("")}</div>` : "";
   if (!chips.length && ps) planSec = `<div class="sp-row"><span class="sp-dim">No designations at this exact spot.</span></div>`;
+  if (areas.planit_rates && areas.planit_rates.approval_pct != null)
+    planSec += line("approval rate", strong(`${areas.planit_rates.approval_pct}%`) +
+      ` <span class="sp-dim">3-yr · ${_esc(String(areas.planit_rates.apps_year ?? "?"))} decided/yr</span>`);
   if (areas.grey_belt_candidate)
     planSec += line("grey-belt potential", strong(areas.grey_belt_candidate.name || "candidate area") +
       ` <span class="sp-dim">model${areas.grey_belt_candidate.area_ha != null ? ` · ${_esc(String(areas.grey_belt_candidate.area_ha))} ha` : ""}</span>`);
@@ -8444,6 +8461,9 @@ function pfScore(s) {
   // green-belt land is previously-developed claws most of that penalty back.
   const gbc = Number(s.summary?.grey_belt_pct);
   if (!isNaN(gbc) && gbc > 0) policy += Math.min(pct("green_belt") * 0.35, gbc * 0.35);
+  // Decision culture: ±8 around an 80% national-typical approval rate.
+  const apr = Number(s.summary?.areas?.planit_rates?.approval_pct);
+  if (!isNaN(apr)) policy += Math.max(-8, Math.min(8, (apr - 80) * 0.4));
   if (s.summary?.areas?.article4) policy -= 3;
   policy = Math.max(0, Math.min(100, policy));
   let access = 50;
