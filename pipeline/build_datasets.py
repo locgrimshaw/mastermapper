@@ -944,13 +944,24 @@ def build_tec_register():
     df = _read_csv(path)
     site_col = _find_col(df, ["connection site", "connection_site", "site name",
                               "connection point", "substation"], contains=True)
-    mw_col = _find_col(df, ["mw connected", "cumulative total capacity",
-                            "mw effective", "capacity (mw)", "mw increase",
-                            "mw"], contains=True)
+    # Cumulative Total Capacity is the CONTRACTED MW (what the queue is worth
+    # once built); "MW Connected" is today's figure and reads 0 for every
+    # pipeline project. Look it up ALONE first: _find_col's exact-name pass
+    # covers all candidates before its contains pass, so "MW Connected" (an
+    # exact header) would otherwise beat the cumulative column (whose header
+    # carries a "(MW)" suffix and only contains-matches).
+    mw_col = _find_col(df, ["cumulative total capacity"], contains=True) \
+        or _find_col(df, ["capacity (mw)", "mw increase", "mw connected", "mw"],
+                     contains=True)
+    conn_col = _find_col(df, ["mw connected"], contains=True)
     status_col = _find_col(df, ["project status", "status", "agreement type",
                                 "stage"], contains=True)
     cust_col = _find_col(df, ["customer name", "customer", "company",
                               "project name", "developer"], contains=True)
+    plant_col = _find_col(df, ["plant type", "technology"], contains=True)
+    host_col = _find_col(df, ["host to", "host"], contains=True)
+    date_col = _find_col(df, ["mw effective", "effective from",
+                              "completion date"], contains=True)
     if site_col is None:
         _warn(key, f"no connection-site column detected in {path.name} "
                    f"(columns: {list(df.columns)[:12]}...)")
@@ -984,8 +995,12 @@ def build_tec_register():
             sid = f"{sid}-{seen[sid]}"
         props = {k: v for k, v in {
             "mw": _num(r, mw_col),
+            "mw_connected": _num(r, conn_col),
             "status": _cell(r, status_col),
             "customer": _cell(r, cust_col),
+            "plant": _cell(r, plant_col),
+            "host_to": _cell(r, host_col),
+            "effective": _cell(r, date_col),
             "site": site,
             "substation": sname,
         }.items() if v not in (None, "")}
