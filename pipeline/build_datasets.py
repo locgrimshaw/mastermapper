@@ -130,10 +130,18 @@ GSP_DEFAULT_URL = ("https://api.neso.energy/dataset/"
                    "2810092e-d4b2-472f-b955-d8bea01f9ec0/resource/"
                    "5dfab3dd-f192-40ab-b97f-b365a594293c/download/"
                    "gsp_regions_20260209.zip")
-# EA CAMS water availability: no verified stable URL yet — when the operator
-# supplies the zip's download link, set it here (or via WATER_SRC). None means
-# the builder looks for a local data/raw/water-availability.geojson drop-in.
-WATER_DEFAULT_URL = None
+# EA CAMS water availability (Cycle 2). NOTE: this is a signed Azure snapshot
+# link that EXPIRED 2026-07-25 — it worked for the initial load; once dead the
+# builder just skips with a warning. To refresh: download the zip from
+# https://environment.data.gov.uk/dataset/62514eb5-e9d5-4d96-8b73-a40c5b702d43
+# and either set WATER_SRC to the fresh signed link (grab it from the browser
+# Downloads page) or commit data/raw/water-availability.geojson (the zip,
+# renamed — content sniffing handles it).
+WATER_DEFAULT_URL = ("https://agrilake2live.file.core.windows.net/gms-datasets/"
+                     "d2024f0b-6263-435f-984c-a6ff1a8d5b1b/Water_Resource_"
+                     "Availability_and_Abstraction_Reliability_Cycle_2.geojson.zip"
+                     "?sv=2022-11-02&se=2026-07-25T11%3A52%3A40Z&sr=f&sp=r"
+                     "&sig=H6EqLbVXS2UFyotMZOG98to4kUCurc8WcAJCUQXAZLE%3D")
 LAD_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
                    "services/Local_Authority_Districts_December_2024_Boundaries"
                    "_UK_BGC/FeatureServer/0/query?where=1%3D1&outFields=*"
