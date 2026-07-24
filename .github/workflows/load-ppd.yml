@@ -48,3 +48,15 @@ jobs:
             exit 1
           fi
           python supabase/loaders/load_datasets.py
+
+      - name: Rebuild the sold-price heatmap grid
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          # Re-aggregate the multi-resolution price_grid from the fresh sales.
+          curl -sS -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_price_grid" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/json" -d '{}' --max-time 1500 \
+            || echo "::warning::price_grid rebuild call failed — run 'select rebuild_price_grid()' manually"

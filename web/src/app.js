@@ -1068,9 +1068,18 @@ const MAP_OVERLAYS = [
   { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 11, lim: 8000 },
   // Market & boundaries
   { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
-  // Street-level price granularity: every Price Paid transaction in the last
-  // 12 months as a dot, colour-ramped by price. Dense — city zooms only.
-  { key: "ppd_sales",    group: "market", label: "Recent sales (12 months)",  color: "#d64550", dataset: "ppd_sales", render: "point", minZoom: 13, lim: 6000,
+  // Sold-price heatmaps: one server-side grid dataset at four resolutions
+  // (~35 km -> ~550 m cells); the numFilter picks the resolution for the
+  // zoom, so the same toggle reads cleanly from a national view down to
+  // street blocks. Borderless fills — the colour IS the story.
+  { key: "price_heat", group: "market", label: "Sold prices (3-yr heatmap)", color: "#c2255c", dataset: "price_grid", minZoom: 4, lim: 8000, noOutline: true,
+    datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
+                  : z < 11  ? "price_grid_m" : "price_grid_f" },
+  { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr heatmap, est.)", color: "#5f3dc4", dataset: "price_grid", minZoom: 4, lim: 8000, noOutline: true,
+    datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
+                  : z < 11  ? "price_grid_m" : "price_grid_f" },
+  // Individual transactions stay for comparables work — close zooms only.
+  { key: "ppd_sales",    group: "market", label: "Individual sales (comparables)",  color: "#d64550", dataset: "ppd_sales", render: "point", minZoom: 14, lim: 6000,
     radius: ["interpolate", ["linear"], ["zoom"], 12, 2.5, 15, 5, 17, 7],
     cap: { color: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "price"]], 0],
            100000, "#f7b267", 300000, "#ef8354", 500000, "#d64550",
@@ -1146,6 +1155,8 @@ const LAYER_INFO = {
   conservation_area:  { about: "Areas of special architectural or historic interest where extra planning controls apply.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
   aonb:               { about: "Areas of Outstanding Natural Beauty / National Landscapes — nationally protected landscapes.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity. Sites in public ownership are flagged in the tooltip.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
+  price_heat:         { about: "Median sold price over the last 3 years, aggregated into cells that resize with your zoom (~35 km countrywide down to ~550 m street blocks). Pale = cheap, deep red = expensive. Cells with fewer than 3–5 sales are hidden.", source: "HM Land Registry Price Paid Data © Crown copyright (display use, with attribution)" },
+  ppm2_heat:          { about: "ESTIMATED £ per m² over the last 3 years: each sale's price divided by the typical floor area for its property type (detached 104 m², semi 93, terrace 82, flat 57 — English Housing Survey averages), then the cell median. Normalises for housing-stock mix; exact per-sale £/m² arrives with the EPC floor-area join.", source: "HM Land Registry Price Paid Data © Crown copyright; EHS typical floor areas" },
   spen_sites:         { about: "SP Energy Networks substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "SP Energy Networks open data portal (CC-BY/OGL-style licence)" },
   npg_sites:          { about: "Northern Powergrid substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "Northern Powergrid open data portal" },
   enwl_sites:         { about: "Electricity North West grid & primary substations with published demand headroom — click a dot for the full record.", source: "Electricity North West open data portal" },
@@ -1320,9 +1331,13 @@ async function _fetchMapOverlayNow(key, attempt = 0) {
   const nf = def.numFilter ? def.numFilter(zoom) : null;
   const nfMin = nf ? (nf.min ?? null) : null;
   const nfMax = nf ? (nf.max ?? null) : null;
+  // Zoom-banded datasets (the price heatmap's per-resolution grids): the
+  // dataset itself changes with zoom, so it joins the cache key.
+  const ds = def.datasetFn ? def.datasetFn(zoom) : def.dataset;
   const c = st.fetched;
   if (c && vw >= c.w && vs >= c.s && ve <= c.e && vn <= c.n && zsnap <= c.z + 1.5
-      && (c.nfMin ?? null) === nfMin && (c.nfMax ?? null) === nfMax) return;
+      && (c.nfMin ?? null) === nfMin && (c.nfMax ?? null) === nfMax
+      && (c.ds ?? null) === (ds ?? null)) return;
   const dw = (ve - vw) * OVERLAY_FETCH_MARGIN, dh = (vn - vs) * OVERLAY_FETCH_MARGIN;
   const w = vw - dw, s = vs - dh, e = ve + dw, n = vn + dh;
   if (stat) stat.textContent = "…";
@@ -1334,8 +1349,8 @@ async function _fetchMapOverlayNow(key, attempt = 0) {
       ? await sb.rpc("brownfield_in_bbox", { w, s, e, n, p_zoom })
       : def.ownership
       ? await sb.rpc("land_ownership_in_bbox", { p_bodies: def.bodies || null, w, s, e, n, p_zoom })
-      : def.dataset
-      ? await sb.rpc("features_in_bbox", { p_dataset: def.dataset, w, s, e, n, p_zoom,
+      : ds
+      ? await sb.rpc("features_in_bbox", { p_dataset: ds, w, s, e, n, p_zoom,
           lim: def.lim || 4000,
           p_num_key: nf ? nf.key : null, p_num_min: nfMin, p_num_max: nfMax })
       : await sb.rpc("constraints_in_bbox", { p_kinds: def.kinds, w, s, e, n, p_zoom });
@@ -1345,7 +1360,7 @@ async function _fetchMapOverlayNow(key, attempt = 0) {
     if (st.reqSeq !== mySeq || !st.on) return;
     const fc = data || { type: "FeatureCollection", features: [] };
     if (!Array.isArray(fc.features)) fc.features = [];
-    st.fetched = { w, s, e, n, z: zsnap, nfMin, nfMax };
+    st.fetched = { w, s, e, n, z: zsnap, nfMin, nfMax, ds };
     renderOverlay(key, def, fc);
     // A count AT the row cap almost certainly means truncation — say so.
     const cap = def.lim || (def.dataset ? 4000 : def.ownership ? 3000 : 1500);
@@ -1498,7 +1513,19 @@ function renderOverlay(key, def, fc) {
     // Attribute-driven fills where the data carries a classification —
     // painting these one flat colour throws the information away.
     const waterStatus = ["downcase", ["to-string", ["coalesce", ["get", "status"], ""]]];
-    const fillColor = def.dataset === "ptal"
+    const fillColor = def.key === "price_heat"
+      // YlOrRd ramp: pale = cheap, deep red = expensive. Median sold price.
+      ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "med"]], 0],
+         80000, "#ffffcc", 150000, "#ffeda0", 220000, "#fed976",
+         300000, "#feb24c", 420000, "#fd8d3c", 600000, "#fc4e2a",
+         850000, "#e31a1c", 1200000, "#bd0026", 2000000, "#800026"]
+      : def.key === "ppm2_heat"
+      // PuRd ramp for £/m² (type-mix estimate until EPC areas land).
+      ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "ppm2"]], 0],
+         1200, "#f1eef6", 2000, "#d4b9da", 2800, "#c994c7",
+         3600, "#df65b0", 4500, "#e7298a", 6000, "#ce1256",
+         8000, "#980043", 12000, "#67001f"]
+      : def.dataset === "ptal"
       ? ["match", ["to-string", ["get", "ptal"]],
          "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
          "3", "#fee391", "4", "#fe9929", "5", "#ec7014",
@@ -1542,10 +1569,14 @@ function renderOverlay(key, def, fc) {
          def.color]
       : def.color;
     map.addLayer({ id: fillId, type: "fill", source: srcId,
-      paint: { "fill-color": fillColor, "fill-opacity": opacity } }, before);
-    map.addLayer({ id: lineId, type: "line", source: srcId,
-      paint: { "line-color": def.color, "line-width": 1,
-               "line-opacity": Math.min(0.9, opacity * 2.2) } }, before);
+      paint: { "fill-color": fillColor,
+               "fill-opacity": def.noOutline ? Math.min(0.9, opacity * 1.6) : opacity } }, before);
+    // Heatmap-style grids stay borderless — cell outlines would shout louder
+    // than the colour ramp.
+    if (!def.noOutline)
+      map.addLayer({ id: lineId, type: "line", source: srcId,
+        paint: { "line-color": def.color, "line-width": 1,
+                 "line-opacity": Math.min(0.9, opacity * 2.2) } }, before);
   }
   updateOverlayAttribution();
 }
@@ -2770,6 +2801,11 @@ function hoverContentForOverlay(def, p) {
     const band = hp < 75 ? "presumption in favour applies" : hp < 85 ? "20% buffer" : hp < 95 ? "action plan" : "passing";
     rows = [row(p.hdt_pct != null ? `${p.hdt_pct}%` : null, "delivery vs target"),
             row(p.consequence || band, "consequence")];
+  } else if (d === "price_grid") {
+    title = p.med != null ? `£${Number(p.med).toLocaleString()} median` : "Price cell";
+    kind = "Sold prices — last 3 years";
+    rows = [row(p.ppm2 != null ? `~£${Number(p.ppm2).toLocaleString()}/m²` : null, "est. by type mix"),
+            row(p.n != null ? `${Number(p.n).toLocaleString()} sales` : null, "in this cell")];
   } else if (d === "ppd_sales") {
     const PTYPE = { D: "Detached", S: "Semi-detached", T: "Terraced", F: "Flat", O: "Other" };
     title = p.price != null ? `£${Number(p.price).toLocaleString()}` : "Sale";
