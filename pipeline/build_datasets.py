@@ -89,6 +89,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -753,7 +754,15 @@ def build_ptal():
     is_json = head.startswith(b"{")
     if is_json or vec != path or vec.suffix.lower() in (".geojson", ".json", ".gpkg", ".shp"):
         print(f"  [{key}] reading vector source {vec.name} ({how}) ...")
-        gdf = gpd.read_file(vec)
+        # gpd.read_file picks its OGR driver from the file EXTENSION, so
+        # GeoJSON cached under the .csv name gets parsed by the CSV driver
+        # (columns come out as ['{...']). Alias it to .geojson first.
+        read_target = vec
+        if is_json and vec.suffix.lower() not in (".geojson", ".json", ".gpkg"):
+            alias = vec.with_suffix(".sniffed.geojson")
+            shutil.copyfile(vec, alias)
+            read_target = alias
+        gdf = gpd.read_file(read_target)
         ptal_col = _find_col(gdf, ["ptal"], contains=True)
         ai_col = _find_col(gdf, ["ai", "access index"], contains=False) \
             or _find_col(gdf, ["access index"], contains=True)

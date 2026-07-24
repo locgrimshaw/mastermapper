@@ -34,6 +34,7 @@ run from a command line with the env vars set, if you ever want to.)
 
 import csv
 import json
+import math
 import os
 import sys
 import urllib.error
@@ -51,6 +52,20 @@ BATCH = 500   # rows per upsert request
 
 # CSV can carry very long WKT fields (polygon rings) — lift the field-size cap.
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
+
+
+def _clean_json(v):
+    """NaN/Infinity are valid to Python's json module but NOT valid JSON —
+    pandas-built props carry them for any empty numeric cell, and PostgREST
+    rejects the entire batch (PGRST102 'Empty or invalid json') over a single
+    NaN token. Scrub them to null, recursively."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    if isinstance(v, dict):
+        return {k: _clean_json(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_clean_json(x) for x in v]
+    return v
 
 
 def _wanted_datasets():
@@ -96,7 +111,7 @@ def read_records(path: Path, wanted) -> list:
             # props is stored as a JSON string in the CSV; send it as an object.
             props_raw = (row.get("props") or "").strip()
             try:
-                props = json.loads(props_raw) if props_raw else {}
+                props = _clean_json(json.loads(props_raw)) if props_raw else {}
             except json.JSONDecodeError:
                 props = {}
 
@@ -172,7 +187,9 @@ def upsert(records: list):
     total, failed = 0, 0
     for i in range(0, len(records), BATCH):
         batch = records[i:i + BATCH]
-        body = json.dumps(batch).encode("utf-8")
+        # allow_nan=False turns any NaN that slipped past _clean_json into a
+        # loud local error instead of a silent 400 for the whole batch.
+        body = json.dumps(batch, allow_nan=False).encode("utf-8")
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=180) as resp:
