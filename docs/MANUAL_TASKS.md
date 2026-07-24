@@ -168,23 +168,26 @@ into Supabase" workflow. To light up frequencies + route numbers per stop:
 2. **NGED** — ✅ DONE: the substations capacity CSV is wired in as the
    `nged_sites` dataset (stable CKAN resource URL).
 
-## 9b. The other four DNOs → national substation headroom coverage
+## 9b. The last three DNOs → national substation headroom coverage
 
-UKPN and NGED are wired in; SPEN / Northern Powergrid / Electricity North
-West run opendatasoft portals whose dataset slugs move around, and SSEN uses
-hashed CKAN links. The pipeline ships best-guess default URLs — run the
-datasets loader with `spen_sites,npg_sites,enwl_sites,ssen_sites` and check
-the log. For any that warn:
+UKPN, NGED and **Northern Powergrid (✅ DONE — 681 substation areas load
+automatically)** are wired in. The remaining three publish their headroom
+data behind sign-ins or hashed links, so each needs one pasted URL:
 
-1. Open the operator's portal and search "headroom" or "network capacity":
-   - SPEN: <https://spenergynetworks.opendatasoft.com/>
-   - Northern Powergrid: <https://northernpowergrid.opendatasoft.com/>
-   - Electricity North West: <https://electricitynorthwest.opendatasoft.com/>
-   - SSEN: <https://data.ssen.co.uk/> (or ssen-distribution portal)
-2. On the substation/primary headroom dataset, open **Export** → copy the
-   **CSV** link (needs coordinates or easting/northing columns).
-3. **Repo variable** `SPEN_SITES_SRC` / `NPG_SITES_SRC` / `ENWL_SITES_SRC` /
-   `SSEN_SITES_SRC` = that link, and re-run the loader for that dataset.
+1. Find the dataset (a free portal account may be required for the export):
+   - SPEN: <https://spenergynetworks.opendatasoft.com/> — search "heat map
+     primary substations" (SPD and SPM are separate datasets; you can paste
+     BOTH export links joined with a `|`).
+   - Electricity North West:
+     <https://electricitynorthwest.opendatasoft.com/explore/dataset/distribution-tx-headroom/>
+     (log in → Export → CSV link).
+   - SSEN: <https://data.ssen.co.uk/> → Network Capacity collection → the
+     primary/BSP headroom CSV.
+2. Copy the **CSV export link** (data needs lat/long or easting/northing
+   columns — the pipeline sniffs either).
+3. **Repo variable** `SPEN_SITES_SRC` / `ENWL_SITES_SRC` / `SSEN_SITES_SRC`
+   = that link, then run the datasets loader with
+   `spen_sites,enwl_sites,ssen_sites`.
 
 ## 10. National Rail Open Data account → the PBSA rail sift's journey data
 
