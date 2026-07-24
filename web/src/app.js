@@ -221,7 +221,16 @@ const state = {
   // click-to-inspect and draw-a-plot (which queryRenderedFeatures on it) keep
   // working — visibility:none would break those.
   imdOn: false,
-  fillOpacity: 0.85,     // choropleth opacity (slider fades to basemap)
+  fillOpacity: 0.85,     // deprivation choropleth opacity (per-layer slider)
+  // House prices are now an INDEPENDENT layer (their own group in the Data
+  // layers panel), no longer a mode that swaps out the deprivation choropleth.
+  priceOn: false,
+  priceOpacity: 0.85,
+  // Per-layer transparency for the transit overlay, station dots and the
+  // national Green Belt fill (all adjustable from the Data layers panel).
+  railOpacity: 0.95,
+  stationOpacity: 0.9,
+  greenbeltOpacity: 0.28,
   theme: "light",        // "dark" | "light"
   hasRail: false,        // whether the tiles include the rail overlay
   // Per-mode visibility for rail lines and stops. Defaults on for any mode
@@ -317,6 +326,19 @@ function fillColorExpression() {
   const expr = ["step", activeValueExpression(), "rgba(0,0,0,0)"];
   expr.push(0, ramp[0]);
   breaks.forEach((b, i) => { expr.push(b, ramp[i + 1]); });
+  return expr;
+}
+
+// House-price choropleth colour expression. Prices are their own layer now
+// (price-fill), fully independent of the deprivation choropleth, so this
+// never consults state.layer/solo — it always keys on price_norm with the
+// price ramp and price breaks.
+function priceFillColorExpression() {
+  const breaks = state.breaksData?.price || [];
+  if (!breaks.length) return PRICE_RAMP[0];
+  const expr = ["step", ["coalesce", ["get", "price_norm"], -1], "rgba(0,0,0,0)"];
+  expr.push(0, PRICE_RAMP[0]);
+  breaks.forEach((b, i) => { expr.push(b, PRICE_RAMP[i + 1]); });
   return expr;
 }
 
@@ -549,6 +571,24 @@ async function loadData() {
     },
   });
 
+  // House-price choropleth — its own layer above the deprivation fills so the
+  // two can be shown independently (or together, blended via their opacity
+  // sliders). Kept at opacity 0 when off, like lsoa-fill, so toggling is a
+  // cheap paint change rather than a layout pass.
+  if (state.hasPrice) {
+    map.addLayer({
+      id: "price-fill",
+      type: "fill",
+      source: "lsoa",
+      "source-layer": SOURCE_LAYER,
+      paint: {
+        "fill-color": priceFillColorExpression(),
+        "fill-opacity": state.priceOn ? state.priceOpacity : 0,
+        "fill-outline-color": priceFillColorExpression(),
+      },
+    });
+  }
+
   // Highlight outline for the LSOA pinned by click-to-inspect.
   map.addLayer({
     id: "lsoa-selected",
@@ -577,7 +617,7 @@ async function loadData() {
           // Keep lines visible even at the national view (the map opens fitted
           // to the whole-England bbox, ~zoom 6, where hairlines vanish).
           "line-width": ["interpolate", ["linear"], ["zoom"], 5, 1.1, 10, 1.8, 14, 3],
-          "line-opacity": 0.95,
+          "line-opacity": state.railOpacity,
         },
       });
 
@@ -682,7 +722,7 @@ function addStationLayer() {
     paint: {
       "circle-radius": circleRadius,
       "circle-color": STATION_COLOR,
-      "circle-opacity": 0.9,
+      "circle-opacity": state.stationOpacity,
       "circle-stroke-color": "#ffffff",
       "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 5, 0.8, 11, 1.4, 14, 2],
     },
@@ -818,7 +858,7 @@ async function loadGreenbelt() {
         layout: { visibility: "none" },
         paint: {
           "fill-color": GREENBELT_COLOR,
-          "fill-opacity": 0.28,
+          "fill-opacity": state.greenbeltOpacity,
           "fill-outline-color": GREENBELT_COLOR,
         },
       }, beforeId);
@@ -856,8 +896,36 @@ function setImdVisible(on) {
     if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", on ? state.fillOpacity : 0);
   for (const id of ["lsoa-line", "simd-line"])
     if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+  updateLegendVisibility();
+}
+
+// Deprivation choropleth transparency (Data layers panel slider).
+function setImdOpacity(v) {
+  state.fillOpacity = v;
+  if (!state.imdOn) return;
+  for (const id of ["lsoa-fill", "simd-fill"])
+    if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", v);
+}
+
+// House-price layer visibility + transparency — independent of deprivation.
+function setPriceVisible(on) {
+  state.priceOn = on;
+  if (map.getLayer("price-fill"))
+    map.setPaintProperty("price-fill", "fill-opacity", on ? state.priceOpacity : 0);
+  buildLegend();
+  updateLegendVisibility();
+}
+
+function setPriceOpacity(v) {
+  state.priceOpacity = v;
+  if (state.priceOn && map.getLayer("price-fill"))
+    map.setPaintProperty("price-fill", "fill-opacity", v);
+}
+
+// The legend shows whenever at least one choropleth is on.
+function updateLegendVisibility() {
   const legend = document.getElementById("legend");
-  if (legend) legend.style.display = on ? "" : "none";
+  if (legend) legend.style.display = (state.imdOn || state.priceOn) ? "" : "none";
 }
 
 // Wire any collapsible left-panel .block (accordion header toggles .collapsed).
@@ -881,57 +949,78 @@ function wireImdToggle() {
     cb.checked = state.imdOn;
     cb.addEventListener("change", (e) => setImdVisible(e.target.checked));
   }
-  const legend = document.getElementById("legend");
-  if (legend) legend.style.display = state.imdOn ? "" : "none";
+  updateLegendVisibility();
 }
 
 // ---- On-demand planning / environmental map overlays ----------------------
-// The constraint + brownfield polygons live in Supabase, clipped to ~1 km around
-// stations. Rather than load them nationally, each "Map layers" toggle fetches
-// only the current viewport (a bbox RPC), refetched as you pan/zoom. A zoom guard
-// keeps a wide view from pulling too much.
-const MAP_OVERLAYS = [
-  { key: "green_space",       label: "Green space",             color: "#74b816", kinds: ["green_space"] },
-  { key: "conservation_area", label: "Conservation areas",      color: "#9c36b5", kinds: ["conservation_area"] },
-  { key: "aonb",              label: "AONB / National Landscapes", color: "#5c940d", kinds: ["aonb"] },
-  { key: "environmental",     label: "Environmental (SSSI/SAC/SPA/Ramsar/woodland)", color: "#0c8599",
-    kinds: ["sssi", "sac", "spa", "ramsar", "ancient_woodland"] },
-  { key: "heritage",          label: "Heritage (listed / monuments / parks)", color: "#a5744b",
-    kinds: ["scheduled_monument", "listed_building", "park_garden"] },
-  { key: "flood",             label: "Flood zones 2 & 3",       color: "#1c7ed6", kinds: ["flood_zone_2", "flood_zone_3"] },
-  { key: "transport",         label: "Transport corridors (road + rail)", color: "#868e96", kinds: ["transport"] },
-  { key: "brownfield",        label: "Brownfield sites",        color: "#e8590c", brownfield: true },
-  // Public land ownership (context overlay). Scotland's public estate is unusually
-  // open, so we carry each landowning public body: Forestry & Land Scotland,
-  // NatureScot, Crown Estate Scotland, Historic Environment Scotland — plus
-  // Forestry England. (Network Rail / MoD / councils still need HM Land Registry's
-  // licensed National Polygon Service to map owner->parcel.)
-  { key: "land_forestry",     label: "Public land — public bodies (England + Scotland)", color: "#2b8a3e",
-    ownership: true, bodies: ["forestry_england", "forestry_scotland",
-      "naturescot_scotland", "crown_estate_scotland", "hes_scotland"] },
+// The constraint + brownfield polygons live in Supabase. Each Data-layers
+// toggle fetches only the current viewport (a bbox RPC), refetched as you pan
+// or zoom — so the same mechanism serves a nationwide database without ever
+// loading the whole country. Two things keep it fast:
+//   1. a zoom guard (a country-wide bbox would pull far too many polygons);
+//   2. a fetch cache: each fetch is padded ~30% beyond the viewport and the
+//      padded bbox is remembered, so panning within it (or zooming IN) costs
+//      no new request at all.
+// NOTE: the DB extract is currently clipped to ~1 km around stations (see
+// pipeline/build_constraints.py). Re-run it with CLIP_MODE=none to load
+// national coverage — no frontend change needed.
+
+// Sub-groups of the "Planning & environment" section of the Data layers tree.
+const OVERLAY_GROUPS = [
+  { key: "planning",    title: "Planning designations" },
+  { key: "environment", title: "Environmental designations" },
+  { key: "heritage",    title: "Heritage" },
+  { key: "flood",       title: "Flood risk" },
+  { key: "land",        title: "Land ownership & infrastructure" },
 ];
-const OVERLAY_MIN_ZOOM = 10.5;      // below this, the bbox is too big to fetch
-const overlayState = {};            // key -> { on: bool }
+
+// One entry per layer — every statutory designation is its own row now (the
+// old combined "Environmental" / "Heritage" / "Flood" bundles are split) so
+// each can be toggled and faded independently.
+const MAP_OVERLAYS = [
+  // Planning designations
+  { key: "green_space",       group: "planning", label: "Green space",                color: "#74b816", kinds: ["green_space"] },
+  { key: "conservation_area", group: "planning", label: "Conservation areas",         color: "#9c36b5", kinds: ["conservation_area"] },
+  { key: "aonb",              group: "planning", label: "AONB / National Landscapes", color: "#5c940d", kinds: ["aonb"] },
+  { key: "brownfield",        group: "planning", label: "Brownfield sites",           color: "#e8590c", brownfield: true },
+  // Environmental designations
+  { key: "sssi",              group: "environment", label: "SSSI",                         color: "#0c8599", kinds: ["sssi"] },
+  { key: "sac",               group: "environment", label: "Special Areas of Conservation", color: "#12b886", kinds: ["sac"] },
+  { key: "spa",               group: "environment", label: "Special Protection Areas",     color: "#15aabf", kinds: ["spa"] },
+  { key: "ramsar",            group: "environment", label: "Ramsar wetlands",              color: "#228be6", kinds: ["ramsar"] },
+  { key: "ancient_woodland",  group: "environment", label: "Ancient woodland",             color: "#2f9e44", kinds: ["ancient_woodland"] },
+  // Heritage
+  { key: "scheduled_monument", group: "heritage", label: "Scheduled monuments",          color: "#a5744b", kinds: ["scheduled_monument"] },
+  { key: "listed_building",    group: "heritage", label: "Listed buildings",             color: "#d9480f", kinds: ["listed_building"] },
+  { key: "park_garden",        group: "heritage", label: "Registered parks & gardens",   color: "#66a80f", kinds: ["park_garden"] },
+  // Flood risk
+  { key: "flood_zone_2", group: "flood", label: "Flood zone 2", color: "#4dabf7", kinds: ["flood_zone_2"] },
+  { key: "flood_zone_3", group: "flood", label: "Flood zone 3", color: "#1864ab", kinds: ["flood_zone_3"] },
+  // Land ownership & infrastructure. Scotland's public estate is unusually
+  // open, so each landowning public body is its own layer. (Network Rail /
+  // MoD / councils still need HM Land Registry's licensed National Polygon
+  // Service to map owner->parcel.)
+  { key: "transport",             group: "land", label: "Transport corridors (road + rail)", color: "#868e96", kinds: ["transport"] },
+  { key: "land_forestry_england", group: "land", label: "Forestry England estate",          color: "#2b8a3e", ownership: true, bodies: ["forestry_england"] },
+  { key: "land_forestry_scotland",group: "land", label: "Forestry & Land Scotland",         color: "#37b24d", ownership: true, bodies: ["forestry_scotland"] },
+  { key: "land_naturescot",       group: "land", label: "NatureScot land",                  color: "#20c997", ownership: true, bodies: ["naturescot_scotland"] },
+  { key: "land_crown_estate",     group: "land", label: "Crown Estate Scotland",            color: "#845ef7", ownership: true, bodies: ["crown_estate_scotland"] },
+  { key: "land_hes",              group: "land", label: "Historic Environment Scotland",    color: "#f59f00", ownership: true, bodies: ["hes_scotland"] },
+];
+const OVERLAY_MIN_ZOOM = 10.5;        // below this, the bbox is too big to fetch
+const OVERLAY_DEFAULT_OPACITY = 0.32; // fill opacity a fresh overlay starts at
+const OVERLAY_FETCH_MARGIN = 0.3;     // pad each fetch 30% beyond the viewport
+const overlayState = {};              // key -> { on, opacity, fetched:{w,s,e,n} }
 let _overlayMoveWired = false;
 let _overlayMoveTimer = null;
 
-function wireMapOverlays() {
-  const host = document.getElementById("map-overlays");
-  if (!host) return;
-  host.innerHTML = MAP_OVERLAYS.map(o =>
-    `<label class="dd-row map-overlay-row">` +
-    `<input type="checkbox" class="map-overlay-cb" data-key="${o.key}" />` +
-    `<span class="ov-swatch" style="background:${o.color}"></span>` +
-    `<span class="dd-label">${o.label}</span>` +
-    `<span class="dd-stat" id="ov-stat-${o.key}"></span></label>`).join("");
-  host.querySelectorAll(".map-overlay-cb").forEach(cb =>
-    cb.addEventListener("change", e => toggleMapOverlay(e.target.dataset.key, e.target.checked)));
-}
+function overlayDef(key) { return MAP_OVERLAYS.find(o => o.key === key); }
 
 function anyOverlayOn() { return MAP_OVERLAYS.some(o => overlayState[o.key] && overlayState[o.key].on); }
 
 function toggleMapOverlay(key, on) {
-  overlayState[key] = { on };
+  const st = overlayState[key] || (overlayState[key] = { opacity: OVERLAY_DEFAULT_OPACITY });
+  st.on = on;
   if (on) {
     if (!_overlayMoveWired && typeof map !== "undefined") {
       map.on("moveend", () => {
@@ -942,10 +1031,22 @@ function toggleMapOverlay(key, on) {
     }
     fetchMapOverlay(key);
   } else {
+    st.fetched = null;      // a re-toggle refetches fresh
     removeOverlayLayers(key);
     const stat = document.getElementById(`ov-stat-${key}`);
     if (stat) stat.textContent = "";
   }
+}
+
+// Live transparency for one overlay (Data layers slider). The outline scales
+// with the fill so a faded layer fades as a whole.
+function setOverlayOpacity(key, v) {
+  const st = overlayState[key] || (overlayState[key] = {});
+  st.opacity = v;
+  if (map.getLayer(`ov-${key}-fill`))
+    map.setPaintProperty(`ov-${key}-fill`, "fill-opacity", v);
+  if (map.getLayer(`ov-${key}-line`))
+    map.setPaintProperty(`ov-${key}-line`, "line-opacity", Math.min(0.9, v * 2.2));
 }
 
 function refreshMapOverlays() {
@@ -953,10 +1054,12 @@ function refreshMapOverlays() {
 }
 
 async function fetchMapOverlay(key) {
-  const def = MAP_OVERLAYS.find(o => o.key === key);
+  const def = overlayDef(key);
   const stat = document.getElementById(`ov-stat-${key}`);
   if (!def || typeof map === "undefined") return;
+  const st = overlayState[key] || (overlayState[key] = { opacity: OVERLAY_DEFAULT_OPACITY });
   if (map.getZoom() < OVERLAY_MIN_ZOOM) {
+    st.fetched = null;
     removeOverlayLayers(key);
     if (stat) stat.textContent = "zoom in";
     return;
@@ -964,7 +1067,14 @@ async function fetchMapOverlay(key) {
   const sb = (typeof getSupabase === "function") ? getSupabase() : null;
   if (!sb) { if (stat) stat.textContent = "n/a"; return; }
   const b = map.getBounds();
-  const w = b.getWest(), s = b.getSouth(), e = b.getEast(), n = b.getNorth();
+  const vw = b.getWest(), vs = b.getSouth(), ve = b.getEast(), vn = b.getNorth();
+  // Fetch cache: if the view is still inside the last padded fetch bbox, the
+  // data on the map already covers it — no request needed. (Zooming in never
+  // refetches; pans only refetch once they leave the padded area.)
+  const c = st.fetched;
+  if (c && vw >= c.w && vs >= c.s && ve <= c.e && vn <= c.n) return;
+  const dw = (ve - vw) * OVERLAY_FETCH_MARGIN, dh = (vn - vs) * OVERLAY_FETCH_MARGIN;
+  const w = vw - dw, s = vs - dh, e = ve + dw, n = vn + dh;
   if (stat) stat.textContent = "…";
   try {
     const { data, error } = def.brownfield
@@ -974,6 +1084,7 @@ async function fetchMapOverlay(key) {
       : await sb.rpc("constraints_in_bbox", { p_kinds: def.kinds, w, s, e, n });
     if (error) throw error;
     const fc = data || { type: "FeatureCollection", features: [] };
+    st.fetched = { w, s, e, n };
     renderOverlay(key, def, fc);
     if (stat) stat.textContent = `${(fc.features || []).length}`;
   } catch (err) {
@@ -997,18 +1108,268 @@ function renderOverlay(key, def, fc) {
     map.getSource(srcId).setData(fc);
     return;
   }
+  const opacity = overlayState[key]?.opacity ?? OVERLAY_DEFAULT_OPACITY;
   map.addSource(srcId, { type: "geojson", data: fc });
   const before = overlayBeforeId();
   map.addLayer({ id: fillId, type: "fill", source: srcId,
-    paint: { "fill-color": def.color, "fill-opacity": 0.28 } }, before);
+    paint: { "fill-color": def.color, "fill-opacity": opacity } }, before);
   map.addLayer({ id: lineId, type: "line", source: srcId,
-    paint: { "line-color": def.color, "line-width": 1, "line-opacity": 0.7 } }, before);
+    paint: { "line-color": def.color, "line-width": 1,
+             "line-opacity": Math.min(0.9, opacity * 2.2) } }, before);
 }
 
 function removeOverlayLayers(key) {
   for (const id of [`ov-${key}-fill`, `ov-${key}-line`]) if (map.getLayer(id)) map.removeLayer(id);
   const srcId = `ov-${key}-src`;
   if (map.getSource(srcId)) map.removeSource(srcId);
+}
+
+// ---- Data layers panel (left box 1) ---------------------------------------
+// The grouped, sub-grouped layer tree. Every layer gets a visibility toggle
+// and a transparency slider; groups and sub-groups collapse. Data-gated rows
+// (prices, rail, stations, green belt) render hidden and are revealed once
+// their data loads, so the existing load-time wiring keeps working unchanged.
+
+// One compact tree row: checkbox + colour swatch + label + live stat + a
+// transparency slider that shows while the layer is on.
+function ltRowHTML(o) {
+  const swatch = o.swatch || (o.color ? `<span class="ov-swatch" style="background:${o.color}"></span>` : "");
+  return `
+    <div class="lt-row${o.hidden ? "" : ""}" ${o.rowId ? `id="${o.rowId}"` : ""} ${o.hidden ? "hidden" : ""}>
+      <label class="lt-main">
+        <input type="checkbox" ${o.cbId ? `id="${o.cbId}"` : ""} ${o.dataKey ? `data-ov="${o.dataKey}"` : ""} ${o.checked ? "checked" : ""} />
+        ${swatch}
+        <span class="lt-label">${o.label}</span>
+        <span class="lt-stat" ${o.statId ? `id="${o.statId}"` : ""}></span>
+      </label>
+      <div class="lt-fade">
+        <span class="lt-fade-label">fade</span>
+        <input type="range" min="0.05" max="1" step="0.05" value="${o.opacity}"
+               class="lt-opacity" data-okey="${o.opacityKey}" aria-label="${o.label} transparency" />
+      </div>
+    </div>`;
+}
+
+function buildLayersPanel() {
+  const host = document.getElementById("layers-tree");
+  if (!host) return;
+
+  // --- Deprivation group: layer toggle + view picker + embedded weighting ---
+  const imdRamp = RAMP_SINGLE.slice(1).map(c => `<i style="background:${c}"></i>`).join("");
+  const viewRadios = [{ key: "", name: "Combined score (weighted)" }]
+    .concat(DOMAINS.map(d => ({ key: d.key, name: d.name })))
+    .map(v => `
+      <label class="lt-view">
+        <input type="radio" name="imd-view" value="${v.key}" ${state.solo === (v.key || null) || (!state.solo && !v.key) ? "checked" : ""} />
+        <span>${v.name}</span>
+      </label>`).join("");
+
+  const deprivationGroup = `
+    <div class="lt-group" data-group="deprivation">
+      <button type="button" class="lt-head" aria-expanded="true">
+        <span class="lt-title">Deprivation (IMD · SIMD)</span>
+        <span class="box-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="lt-body">
+        ${ltRowHTML({ cbId: "imd-show", label: "Deprivation choropleth",
+                      swatch: `<span class="lt-ramp">${imdRamp}</span>`,
+                      checked: state.imdOn, opacity: state.fillOpacity, opacityKey: "imd" })}
+        <div class="lt-sub">
+          <button type="button" class="lt-head lt-sub-head" aria-expanded="false">
+            <span class="lt-title">Layer view — combined or a single domain</span>
+            <span class="box-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="lt-body lt-collapsed">
+            <div class="lt-views">${viewRadios}</div>
+          </div>
+        </div>
+        <div class="lt-sub">
+          <button type="button" class="lt-head lt-sub-head" aria-expanded="false">
+            <span class="lt-title">Score weighting</span>
+            <span class="box-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="lt-body lt-collapsed">
+            <p class="hint">Domains are weighted as in the official Index of Multiple Deprivation. Move a slider and the others rebalance so the total stays 100%. The map updates live.</p>
+            <div id="sliders"></div>
+            <div id="weight-total" class="weight-total">Total: 100%</div>
+            <button id="reset-weights" class="ghost">Reset to official IMD weighting</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  // --- House prices: an independent group (never tied to deprivation) ------
+  const priceRamp = PRICE_RAMP.slice(1).map(c => `<i style="background:${c}"></i>`).join("");
+  const priceGroup = `
+    <div class="lt-group" data-group="price" id="lt-group-price" hidden>
+      <button type="button" class="lt-head" aria-expanded="true">
+        <span class="lt-title">House prices</span>
+        <span class="box-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="lt-body">
+        ${ltRowHTML({ cbId: "price-show", label: "House price choropleth (£/m²)",
+                      swatch: `<span class="lt-ramp">${priceRamp}</span>`,
+                      checked: state.priceOn, opacity: state.priceOpacity, opacityKey: "price" })}
+        <p class="hint" style="margin:2px 0 6px">HM Land Registry price paid, per LSOA. Independent of the deprivation layer — show both together and blend with the fade sliders.</p>
+      </div>
+    </div>`;
+
+  // --- Planning & environment: sub-grouped granular overlays ---------------
+  const subHTML = OVERLAY_GROUPS.map(g => {
+    let rows = "";
+    // Green Belt (a national static file, not a bbox overlay) leads Planning.
+    if (g.key === "planning") {
+      rows += ltRowHTML({ rowId: "greenbelt-row", cbId: "greenbelt-show", hidden: true,
+                          label: "Green Belt", color: GREENBELT_COLOR, statId: "greenbelt-count",
+                          checked: false, opacity: state.greenbeltOpacity, opacityKey: "greenbelt" });
+    }
+    rows += MAP_OVERLAYS.filter(o => o.group === g.key).map(o =>
+      ltRowHTML({ dataKey: o.key, label: o.label, color: o.color, statId: `ov-stat-${o.key}`,
+                  checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}` })).join("");
+    return `
+      <div class="lt-sub">
+        <button type="button" class="lt-head lt-sub-head" aria-expanded="true">
+          <span class="lt-title">${g.title}</span>
+          <span class="box-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="lt-body">${rows}</div>
+      </div>`;
+  }).join("");
+
+  const planningGroup = `
+    <div class="lt-group" data-group="planning-env">
+      <button type="button" class="lt-head" aria-expanded="true">
+        <span class="lt-title">Planning &amp; environment</span>
+        <span class="box-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="lt-body">
+        ${subHTML}
+        <p class="hint" style="margin:4px 0 6px">Polygon layers load for the current view (zoom in past ~city scale) and are cached as you pan.</p>
+      </div>
+    </div>`;
+
+  // --- Transport & rail ----------------------------------------------------
+  const transportGroup = `
+    <div class="lt-group" data-group="transport">
+      <button type="button" class="lt-head" aria-expanded="true">
+        <span class="lt-title">Transport &amp; rail</span>
+        <span class="box-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="lt-body">
+        ${ltRowHTML({ rowId: "station-row", cbId: "station-show", hidden: true,
+                      label: "Stations (heavy rail, usage-scaled)", color: STATION_COLOR,
+                      statId: "station-count-stat", checked: true,
+                      opacity: state.stationOpacity, opacityKey: "stations" })}
+        <div id="rail-group" hidden>
+          <div id="rail-toggle" class="rail-toggle"></div>
+          <div class="lt-fade lt-fade-solo">
+            <span class="lt-fade-label">transit overlay fade</span>
+            <input type="range" min="0.05" max="1" step="0.05" value="${state.railOpacity}"
+                   class="lt-opacity" data-okey="rail" aria-label="Transit overlay transparency" />
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  host.innerHTML = deprivationGroup + priceGroup + planningGroup + transportGroup;
+
+  // Collapse/expand for groups and sub-groups.
+  host.querySelectorAll(".lt-head").forEach(head => {
+    head.addEventListener("click", () => {
+      const body = head.nextElementSibling;
+      if (!body) return;
+      const collapsed = body.classList.toggle("lt-collapsed");
+      head.setAttribute("aria-expanded", String(!collapsed));
+    });
+  });
+
+  // Overlay checkboxes (granular planning/environment/heritage/flood/land).
+  host.querySelectorAll("input[data-ov]").forEach(cb =>
+    cb.addEventListener("change", e => toggleMapOverlay(e.target.dataset.ov, e.target.checked)));
+
+  // Every transparency slider routes through one dispatcher.
+  host.querySelectorAll(".lt-opacity").forEach(sl =>
+    sl.addEventListener("input", e => {
+      const v = parseFloat(e.target.value);
+      const k = e.target.dataset.okey;
+      if (k === "imd") setImdOpacity(v);
+      else if (k === "price") setPriceOpacity(v);
+      else if (k === "greenbelt") setGreenbeltOpacity(v);
+      else if (k === "rail") setRailOverlayOpacity(v);
+      else if (k === "stations") setStationOpacity(v);
+      else if (k && k.startsWith("ov:")) setOverlayOpacity(k.slice(3), v);
+    }));
+
+  // Deprivation view picker: combined vs a single domain ("solo"). Selecting
+  // any view turns the deprivation layer on so the choice is visible.
+  host.querySelectorAll('input[name="imd-view"]').forEach(r =>
+    r.addEventListener("change", e => {
+      setSolo(e.target.value || null);
+      if (!state.imdOn) {
+        const cb = document.getElementById("imd-show");
+        if (cb) cb.checked = true;
+        setImdVisible(true);
+      }
+    }));
+
+  // House-price toggle.
+  const priceCb = host.querySelector("#price-show");
+  if (priceCb) priceCb.addEventListener("change", e => setPriceVisible(e.target.checked));
+}
+
+// Reveal the House prices group once loadData knows the tiles carry prices.
+function revealPriceGroup() {
+  const g = document.getElementById("lt-group-price");
+  if (g) g.hidden = !state.hasPrice;
+}
+
+// ---- Per-layer transparency helpers (non-overlay layers) -------------------
+
+function setGreenbeltOpacity(v) {
+  state.greenbeltOpacity = v;
+  if (map.getLayer("greenbelt-fill"))
+    map.setPaintProperty("greenbelt-fill", "fill-opacity", v);
+}
+
+function setRailOverlayOpacity(v) {
+  state.railOpacity = v;
+  if (map.getLayer("rail-line")) map.setPaintProperty("rail-line", "line-opacity", v);
+  if (map.getLayer("rail-stop")) {
+    map.setPaintProperty("rail-stop", "circle-opacity", v);
+    map.setPaintProperty("rail-stop", "circle-stroke-opacity", v);
+  }
+  if (map.getLayer("rail-stop-label"))
+    map.setPaintProperty("rail-stop-label", "text-opacity", Math.min(1, v * 1.1));
+}
+
+function setStationOpacity(v) {
+  state.stationOpacity = v;
+  if (map.getLayer("station-dot")) {
+    map.setPaintProperty("station-dot", "circle-opacity", v);
+    map.setPaintProperty("station-dot", "circle-stroke-opacity", v);
+  }
+  if (map.getLayer("station-label"))
+    map.setPaintProperty("station-label", "text-opacity", Math.min(1, v * 1.1));
+}
+
+// ---- Minimiseable side boxes (Data layers · Rail & stations) ---------------
+// Each .side-box header toggles its body; the state persists across reloads.
+function wireSideBoxes() {
+  document.querySelectorAll(".side-box").forEach(box => {
+    const head = box.querySelector(".box-head");
+    if (!head) return;
+    const storeKey = `ui.box.${box.id}.min`;
+    const saved = mmStore.get(storeKey, false);
+    if (saved) {
+      box.classList.add("minimised");
+      head.setAttribute("aria-expanded", "false");
+    }
+    head.addEventListener("click", () => {
+      const min = box.classList.toggle("minimised");
+      head.setAttribute("aria-expanded", String(!min));
+      mmStore.set(storeKey, min);
+    });
+  });
 }
 
 // ---- Choropleth restyle on weight change ----------------------------------
@@ -1031,33 +1392,14 @@ function restyle() {
   if (state.selectedCode) inspectLSOA(state.selectedCode);
 }
 
-// Switch the choropleth between deprivation and house prices.
-function setLayer(mode) {
-  state.layer = mode;
-  if (mode === "price") setSolo(null);   // solo is a deprivation-only view
-  applyFillColor();
-  buildLegend();
-  buildLayerToggle();
-  if (state.selectedCode) inspectLSOA(state.selectedCode);
-  if (lastDrawnPolygon) buildReport(lastDrawnPolygon);
-}
-
-function buildLayerToggle() {
-  const el = document.getElementById("layer-toggle");
-  if (!el) return;
-  if (!state.hasPrice) { el.innerHTML = ""; return; }
-  const opt = (mode, label) =>
-    `<button class="seg ${state.layer === mode ? "on" : ""}" data-mode="${mode}">${label}</button>`;
-  el.innerHTML = opt("deprivation", "Deprivation") + opt("price", "House prices");
-  el.querySelectorAll("button").forEach(b =>
-    b.addEventListener("click", () => setLayer(b.dataset.mode)));
-}
+// (The old Deprivation/House-prices segmented header toggle is gone: prices
+// are an independent layer in the Data layers panel — see setPriceVisible.)
 
 // Rail overlay toggle. One group per mode that has data; within each, a Lines
 // and/or Stops checkbox. Each row carries the mode's colour swatch so the map
 // colours are self-explanatory. Only shown when the tiles carry rail data.
 function buildRailToggle() {
-  const block = document.getElementById("rail-block");
+  const block = document.getElementById("rail-group");
   const el = document.getElementById("rail-toggle");
   if (!block || !el) return;
   if (!state.hasRail) { block.hidden = true; return; }
@@ -1145,8 +1487,10 @@ function setCatchmentMethod(method, silent) {
 function buildStationControls() {
   const block = document.getElementById("station-block");
   if (!block) return;
+  const layerRow = document.getElementById("station-row");   // Data layers row
   if (!state.hasStations) { block.hidden = true; return; }
   block.hidden = false;
+  if (layerRow) layerRow.hidden = false;
 
   const feats = (state.stationsData && state.stationsData.features) || [];
   const countStat = document.getElementById("station-count-stat");
@@ -1334,8 +1678,6 @@ function buildSliders() {
               aria-label="What ${d.name} covers" tabindex="0">i<span
               class="tip" role="tooltip">${d.about}<span class="tip-source">Source: <a href="${d.sourceUrl}" target="_blank" rel="noopener">${d.source}</a></span></span></button></span>
         <span class="row-controls">
-          <button class="solo" id="solo-${d.key}" type="button"
-                  aria-label="Show only ${d.name} on the map" title="Show only this on the map">solo</button>
           <span class="val" id="val-${d.key}">${d.weight.toFixed(1)}%</span>
         </span>
       </div>
@@ -1365,10 +1707,6 @@ function buildSliders() {
       if (deep.active) renderDeprivationScore();
     });
 
-    // Solo: show just this domain's choropleth (toggle).
-    row.querySelector(`#solo-${d.key}`).addEventListener("click", () => {
-      setSolo(state.solo === d.key ? null : d.key);
-    });
   }
 
   document.getElementById("reset-weights").addEventListener("click", () => {
@@ -1389,17 +1727,15 @@ function buildSliders() {
 }
 
 // Switch the map to a single domain's choropleth, or back to combined (null).
+// Driven by the "Layer view" radios in the Data layers panel (the individual
+// IMD layers), and kept in sync when called programmatically.
 function setSolo(key) {
   state.solo = key;
-  for (const d of DOMAINS) {
-    document.getElementById(`solo-${d.key}`)
-      .classList.toggle("on", state.solo === d.key);
-  }
-  // Solo only applies to the deprivation layer; force it if on prices.
-  if (key && state.layer === "price") state.layer = "deprivation";
+  document.querySelectorAll('input[name="imd-view"]').forEach(r => {
+    r.checked = (r.value || null) === (key || null);
+  });
   applyFillColor();
   buildLegend();
-  buildLayerToggle();
 }
 
 // ---- Plot context report (spatial aggregation, client-side) ---------------
@@ -1886,9 +2222,13 @@ function wireInteractions() {
     const f = e.features[0];
     const p = f.properties;
     map.getCanvas().style.cursor = "pointer";
-    const detail = state.layer === "price"
-      ? (p.price_median != null ? priceFmt(p.price_median) + " median" : "no sales")
-      : "combined " + combinedScore(p, state.weights).toFixed(0);
+    // Show the deprivation score, plus the price when the price layer is on
+    // (both layers can be visible at once now).
+    let detail = "combined " + combinedScore(p, state.weights).toFixed(0);
+    if (state.priceOn) {
+      detail += p.price_ppm2 != null ? ` · ${ppm2Fmt(p.price_ppm2)}`
+        : (p.price_median != null ? ` · ${priceFmt(p.price_median)} median` : "");
+    }
     popup.setLngLat(e.lngLat)
       .setHTML(`${p.lsoa_code} · ${detail} · click to inspect`)
       .addTo(map);
@@ -2283,22 +2623,12 @@ const STATION_WALK_MINUTES = 10;
 
 function buildLegend() {
   const el = document.getElementById("legend");
-  const ramp = activeRamp();
-  const swatches = ramp.map(c => `<span style="background:${c}"></span>`).join("");
-  let header;
-  if (state.layer === "price") {
-    const ppm2 = state.breaksData?.price_ppm2_band;
-    const sale = state.breaksData?.price_band;
-    const note = ppm2
-      ? `HM Land Registry £/m² · typical ${ppm2Fmt(ppm2[0])}–${ppm2Fmt(ppm2[1])}`
-        + (sale ? ` · sale ${priceFmt(sale[0])}–${priceFmt(sale[1])}` : "")
-      : `HM Land Registry £/m²`;
-    header = `
-      <div class="title">House price (£/m²)</div>
-      <div class="ramp">${swatches}</div>
-      <div class="scale"><span>lower value</span><span>higher value</span></div>
-      <div class="legend-note">${note}</div>`;
-  } else {
+  let header = "";
+
+  // Deprivation section (combined score or a soloed single domain).
+  if (state.imdOn || !state.priceOn) {
+    const ramp = RAMP();
+    const swatches = ramp.map(c => `<span style="background:${c}"></span>`).join("");
     const breaks = currentBreaks();
     const lo = breaks.length ? breaks[0].toFixed(0) : "0";
     const hi = breaks.length ? breaks[breaks.length - 1].toFixed(0) : "100";
@@ -2308,14 +2638,32 @@ function buildLegend() {
     const title = soloName ? `${soloName} only` : "Combined score";
     const note = soloName ? `Single domain · fixed classes`
                           : `Fixed classes · breaks ${lo}–${hi}`;
-    header = `
+    header += `
       <div class="title">${title}</div>
       <div class="ramp">${swatches}</div>
       <div class="scale"><span>less deprived</span><span>more deprived</span></div>
       <div class="legend-note">${note}</div>`;
   }
 
-  // Controls: colour mode, fade-to-map opacity, light/dark theme.
+  // House-price section — its own independent layer, so its own legend block
+  // whenever it's showing (possibly alongside the deprivation one).
+  if (state.priceOn) {
+    const swatches = PRICE_RAMP.map(c => `<span style="background:${c}"></span>`).join("");
+    const ppm2 = state.breaksData?.price_ppm2_band;
+    const sale = state.breaksData?.price_band;
+    const note = ppm2
+      ? `HM Land Registry £/m² · typical ${ppm2Fmt(ppm2[0])}–${ppm2Fmt(ppm2[1])}`
+        + (sale ? ` · sale ${priceFmt(sale[0])}–${priceFmt(sale[1])}` : "")
+      : `HM Land Registry £/m²`;
+    header += `
+      <div class="title">House price (£/m²)</div>
+      <div class="ramp">${swatches}</div>
+      <div class="scale"><span>lower value</span><span>higher value</span></div>
+      <div class="legend-note">${note}</div>`;
+  }
+
+  // Controls: colour mode + light/dark theme. (Per-layer transparency moved
+  // to the Data layers panel, so the old "Map fade" slider is gone.)
   const controls = `
     <div class="legend-controls">
       <div class="lc-row">
@@ -2324,11 +2672,6 @@ function buildLegend() {
           <button class="${state.colourMode === "single" ? "on" : ""}" data-cmode="single">Single</button>
           <button class="${state.colourMode === "spectrum" ? "on" : ""}" data-cmode="spectrum">Spectrum</button>
         </div>
-      </div>
-      <div class="lc-row">
-        <span class="lc-label">Map fade</span>
-        <input type="range" id="opacity-slider" min="0.1" max="1" step="0.05"
-               value="${state.fillOpacity}" aria-label="Choropleth opacity" />
       </div>
       <div class="lc-row">
         <span class="lc-label">Theme</span>
@@ -2345,11 +2688,6 @@ function buildLegend() {
     b.addEventListener("click", () => setColourMode(b.dataset.cmode)));
   el.querySelectorAll("[data-theme]").forEach(b =>
     b.addEventListener("click", () => setTheme(b.dataset.theme)));
-  el.querySelector("#opacity-slider").addEventListener("input", (e) => {
-    state.fillOpacity = parseFloat(e.target.value);
-    for (const id of ["lsoa-fill", "simd-fill"])
-      if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", state.fillOpacity);
-  });
 }
 
 function setColourMode(mode) {
@@ -6394,8 +6732,7 @@ function setMode(mode) {
 // Explore-only left-panel blocks (hidden in sift mode). Data-gated blocks keep
 // their own `hidden` attribute; we only toggle an inline display override, so
 // returning to explore restores whatever their data state dictated.
-const EXPLORE_BLOCKS = ["weighting-block", "context-block", "plot-block",
-                        "station-block", "rail-block", "overlay-block"];
+const EXPLORE_BLOCKS = ["context-block", "plot-block", "station-block"];
 
 function applyModeVisibility() {
   const sift = state.mode === "sift";
@@ -6995,18 +7332,21 @@ function highlightSiftSurvivors(surv) {
   } catch (_) { /* filter unsupported — leave all stations shown */ }
 }
 
+buildLayersPanel();       // the grouped Data layers tree (box 1) — must run
+                          // first: buildSliders/wireImdToggle bind to elements
+                          // the tree renders (#sliders, #imd-show, …).
 buildSliders();
 buildLegend();
 wireImdToggle();          // IMD choropleth is a context layer, OFF by default
-wireMapOverlays();        // on-demand planning/environmental overlay toggles
-wireCollapsibleBlocks();  // weighting block ships collapsed
+wireSideBoxes();          // minimiseable left boxes (persisted per box)
+wireCollapsibleBlocks();  // secondary blocks (define-an-area) ship collapsed
 wireModeSwitch();         // Explore / Site-sift mode switch
 
 map.on("load", async () => {
   try {
     await loadData();
     buildLegend();          // now that breaks.json is loaded
-    buildLayerToggle();
+    revealPriceGroup();     // House prices group shows once the tiles carry prices
     buildRailToggle();
     buildStationControls();
     updateShortlistTray();

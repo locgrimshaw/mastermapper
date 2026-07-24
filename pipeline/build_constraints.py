@@ -12,13 +12,20 @@ supabase/migrations/0005_planning_constraints_and_developable_land.sql). The
 and ERASES the selected constraint kinds from it, so we only ever need
 constraint geometry that sits WITHIN ~800 m of a rail station.
 
-CRITICAL DESIGN CONSTRAINT — clip to station catchments.
-The Supabase DB is on the free tier (~500 MB), so we must NOT store national
-polygon layers. This pipeline reads the station points from
-web/data/stations.geojson, buffers each by 1000 m (a little beyond the 800 m
-analysis radius, for safety) in EPSG:27700, unions them into ONE clip mask, and
-intersects EVERY constraint layer with that mask before output. National
-datasets shrink to a thin sliver around the rail network.
+CLIPPING (CLIP_MODE env var).
+  CLIP_MODE=stations (default): the Supabase free tier (~500 MB) can't hold
+  national polygon layers, so this pipeline reads the station points from
+  web/data/stations.geojson, buffers each by 1000 m (a little beyond the 800 m
+  analysis radius, for safety) in EPSG:27700, unions them into ONE clip mask,
+  and intersects EVERY constraint layer with that mask before output. National
+  datasets shrink to a thin sliver around the rail network.
+
+  CLIP_MODE=none: NO clipping — full national coverage, for when the map's
+  data layers should render everywhere rather than only around stations. The
+  frontend fetches overlays by viewport bbox (with a padded-bbox cache), so it
+  handles national tables without loading the whole country; the cost is DB
+  storage. Pair with a coarser SIMPLIFY_M (e.g. SIMPLIFY_M=10) and a paid
+  Supabase tier, or load a subset of kinds.
 
 kinds produced: built_land, green_space, transport, flood_zone_2,
 flood_zone_3, green_belt, plus the Gate-3 heritage/environmental designations
@@ -104,9 +111,20 @@ STATIONS = ROOT / "web" / "data" / "stations.geojson"
 # Clip radius around each station. A little beyond the 800 m analysis radius so
 # the erase never runs out of geometry at the catchment edge.
 BUFFER_M = 1000
+# Clip strategy:
+#   CLIP_MODE=stations (default) — clip every layer to the 1000 m station-buffer
+#       mask. Keeps the CSV tiny (Supabase free tier).
+#   CLIP_MODE=none — NO clipping: national coverage. Use when the map layers
+#       should render everywhere, not just around stations. The frontend already
+#       fetches by viewport bbox, so it copes with national tables — but expect
+#       a much bigger CSV/DB (raise SIMPLIFY_M, and check your Supabase plan's
+#       storage first; a full national build of every kind is several GB).
+CLIP_MODE = os.environ.get("CLIP_MODE", "stations").strip().lower()
 # Light geometry clean-up (metres, in EPSG:27700) to keep the CSV small. Small
-# enough not to move the developable-area numbers meaningfully.
-SIMPLIFY_M = 1.0
+# enough not to move the developable-area numbers meaningfully. Env-overridable
+# because a CLIP_MODE=none national build wants a coarser tolerance (5-20 m) to
+# keep the output manageable.
+SIMPLIFY_M = float(os.environ.get("SIMPLIFY_M", "1.0"))
 # Coordinate precision kept in the output WKT (~0.1 m at 6 dp).
 COORD_DP = 6
 
@@ -393,15 +411,17 @@ def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None,
     gdf = gdf.copy()
     gdf["geometry"] = gdf.geometry.make_valid()
 
-    # Clip to the station-buffer mask — this is what keeps volume tiny.
-    try:
-        gdf = gpd.clip(gdf, mask_27700, keep_geom_type=False)
-    except Exception as exc:
-        print(f"    clip failed ({exc}); falling back to per-feature intersection")
-        gdf["geometry"] = gdf.geometry.intersection(mask_27700)
-    gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
-    if gdf.empty:
-        return []
+    # Clip to the station-buffer mask — this is what keeps volume tiny. In
+    # CLIP_MODE=none (national build) the mask is None and nothing is clipped.
+    if mask_27700 is not None:
+        try:
+            gdf = gpd.clip(gdf, mask_27700, keep_geom_type=False)
+        except Exception as exc:
+            print(f"    clip failed ({exc}); falling back to per-feature intersection")
+            gdf["geometry"] = gdf.geometry.intersection(mask_27700)
+        gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
+        if gdf.empty:
+            return []
 
     # Merge everything into one geometry then split back into its parts, so a
     # dense line layer becomes a handful of connected corridors rather than
@@ -851,16 +871,23 @@ def main() -> int:
     kinds = _resolve_kinds(args.kinds)
     out_path = Path(args.out)
 
-    mask = build_clip_mask()
-    if mask is None or mask.is_empty:
-        print("ERROR: could not build a station clip mask; aborting.")
-        return 1
+    if CLIP_MODE == "none":
+        # National build: no clip mask at all. Every builder receives None masks
+        # (read filters are skipped, _finish keeps the full geometry).
+        print("CLIP_MODE=none — building NATIONAL coverage (no station clipping).")
+        mask_geom_27700 = None
+        mask_geom_4326 = None
+    else:
+        mask = build_clip_mask()
+        if mask is None or mask.is_empty:
+            print("ERROR: could not build a station clip mask; aborting.")
+            return 1
 
-    # Masks in each source CRS: the 27700 mask for OS/EA layers and the clip, and
-    # a 4326 mask for the already-WGS84 green-belt read filter.
-    mask_gs_27700 = gpd.GeoSeries([mask], crs=27700)
-    mask_geom_27700 = mask
-    mask_geom_4326 = mask_gs_27700.to_crs(4326).iloc[0]
+        # Masks in each source CRS: the 27700 mask for OS/EA layers and the clip,
+        # and a 4326 mask for the already-WGS84 green-belt read filter.
+        mask_gs_27700 = gpd.GeoSeries([mask], crs=27700)
+        mask_geom_27700 = mask
+        mask_geom_4326 = mask_gs_27700.to_crs(4326).iloc[0]
 
     print(f"Building kinds: {', '.join(kinds)}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
