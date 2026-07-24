@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws32-scot-public-land" />
+  <link rel="stylesheet" href="src/styles.css?v=ws33-data-layers" />
 </head>
 <body>
   <div id="app">
@@ -24,131 +24,113 @@
     <aside id="panel">
       <header>
         <h1>MasterMapper</h1>
-        <p class="tagline">England · NPPF station site appraisal</p>
-        <div class="mode-switch" id="mode-switch" role="tablist">
-          <button type="button" class="mode-btn active" data-mode="explore">Explore</button>
-          <button type="button" class="mode-btn" data-mode="sift">Site sift</button>
-        </div>
-        <div id="layer-toggle" class="layer-toggle"></div>
+        <p class="tagline">GB · rail-led site appraisal</p>
       </header>
 
-      <section class="block" id="sift-block" hidden>
-        <h2>Site sift · NPPF station funnel</h2>
-        <p class="hint">Step through the funnel — connectivity first, then eligibility, developable land, constraints, and the three scored axes. Adjust each step's criteria; the running shortlist below updates live at every step. Click a row to profile that station.</p>
-        <div id="sift-criteria"></div>
-        <div id="sift-summary" class="sift-summary"></div>
-        <div id="sift-results" class="sift-results"></div>
+      <!-- ============ BOX 1 · DATA LAYERS ============
+           A grouped, sub-grouped catalogue of every map layer, each with its
+           own visibility toggle and transparency slider. Built by
+           buildLayersPanel() in app.js from the layer registry, so adding a
+           layer is a one-line registry entry. Minimiseable via its header. -->
+      <section class="side-box" id="layers-box">
+        <button type="button" class="box-head" aria-expanded="true">
+          <span class="box-title">Data layers</span>
+          <span class="box-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="box-body">
+          <p class="hint" style="margin:10px 14px 4px">Toggle any layer and set its transparency. Layers stream in for the current view and are cached as you pan — nothing is cropped to station catchments.</p>
+          <div id="layers-tree"></div>
+        </div>
       </section>
 
-      <!-- STATIONS — the primary Explore entry point: find and profile a station. -->
-      <section class="block" id="station-block" hidden>
-        <h2>Stations</h2>
-        <p class="hint">Search a heavy-rail station, then profile its 800 m catchment (matching the NPPF developable radius) for a deep dive.</p>
-        <div class="station-search">
-          <input type="text" id="station-search-input" placeholder="Search a station…" autocomplete="off" />
-          <div id="station-search-results" class="station-results" hidden></div>
-        </div>
-        <label class="dd-row" style="margin-top:8px">
-          <input type="checkbox" id="station-show" checked />
-          <span class="dd-label">Show stations on map</span>
-          <span class="dd-stat" id="station-count-stat"></span>
-        </label>
-        <div class="catch-method">
-          <span class="catch-method-label">Catchment</span>
-          <div class="catch-seg" id="catch-method-seg">
-            <button type="button" data-method="circle" class="active">Circle</button>
-            <button type="button" data-method="isochrone">Walk-time</button>
+      <!-- ============ BOX 2 · RAIL + STATIONS ============
+           The station-led workflow: search, catchment profiling, batch runs,
+           and the NPPF site-sift funnel. Minimiseable via its header. -->
+      <section class="side-box" id="rail-stations-box">
+        <button type="button" class="box-head" aria-expanded="true">
+          <span class="box-title">Rail &amp; stations</span>
+          <span class="box-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="box-body">
+          <div class="mode-switch" id="mode-switch" role="tablist" style="margin:10px 14px 2px">
+            <button type="button" class="mode-btn active" data-mode="explore">Explore</button>
+            <button type="button" class="mode-btn" data-mode="sift">Site sift</button>
           </div>
-          <span class="catch-method-note" id="catch-method-note">Instant. Straight-line approx.</span>
+
+          <section class="block" id="sift-block" hidden>
+            <h2>Site sift · NPPF station funnel</h2>
+            <p class="hint">Step through the funnel — connectivity first, then eligibility, developable land, constraints, and the three scored axes. Adjust each step's criteria; the running shortlist below updates live at every step. Click a row to profile that station.</p>
+            <div id="sift-criteria"></div>
+            <div id="sift-summary" class="sift-summary"></div>
+            <div id="sift-results" class="sift-results"></div>
+          </section>
+
+          <!-- STATIONS — the primary Explore entry point: find and profile a station. -->
+          <section class="block" id="station-block" hidden>
+            <h2>Stations</h2>
+            <p class="hint">Search a heavy-rail station, then profile its 800 m catchment (matching the NPPF developable radius) for a deep dive. Station visibility lives in Data layers → Transport &amp; rail.</p>
+            <div class="station-search">
+              <input type="text" id="station-search-input" placeholder="Search a station…" autocomplete="off" />
+              <div id="station-search-results" class="station-results" hidden></div>
+            </div>
+            <div class="catch-method">
+              <span class="catch-method-label">Catchment</span>
+              <div class="catch-seg" id="catch-method-seg">
+                <button type="button" data-method="circle" class="active">Circle</button>
+                <button type="button" data-method="isochrone">Walk-time</button>
+              </div>
+              <span class="catch-method-note" id="catch-method-note">Instant. Straight-line approx.</span>
+            </div>
+            <button type="button" id="batch-open-btn" class="batch-cta">⚡ Batch / pipeline analysis →</button>
+          </section>
+
+          <section class="block" id="context-block">
+            <h2>Site context</h2>
+            <p class="hint" id="draw-hint">Tap any area to see its details. Use the draw tool (top-right) to outline a plot and get an aggregated report here.</p>
+            <div id="report"><p class="empty">No site selected yet.</p></div>
+          </section>
+
+          <!-- Secondary tools below — collapsed by default to keep the top clean. -->
+          <section class="block collapsible collapsed" id="plot-block">
+            <button type="button" class="block-head" aria-expanded="false">
+              <h2>Define an area</h2>
+              <span class="block-caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="block-content">
+              <p class="hint">Drop a point or draw a plot, then build a travel-time catchment around it for a deep dive.</p>
+              <div class="plot-modes">
+                <button type="button" class="plot-mode-btn" id="plot-point">Drop a point</button>
+                <button type="button" class="plot-mode-btn" id="plot-draw">Draw a plot</button>
+                <button type="button" class="plot-mode-btn" id="plot-upload" disabled title="Coming soon">Upload (soon)</button>
+              </div>
+              <div class="plot-edit">
+                <button type="button" class="plot-edit-btn" id="plot-undo">↶ Undo</button>
+                <button type="button" class="plot-edit-btn" id="plot-clear">✕ Clear</button>
+              </div>
+              <div class="plot-iso">
+                <label class="plot-field">
+                  <span>Travel mode</span>
+                  <select id="plot-mode-select">
+                    <option value="pedestrian">Walk</option>
+                    <option value="bicycle">Cycle</option>
+                    <option value="auto">Drive</option>
+                  </select>
+                </label>
+                <label class="plot-field">
+                  <span>Minutes</span>
+                  <input type="number" id="plot-minutes" min="1" max="60" value="15" />
+                </label>
+              </div>
+              <button type="button" class="dd-load-btn" id="plot-go" style="width:100%;margin-top:4px">Build catchment &amp; deep dive</button>
+              <p class="hint" id="plot-status" style="margin-top:8px"></p>
+            </div>
+          </section>
         </div>
-        <button type="button" id="batch-open-btn" class="batch-cta">⚡ Batch / pipeline analysis →</button>
       </section>
 
       <!-- Batch analysis setup + results overlays -->
       <div id="batch-setup" class="batch-setup" hidden></div>
       <div id="batch-results" class="batch-results" hidden></div>
-
-      <section class="block" id="context-block">
-        <h2>Site context</h2>
-        <p class="hint" id="draw-hint">Tap any area to see its details. Use the draw tool (top-right) to outline a plot and get an aggregated report here.</p>
-        <div id="report"><p class="empty">No site selected yet.</p></div>
-      </section>
-
-      <section class="block" id="overlay-block">
-        <h2>Map layers</h2>
-        <p class="hint">Context layers drawn over the map. The deprivation choropleth is off by default.</p>
-        <label class="dd-row">
-          <input type="checkbox" id="imd-show" />
-          <span class="dd-label">Deprivation (IMD)</span>
-        </label>
-        <label class="dd-row" id="greenbelt-row" hidden>
-          <input type="checkbox" id="greenbelt-show" />
-          <span class="dd-label">Green Belt</span>
-          <span class="dd-stat" id="greenbelt-count"></span>
-        </label>
-        <div id="map-overlays"></div>
-        <p class="hint" id="map-overlays-note" style="margin-top:6px">Planning &amp; environmental overlays load for the current view (coverage is focused around rail stations). Zoom in to see them.</p>
-      </section>
-
-      <!-- Secondary tools below — collapsed by default to keep the top clean. -->
-      <section class="block collapsible collapsed" id="plot-block">
-        <button type="button" class="block-head" aria-expanded="false">
-          <h2>Define an area</h2>
-          <span class="block-caret" aria-hidden="true">▾</span>
-        </button>
-        <div class="block-content">
-          <p class="hint">Drop a point or draw a plot, then build a travel-time catchment around it for a deep dive.</p>
-          <div class="plot-modes">
-            <button type="button" class="plot-mode-btn" id="plot-point">Drop a point</button>
-            <button type="button" class="plot-mode-btn" id="plot-draw">Draw a plot</button>
-            <button type="button" class="plot-mode-btn" id="plot-upload" disabled title="Coming soon">Upload (soon)</button>
-          </div>
-          <div class="plot-edit">
-            <button type="button" class="plot-edit-btn" id="plot-undo">↶ Undo</button>
-            <button type="button" class="plot-edit-btn" id="plot-clear">✕ Clear</button>
-          </div>
-          <div class="plot-iso">
-            <label class="plot-field">
-              <span>Travel mode</span>
-              <select id="plot-mode-select">
-                <option value="pedestrian">Walk</option>
-                <option value="bicycle">Cycle</option>
-                <option value="auto">Drive</option>
-              </select>
-            </label>
-            <label class="plot-field">
-              <span>Minutes</span>
-              <input type="number" id="plot-minutes" min="1" max="60" value="15" />
-            </label>
-          </div>
-          <button type="button" class="dd-load-btn" id="plot-go" style="width:100%;margin-top:4px">Build catchment &amp; deep dive</button>
-          <p class="hint" id="plot-status" style="margin-top:8px"></p>
-        </div>
-      </section>
-
-      <section class="block collapsible" id="rail-block" hidden>
-        <button type="button" class="block-head" aria-expanded="true">
-          <h2>Transit overlay (rail lines)</h2>
-          <span class="block-caret" aria-hidden="true">▾</span>
-        </button>
-        <div class="block-content">
-          <p class="hint">Rail, subway, light rail and tram lines and stops, each in its own colour. Toggle any layer independently; click a stop for its details.</p>
-          <div id="rail-toggle" class="rail-toggle"></div>
-        </div>
-      </section>
-
-      <section class="block collapsible collapsed" id="weighting-block">
-        <button type="button" class="block-head" aria-expanded="false">
-          <h2>Deprivation score weighting</h2>
-          <span class="block-caret" aria-hidden="true">▾</span>
-        </button>
-        <div class="block-content">
-          <p class="hint">Domains are weighted as in the official Index of Multiple Deprivation. Move a slider and the others rebalance so the total stays 100%. The map updates live (turn on the Deprivation layer to see it).</p>
-          <div id="sliders"></div>
-          <div id="weight-total" class="weight-total">Total: 100%</div>
-          <button id="reset-weights" class="ghost">Reset to official IMD weighting</button>
-        </div>
-      </section>
 
       <footer>
         <p class="datasource" id="datasource">Loading data…</p>
@@ -245,6 +227,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws32-scot-public-land"></script>
+  <script type="module" src="src/app.js?v=ws33-data-layers"></script>
 </body>
 </html>

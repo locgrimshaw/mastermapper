@@ -216,6 +216,30 @@ def _iter_pages(query):
             yield data.get("features", [])
 
 
+def _file_pages(path):
+    """Yield a single page from a committed local GeoJSON file. The most reliable
+    path when the ArcGIS host blocks CI: download SIMD 2020 once (ArcGIS Hub ->
+    Download -> GeoJSON) and commit it to data/raw/, no live gov.scot dependency."""
+    print(f"  SIMD local file: {path}")
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    feats = data.get("features", []) if isinstance(data, dict) else []
+    print(f"  got {len(feats)} features")
+    yield feats
+
+
+def _find_local_source():
+    """A committed SIMD source file, from SIMD_FILE_SRC or common default names."""
+    env = os.environ.get("SIMD_FILE_SRC", "").strip()
+    if env and Path(env).exists():
+        return env
+    for name in ("simd_source.geojson", "simd_2020.geojson", "SIMD.geojson",
+                 "simd_source.json"):
+        p = RAW / name
+        if p.exists():
+            return str(p)
+    return None
+
+
 def _direct_pages(url):
     """Yield a single page from a direct GeoJSON download (a whole
     FeatureCollection — e.g. an ArcGIS Hub 'download/v1' export or any pre-exported
@@ -232,6 +256,7 @@ def _direct_pages(url):
 def main() -> int:
     # Preferred override: a direct GeoJSON URL (SIMD_GEOJSON_URL). Else an ArcGIS
     # query base (SIMD_ARCGIS_URL), else the ScotGov default.
+    file_src = _find_local_source()
     direct = os.environ.get("SIMD_GEOJSON_URL", "").strip()
     base = (os.environ.get("SIMD_ARCGIS_URL") or DEFAULT_URL).rstrip("/")
     query = base + "/query"
@@ -240,7 +265,13 @@ def main() -> int:
     points, polys = [], []     # centroid features (DB) + polygon features (choropleth)
     fld_map = None
     seen = set()
-    pages = _direct_pages(direct) if direct else _iter_pages(query)
+    # Priority: committed local file > direct GeoJSON URL > ArcGIS query paging.
+    if file_src:
+        pages = _file_pages(file_src)
+    elif direct:
+        pages = _direct_pages(direct)
+    else:
+        pages = _iter_pages(query)
     for page in pages:
         if not page:
             continue
