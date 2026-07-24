@@ -131,6 +131,22 @@ database load). One-off setup, then re-run the workflow occasionally:
    <https://use-land-property-data.service.gov.uk/datasets/inspire> need no
    account — that side is already automatable.)
 
+## 8d. Housing Delivery Test → the NPPF approval-likelihood layer
+
+1. Search gov.uk for **"Housing Delivery Test measurement"** and download the
+   latest measurement CSV/ODS (save/export as CSV if ODS).
+2. **Drop-in file** named **`hdt.csv`**, then run the datasets loader with
+   `hdt` — authorities colour by consequence (red = presumption in favour).
+
+## 8e. Finer rents (optional but recommended)
+
+The rents builder already understands bedroom-level tables. Download the
+**VOA private rental market summary statistics** (LA × bedroom count,
+medians/quartiles) from gov.uk and supply it as the rents CSV (drop-in
+**`ons-la-rents.csv`** replacement or hand it to Claude) — the layer and
+hover then carry per-bedroom figures. For London ward-level rents, grab the
+GLA London Rents Map data extract and hand it over.
+
 ## 9. DNO registrations → real grid capacity/headroom (v2 layers)
 
 1. **UKPN** — ✅ DONE: the Grid and Primary sites export is wired in as the

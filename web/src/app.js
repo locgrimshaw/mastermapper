@@ -8268,6 +8268,258 @@ function pbsaCatchClear() {
   if (note) note.textContent = "";
 }
 
+// ---- Portfolio scorer (priority-1 tool) ------------------------------------
+// Upload a landholder's holdings (CSV of postcodes / lat-lng, or GeoJSON
+// polygons); every site is scored server-side by polygon_summary() and ranked.
+// Free-data heuristics, honestly labelled: Policy leans on constraint
+// coverage + the HDT presumption signal + brownfield overlap; Access on
+// station distance; the composite is a screen, not an appraisal.
+
+const pf = { sites: [], results: [], running: false };
+
+function wirePortfolioBox() {
+  const file = document.getElementById("pf-file");
+  if (!file) return;
+  file.addEventListener("change", async () => {
+    const f = file.files && file.files[0];
+    if (!f) return;
+    try {
+      await pfLoadFile(f);
+    } catch (err) {
+      pfStatus(`Could not read that file: ${err.message}`);
+    }
+  });
+  const exp = document.getElementById("pf-export");
+  if (exp) exp.addEventListener("click", pfExportCsv);
+  const clr = document.getElementById("pf-clear");
+  if (clr) clr.addEventListener("click", pfClear);
+}
+
+function pfStatus(msg) {
+  const el = document.getElementById("pf-status");
+  if (el) el.textContent = msg || "";
+}
+
+async function pfLoadFile(f) {
+  pfClear();
+  const text = await f.text();
+  let sites = [];
+  if (/\.(geojson|json)$/i.test(f.name) || text.trim().startsWith("{")) {
+    const gj = JSON.parse(text);
+    const feats = gj.type === "FeatureCollection" ? gj.features : [gj];
+    sites = feats.filter(x => x && x.geometry).map((x, i) => ({
+      name: String(x.properties?.name || x.properties?.id || `Site ${i + 1}`),
+      geometry: x.geometry,
+    }));
+  } else {
+    sites = await pfParseCsv(text);
+  }
+  if (!sites.length) { pfStatus("No usable sites found in that file."); return; }
+  if (sites.length > 200) { pfStatus(`${sites.length} sites — scoring the first 200.`); sites = sites.slice(0, 200); }
+  pf.sites = sites;
+  await pfScoreAll();
+}
+
+async function pfParseCsv(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return [];
+  const split = (l) => l.match(/("([^"]|"")*"|[^,]*)(,|$)/g)
+    .map(c => c.replace(/,$/, "").replace(/^"|"$/g, "").replace(/""/g, '"')).slice(0, -1);
+  const head = split(lines[0]).map(h => h.trim().toLowerCase());
+  const idx = (names) => head.findIndex(h => names.some(n => h === n || h.includes(n)));
+  const iLat = idx(["lat", "latitude", "y"]);
+  const iLng = idx(["lng", "lon", "longitude", "x"]);
+  const iPc = idx(["postcode", "post code", "pcode"]);
+  const iName = idx(["name", "site", "title", "ref", "address"]);
+  const rows = lines.slice(1).map(split);
+  if (iLat >= 0 && iLng >= 0) {
+    return rows.map((r, i) => {
+      const lat = parseFloat(r[iLat]), lng = parseFloat(r[iLng]);
+      if (isNaN(lat) || isNaN(lng)) return null;
+      return { name: (iName >= 0 && r[iName]) || `Site ${i + 1}`,
+               geometry: { type: "Point", coordinates: [lng, lat] } };
+    }).filter(Boolean);
+  }
+  if (iPc < 0) throw new Error("no postcode or lat/lng columns found");
+  // Geocode postcodes via postcodes.io (free, bulk 100 per request).
+  pfStatus("Geocoding postcodes…");
+  const pcs = rows.map(r => (r[iPc] || "").trim()).filter(Boolean);
+  const coords = {};
+  for (let i = 0; i < pcs.length; i += 100) {
+    const chunk = pcs.slice(i, i + 100);
+    const resp = await fetch("https://api.postcodes.io/postcodes", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ postcodes: chunk }),
+    });
+    const j = await resp.json();
+    for (const r of j.result || []) {
+      if (r.result) coords[r.query.replace(/\s+/g, "").toUpperCase()] =
+        [r.result.longitude, r.result.latitude];
+    }
+  }
+  return rows.map((r, i) => {
+    const c = coords[(r[iPc] || "").replace(/\s+/g, "").toUpperCase()];
+    if (!c) return null;
+    return { name: (iName >= 0 && r[iName]) || r[iPc] || `Site ${i + 1}`,
+             geometry: { type: "Point", coordinates: c } };
+  }).filter(Boolean);
+}
+
+// Heuristic composite. Transparent and tunable; the table shows the inputs.
+function pfScore(s) {
+  const pct = k => (s.summary?.constraints || []).find(c => c.kind === k)?.pct || 0;
+  const env = ["sssi", "sac", "spa", "ramsar", "ancient_woodland"]
+    .reduce((a, k) => a + pct(k), 0);
+  const heritage = ["conservation_area", "scheduled_monument", "park_garden"]
+    .reduce((a, k) => a + pct(k), 0);
+  let policy = 100
+    - pct("green_belt") * 0.5
+    - pct("flood_zone_3") * 0.45 - pct("flood_zone_2") * 0.15
+    - Math.min(60, env) - Math.min(30, heritage * 0.4)
+    - pct("listed_building") * 0.3;
+  const hdt = Number(s.summary?.areas?.hdt?.hdt_pct);
+  if (!isNaN(hdt)) policy += hdt < 75 ? 15 : hdt < 85 ? 8 : hdt < 95 ? 4 : 0;
+  if ((s.summary?.brownfield_overlap || 0) > 0) policy += 10;
+  if (s.summary?.areas?.article4) policy -= 3;
+  policy = Math.max(0, Math.min(100, policy));
+  let access = 50;
+  if (s.stationM != null)
+    access = s.stationM <= 800 ? 100 : s.stationM <= 2000 ? 75 :
+             s.stationM <= 5000 ? 45 : 20;
+  return { policy: Math.round(policy), access,
+           total: Math.round(policy * 0.7 + access * 0.3) };
+}
+
+async function pfScoreAll() {
+  const sb = getSupabase();
+  if (!sb) { pfStatus("Database unavailable."); return; }
+  pf.running = true;
+  pf.results = [];
+  const N = pf.sites.length;
+  let done = 0;
+  const worker = async () => {
+    while (pf.sites.length && pf.running) {
+      const site = pf.sites.shift();
+      let summary = null;
+      try {
+        const { data, error } = await sb.rpc("polygon_summary",
+          { p_geojson: JSON.stringify(site.geometry) });
+        if (!error) summary = data;
+      } catch (_) {}
+      let centroid = site.geometry.type === "Point" ? site.geometry.coordinates : null;
+      if (!centroid && typeof turf !== "undefined") {
+        try { centroid = turf.centroid(site).geometry.coordinates; } catch (_) {}
+      }
+      const stn = centroid ? nearestUsageStation({ lng: centroid[0], lat: centroid[1] }) : null;
+      const rec = { name: site.name, geometry: site.geometry, centroid,
+                    summary, stationM: stn ? Math.round(stn.dist) : null,
+                    stationName: stn ? stn.props.name : null };
+      rec.scores = summary && !summary.error ? pfScore(rec) : { policy: 0, access: 0, total: 0 };
+      pf.results.push(rec);
+      done++;
+      pfStatus(`Scoring… ${done}/${N}`);
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  pf.running = false;
+  pf.results.sort((a, b) => b.scores.total - a.scores.total);
+  pfStatus(`${pf.results.length} sites scored — ranked best first. Click a row to fly to the site.`);
+  pfRender();
+  pfDrawSites();
+}
+
+function pfRender() {
+  const host = document.getElementById("pf-results");
+  if (!host) return;
+  const rows = pf.results.map((r, i) => {
+    const s = r.summary || {};
+    const topC = (s.constraints || [])[0];
+    const gb = (s.constraints || []).find(c => c.kind === "green_belt");
+    const sales = s.recent_sales || [];
+    const med = sales.length
+      ? sales.map(x => x.price).sort((a, b) => a - b)[Math.floor(sales.length / 2)] : null;
+    return `<button type="button" class="pbsa-row pf-row" data-i="${i}">
+      <span class="pf-rank">${i + 1}</span>
+      <span class="pbsa-row-name">${_esc(r.name)}</span>
+      <span class="pf-score" style="color:${r.scores.total >= 70 ? "#2f9e44" : r.scores.total >= 45 ? "#f59f00" : "#e03131"}">${r.scores.total}</span>
+      <span class="pbsa-row-meta">${[
+        s.area_ha != null ? `${s.area_ha} ha` : null,
+        gb ? `GB ${gb.pct}%` : null,
+        topC && topC.kind !== "green_belt" ? `${topC.kind.replace(/_/g, " ")} ${topC.pct}%` : null,
+        s.brownfield_overlap ? "brownfield" : null,
+        r.stationM != null ? `stn ${_fmtDist(r.stationM)}` : null,
+        med ? `sales ~£${(med / 1000).toFixed(0)}k` : null,
+      ].filter(Boolean).join(" · ")}</span>
+    </button>`;
+  }).join("");
+  host.innerHTML = rows || "";
+  document.getElementById("pf-actions").hidden = !pf.results.length;
+  host.querySelectorAll(".pf-row").forEach(btn =>
+    btn.addEventListener("click", () => {
+      const r = pf.results[parseInt(btn.dataset.i, 10)];
+      if (r && r.centroid)
+        map.flyTo({ center: r.centroid, zoom: 14, duration: 800 });
+    }));
+}
+
+function pfDrawSites() {
+  const fc = { type: "FeatureCollection", features: pf.results.map((r, i) => ({
+    type: "Feature",
+    properties: { rank: i + 1, name: r.name, score: r.scores.total },
+    geometry: r.geometry.type === "Point"
+      ? r.geometry
+      : { type: "Point", coordinates: r.centroid || [0, 0] },
+  })) };
+  if (map.getSource("pf-sites")) map.getSource("pf-sites").setData(fc);
+  else {
+    map.addSource("pf-sites", { type: "geojson", data: fc });
+    map.addLayer({ id: "pf-site-dot", type: "circle", source: "pf-sites",
+      paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 6, 12, 10],
+               "circle-color": ["step", ["get", "score"], "#e03131", 45, "#f59f00", 70, "#2f9e44"],
+               "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.6 } });
+    map.addLayer({ id: "pf-site-lbl", type: "symbol", source: "pf-sites",
+      layout: { "text-field": ["to-string", ["get", "rank"]],
+                "text-font": ["Noto Sans Regular"], "text-size": 10,
+                "text-allow-overlap": true },
+      paint: { "text-color": "#ffffff" } });
+  }
+}
+
+function pfExportCsv() {
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = ["name,score,policy,access,area_ha,green_belt_pct,flood3_pct,brownfield_overlap,hdt_pct,station_m,station,rent_mean,sales_median,constraints"];
+  for (const r of pf.results) {
+    const s = r.summary || {};
+    const pct = k => (s.constraints || []).find(c => c.kind === k)?.pct || 0;
+    const sales = (s.recent_sales || []).map(x => x.price).sort((a, b) => a - b);
+    lines.push([q(r.name), r.scores.total, r.scores.policy, r.scores.access,
+      s.area_ha ?? "", pct("green_belt"), pct("flood_zone_3"),
+      s.brownfield_overlap ?? "", s.areas?.hdt?.hdt_pct ?? "",
+      r.stationM ?? "", q(r.stationName ?? ""), s.areas?.la_rents?.rent_mean ?? "",
+      sales.length ? sales[Math.floor(sales.length / 2)] : "",
+      q((s.constraints || []).map(c => `${c.kind}:${c.pct}%`).join(" ")),
+    ].join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "portfolio-scores.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function pfClear() {
+  pf.sites = []; pf.results = []; pf.running = false;
+  const host = document.getElementById("pf-results");
+  if (host) host.innerHTML = "";
+  const act = document.getElementById("pf-actions");
+  if (act) act.hidden = true;
+  pfStatus("");
+  for (const id of ["pf-site-dot", "pf-site-lbl"])
+    if (map.getLayer(id)) map.removeLayer(id);
+  if (map.getSource("pf-sites")) map.removeSource("pf-sites");
+}
+
 // ---- University deep-dive drawer (right side, like the station panel) ------
 // A growing home for everything about one institution: demand stats, the
 // accommodation mix, its campuses, rail access and the local market around
@@ -9180,6 +9432,7 @@ wireSideBoxes();          // minimiseable left boxes (persisted per box)
 wireCollapsibleBlocks();  // secondary blocks (define-an-area) ship collapsed
 wireModeSwitch();         // Explore / Site-sift mode switch
 wirePbsaBox();            // PBSA sift (university rail access, box 3)
+wirePortfolioBox();       // Portfolio scorer (priority-1 tool)
 
 map.on("load", async () => {
   try {

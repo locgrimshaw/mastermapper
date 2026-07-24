@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws53-uni-dive" />
+  <link rel="stylesheet" href="src/styles.css?v=ws54-portfolio" />
 </head>
 <body>
   <div id="app">
@@ -40,6 +40,29 @@
         <div class="box-body">
           <p class="hint" style="margin:10px 14px 4px">Toggle any layer and set its transparency. Layers stream in for the current view and are cached as you pan — nothing is cropped to station catchments.</p>
           <div id="layers-tree"></div>
+        </div>
+      </section>
+
+      <!-- ============ PORTFOLIO SCORER ============
+           Priority-1 tool: upload a landholder's portfolio (CSV of postcodes
+           or coordinates, or GeoJSON polygons) and batch-score every site
+           against the full national evidence base via polygon_summary(). -->
+      <section class="side-box" id="portfolio-box">
+        <button type="button" class="box-head" aria-expanded="true">
+          <span class="box-title">Portfolio scorer</span>
+          <span class="box-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="box-body">
+          <section class="block" id="portfolio-block">
+            <p class="hint">Upload a portfolio and every site is scored against the national evidence base: constraint coverage, NPPF signals (Housing Delivery Test, brownfield), grid and station access, local market. CSV needs a <code>postcode</code> column or <code>lat</code>/<code>lng</code> columns (optional <code>name</code>); GeoJSON polygons are scored as drawn. Up to 200 sites.</p>
+            <input type="file" id="pf-file" accept=".csv,.geojson,.json" />
+            <p class="hint" id="pf-status"></p>
+            <div id="pf-results"></div>
+            <div class="pf-actions" id="pf-actions" hidden>
+              <button type="button" id="pf-export">Export CSV</button>
+              <button type="button" class="ghost" id="pf-clear">Clear</button>
+            </div>
+          </section>
         </div>
       </section>
 
@@ -281,6 +304,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws53-uni-dive"></script>
+  <script type="module" src="src/app.js?v=ws54-portfolio"></script>
 </body>
 </html>
