@@ -242,6 +242,27 @@ def main() -> int:
             delete_dataset(dataset)
 
     upsert(records)
+
+    # Stamp the freshness ledger (best-effort — a failed stamp never fails
+    # the load): dataset -> loaded_at + row count in public.dataset_meta.
+    for dataset in sorted(by_dataset):
+        try:
+            import datetime as _dt
+            body = json.dumps([{"dataset": dataset,
+                                "n_rows": by_dataset[dataset],
+                                "loaded_at": _dt.datetime.now(
+                                    _dt.timezone.utc).isoformat()}]).encode()
+            req = urllib.request.Request(
+                f"{SUPABASE_URL}/rest/v1/dataset_meta",
+                data=body, method="POST",
+                headers={"apikey": SUPABASE_KEY,
+                         "Authorization": f"Bearer {SUPABASE_KEY}",
+                         "Content-Type": "application/json",
+                         "Prefer": "resolution=merge-duplicates"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                resp.read()
+        except Exception as exc:
+            print(f"  note: freshness stamp for '{dataset}' failed ({exc})")
     return 0
 
 

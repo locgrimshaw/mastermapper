@@ -8,6 +8,10 @@ name: Load bus network into Supabase
 # Data: NaPTAN and Bus Open Data Service © DfT, OGL v3.
 
 on:
+  schedule:
+    # Monthly (3rd, 03:50 UTC) — NaPTAN churns constantly; GTFS
+    # frequencies refresh too once BUS_GTFS_SRC is set.
+    - cron: "50 3 3 * *"
   workflow_dispatch:
 
 permissions:

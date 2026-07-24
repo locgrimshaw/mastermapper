@@ -1,0 +1,43 @@
+name: Load terrain slope grid into Supabase
+
+# OS Terrain 50 -> mean/max slope per 1 km cell across GB (the data-centre
+# flatness screen). Free OGL download, no key needed. Re-run only when OS
+# release a new Terrain 50 (roughly annually).
+# Data: Contains OS data © Crown copyright and database right (OGL).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt numpy
+
+      - name: Build the slope_grid import CSV
+        env:
+          TERRAIN50_SRC: ${{ vars.TERRAIN50_SRC }}
+        run: python pipeline/build_terrain.py
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: slope_grid
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          python supabase/loaders/load_datasets.py

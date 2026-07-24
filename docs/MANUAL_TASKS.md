@@ -205,6 +205,17 @@ data behind sign-ins or hashed links, so each needs one pasted URL:
    = that link, then run the datasets loader with
    `spen_sites,enwl_sites,ssen_sites`.
 
+## 11. Ofcom Connected Nations → full-fibre availability layer
+
+1. Go to <https://www.ofcom.org.uk/phones-and-broadband/coverage-and-speeds/connected-nations-and-infrastructure-reports>
+   and open the latest **Connected Nations** report's data downloads.
+2. Download the **fixed coverage, local authority level** CSV (it has an LA
+   code column plus "Full Fibre availability" / "Gigabit availability"
+   percentage columns).
+3. If < 25 MB: **drop-in file** named **`ofcom-fixed-la.csv`**; otherwise
+   **repo variable** `OFCOM_FIBRE_SRC` = the download link. Then run the
+   datasets loader with `ofcom_fibre`.
+
 ## 10. National Rail Open Data account → the PBSA rail sift's journey data
 
 The new "PBSA sift" box ranks feeder stations by DIRECT train time into a

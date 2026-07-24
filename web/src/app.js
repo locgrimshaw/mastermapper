@@ -1093,6 +1093,9 @@ const MAP_OVERLAYS = [
   // Universities & students
   { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5, icon: "uni" },
   { key: "uni_campus_site", group: "students", label: "Campus grounds (OSM)",     color: "#9775fa", dataset: "uni_campus_site", minZoom: 8 },
+  { key: "census_students", group: "students", label: "Student population (Census)", color: "#7048e8", dataset: "census_students", minZoom: 5 },
+  { key: "student_accom",   group: "students", label: "Existing PBSA stock (OSM)",  color: "#c2255c", dataset: "student_accom", render: "point", minZoom: 8, lim: 6000,
+    radius: ["interpolate", ["linear"], ["zoom"], 7, 2.5, 11, 4.5, 15, 7] },
   { key: "uni_building",    group: "students", label: "University buildings (OSM)", color: "#5f3dc4", dataset: "uni_building", minZoom: 11 },
   { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 11, lim: 8000 },
   // Market & boundaries
@@ -1158,6 +1161,9 @@ const MAP_OVERLAYS = [
     radius: ["interpolate", ["linear"], ["zoom"], 8, 2.5, 11, 4, 14, 6],
     numFilter: () => ({ key: "kv", max: 50 }) },
   { key: "gsp_boundary",     group: "grid", label: "Grid Supply Point boundaries",  color: "#845ef7", dataset: "gsp_boundary",     render: "line",  minZoom: 4 },
+  // Same polygons, painted by how much generation/demand is already queued
+  // inside each supply point (rebuild_gsp_queue sums the TEC register).
+  { key: "gsp_queue",        group: "grid", label: "Connection queue by GSP",       color: "#e8590c", dataset: "gsp_boundary",     minZoom: 4 },
   { key: "tec_register",     group: "grid", label: "Connection queue (TEC register)", color: "#1971c2", dataset: "tec_register",   render: "point", minZoom: 5, icon: "plug" },
   // DNO headroom sites paint by their capacity signal, not a flat layer
   // colour: UKPN classifies sites HOT (constrained) / COLD (headroom); NGED
@@ -1180,6 +1186,8 @@ const MAP_OVERLAYS = [
   // Site factors
   { key: "alc",                group: "sitefactors", label: "Agricultural land grades (ALC)", color: "#94d82d", dataset: "alc",                minZoom: 7 },
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
+  { key: "ofcom_fibre",        group: "sitefactors", label: "Full-fibre availability (Ofcom)", color: "#1971c2", dataset: "ofcom_fibre",       minZoom: 5 },
+  { key: "slope_grid",         group: "sitefactors", label: "Ground slope (1 km cells)",       color: "#e8590c", dataset: "slope_grid",        minZoom: 8, lim: 8000, noOutline: true },
 ];
 // Layers persist when zooming OUT now: the bbox RPCs take a p_zoom argument
 // and simplify geometry to ~1 screen pixel server-side (dropping sub-pixel
@@ -1202,6 +1210,11 @@ const LAYER_INFO = {
   enwl_sites:         { about: "Electricity North West grid & primary substations with published demand headroom — click a dot for the full record.", source: "Electricity North West open data portal" },
   ssen_sites:         { about: "SSEN substations with published network capacity/headroom — click a dot for the full record.", source: "SSEN distribution open data" },
   planit_rates:       { about: "Share of planning applications APPROVED over the last 3 years per authority (approved ÷ (approved + refused); withdrawn excluded). Local decision culture in one number — pair with the Housing Delivery Test for the full NPPF picture.", source: "PlanIt (planit.org.uk) aggregation of council planning registers" },
+  gsp_queue:          { about: "Total MW already queued for connection (NESO TEC register) inside each Grid Supply Point boundary — the data-centre developer's 'how contested is this supply point' number. Green = light queue, red/purple = heavily contested. Grey = no queued projects recorded.", source: "Derived: NESO TEC register × GSP boundaries" },
+  ofcom_fibre:        { about: "Share of premises with full-fibre (FTTP) available per authority, with gigabit-capable share in the hover. Red = poorly served, green = gigabit-ready.", source: "Ofcom Connected Nations (fixed coverage), OGL" },
+  census_students:    { about: "Full-time students (NS-SeC class L15) as a share of adults per authority — the structural PBSA demand base, independent of any one university's numbers.", source: "Census 2021 TS062 via NOMIS (OGL)" },
+  student_accom:      { about: "Existing purpose-built student accommodation and dormitories mapped in OpenStreetMap — the PBSA competition map. Coverage reflects OSM mapping quality.", source: "OpenStreetMap contributors (ODbL)" },
+  slope_grid:         { about: "Mean ground slope per 1 km cell from OS Terrain 50 (hover shows the steepest 50 m within the cell). Green = flat, red = steep — the data-centre construction-feasibility screen.", source: "OS Terrain 50 © Crown copyright (OGL)" },
   bus_route:          { about: "Every mapped bus route (OpenStreetMap route relations) as lines, with route number and operator on hover. Coverage reflects OSM mapping — dense in urban areas, occasionally patchy on rural services.", source: "OpenStreetMap contributors (ODbL)" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
   grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },
@@ -1621,7 +1634,28 @@ function renderOverlay(key, def, fc) {
     // Attribute-driven fills where the data carries a classification —
     // painting these one flat colour throws the information away.
     const waterStatus = ["downcase", ["to-string", ["coalesce", ["get", "status"], ""]]];
-    const fillColor = def.dataset === "ptal"
+    const fillColor = def.key === "gsp_queue"
+      // Queued MW inside each Grid Supply Point: green light -> purple mobbed.
+      ? ["case", ["!", ["has", "queued_mw"]], "rgba(160,170,175,0.35)",
+         ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "queued_mw"]], 0],
+          100, "#d3f9d8", 500, "#ffe066", 1500, "#ffa94d",
+          4000, "#fa5252", 10000, "#c92a2a", 25000, "#862e9c"]]
+      : def.dataset === "ofcom_fibre"
+      // Full-fibre availability: red poorly-served -> green gigabit-ready.
+      ? ["case", ["!", ["has", "fttp_pct"]], "rgba(160,170,175,0.35)",
+         ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "fttp_pct"]], 0],
+          20, "#e03131", 40, "#e8590c", 60, "#f59f00", 75, "#ffd43b",
+          85, "#94d82d", 95, "#2f9e44"]]
+      : def.dataset === "census_students"
+      // Full-time student share of adults: pale -> deep violet.
+      ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "students_pct"]], 0],
+         2, "#f3f0ff", 5, "#d0bfff", 8, "#9775fa", 12, "#7048e8", 18, "#5f3dc4"]
+      : def.dataset === "slope_grid"
+      // Mean slope per km cell: green flat -> red steep (DC flatness screen).
+      ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "slope"]], 0],
+         0.5, "#2f9e44", 1.5, "#94d82d", 3, "#ffd43b", 5, "#f59f00",
+         8, "#e8590c", 12, "#e03131"]
+      : def.dataset === "ptal"
       ? ["match", ["to-string", ["get", "ptal"]],
          "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
          "3", "#fee391", "4", "#fe9929", "5", "#ec7014",
@@ -2920,6 +2954,29 @@ function hoverContentForOverlay(def, p) {
     rows = [row(p.approval_pct != null ? `${p.approval_pct}%` : null, "approved"),
             row(p.approved_3y != null ? `${Number(p.approved_3y).toLocaleString()} approved · ${Number(p.refused_3y).toLocaleString()} refused` : null, "decisions"),
             row(p.apps_year != null ? `${Number(p.apps_year).toLocaleString()}/yr` : null, "decision volume")];
+  } else if (def.key === "gsp_queue" || (d === "gsp_boundary" && p.queued_mw != null)) {
+    title = p.name || "Grid Supply Point";
+    kind = "Connection queue at this GSP";
+    rows = [row(p.queued_mw != null ? `${Number(p.queued_mw).toLocaleString()} MW` : null, "queued"),
+            row(p.queued_n != null ? `${Number(p.queued_n).toLocaleString()} projects` : null, "in the queue")];
+  } else if (d === "ofcom_fibre") {
+    title = p.name || "Authority";
+    kind = "Fixed broadband coverage";
+    rows = [row(p.fttp_pct != null ? `${p.fttp_pct}%` : null, "full fibre (FTTP)"),
+            row(p.gigabit_pct != null ? `${p.gigabit_pct}%` : null, "gigabit-capable")];
+  } else if (d === "census_students") {
+    title = p.name || "Authority";
+    kind = "Census 2021 full-time students";
+    rows = [row(p.students != null ? Number(p.students).toLocaleString() : null, "students"),
+            row(p.students_pct != null ? `${p.students_pct}%` : null, "of adults")];
+  } else if (d === "student_accom") {
+    title = p.name || "Student accommodation";
+    kind = "Existing PBSA / dormitory (OSM)";
+    rows = [row(p.operator, "operator")];
+  } else if (d === "slope_grid") {
+    title = p.slope != null ? `${p.slope}° mean slope` : "Slope cell";
+    kind = "Ground slope — 1 km cell";
+    rows = [row(p.max_slope != null ? `${p.max_slope}°` : null, "steepest 50 m")];
   } else if (d === "bus_route") {
     title = p.ref ? `Bus ${p.ref}` : (p.name || "Bus route");
     kind = p.name && p.ref ? p.name : "Bus route";
@@ -8521,8 +8578,74 @@ function wirePortfolioBox() {
   });
   const exp = document.getElementById("pf-export");
   if (exp) exp.addEventListener("click", pfExportCsv);
+  const rep = document.getElementById("pf-report");
+  if (rep) rep.addEventListener("click", pfPrintReport);
   const clr = document.getElementById("pf-clear");
   if (clr) clr.addEventListener("click", pfClear);
+}
+
+// Printable portfolio report: one section per site (ranked), everything the
+// scorer knows, in a clean print stylesheet. Opens a new tab and invokes the
+// browser's print dialog — save as PDF from there.
+function pfPrintReport() {
+  if (!pf.results.length) return;
+  const esc = s => String(s ?? "").replace(/[&<>"]/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const CONSTRAINT_LABELS = k => k.replace(/_/g, " ");
+  const secs = pf.results.map((r, i) => {
+    const s = r.summary || {};
+    const areas = s.areas || {};
+    const cons = (s.constraints || [])
+      .map(c => `<li>${esc(CONSTRAINT_LABELS(c.kind))} — ${esc(c.pct)}% of site</li>`).join("")
+      || "<li>No planning or environmental designations touch this site.</li>";
+    const sales = (s.recent_sales || [])
+      .map(x => `<li>£${Number(x.price).toLocaleString()} · ${esc(x.date)} · ${esc(x.ptype)} · ${Math.round(x.dist_m)} m away</li>`).join("");
+    const gsub = s.nearest_grid_substation;
+    const rows = [
+      s.area_ha != null ? ["Site area", `${s.area_ha} ha`] : null,
+      areas.lad_boundary ? ["Authority", areas.lad_boundary.name] : null,
+      areas.hdt && areas.hdt.hdt_pct != null
+        ? ["Housing Delivery Test", `${areas.hdt.hdt_pct}% delivery`] : null,
+      areas.planit_rates && areas.planit_rates.approval_pct != null
+        ? ["Approval rate (3 yr)", `${areas.planit_rates.approval_pct}%`] : null,
+      s.grey_belt_pct != null ? ["Grey-belt potential (model)", `${s.grey_belt_pct}% of site`] : null,
+      s.brownfield_overlap ? ["Registered brownfield on site", `${s.brownfield_overlap} site(s)`] : null,
+      s.council_property ? ["Public-authority property on site", `${s.council_property} point(s)`] : null,
+      r.stationM != null ? ["Nearest station", `${esc(r.stationName || "")} · ${(r.stationM / 1000).toFixed(1)} km`] : null,
+      gsub ? ["Nearest grid substation", `${esc(gsub.name || "")} (${esc(gsub.kv)} kV) · ${(gsub.dist_m / 1000).toFixed(1)} km`] : null,
+      areas.la_rents && areas.la_rents.rent_mean != null
+        ? ["Average private rent", `£${Number(areas.la_rents.rent_mean).toLocaleString()}/mo`] : null,
+    ].filter(Boolean).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${v}</td></tr>`).join("");
+    return `<section${i ? ' class="pb"' : ""}>
+      <h2>#${i + 1} ${esc(r.name)} <span class="score s${r.scores.total >= 70 ? "g" : r.scores.total >= 45 ? "a" : "r"}">${r.scores.total}</span></h2>
+      <p class="sub">Policy ${r.scores.policy} · Access ${r.scores.access}${r.centroid ? ` · ${r.centroid[1].toFixed(5)}, ${r.centroid[0].toFixed(5)}` : ""}</p>
+      <table>${rows}</table>
+      <h3>Designation coverage</h3><ul>${cons}</ul>
+      ${sales ? `<h3>Recent sales nearby</h3><ul>${sales}</ul>` : ""}
+    </section>`;
+  }).join("");
+  const w = window.open("", "_blank");
+  if (!w) { pfStatus("Pop-up blocked — allow pop-ups to print the report."); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8">
+    <title>Portfolio appraisal — ${pf.results.length} sites</title>
+    <style>
+      body{font:13px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;color:#1c2533;margin:2.2em;}
+      h1{font-size:1.5em;margin:0 0 .2em;} .muted{color:#6c7a89;margin:0 0 1.6em;}
+      h2{font-size:1.15em;margin:1.4em 0 .1em;border-bottom:1.5px solid #dee2e6;padding-bottom:.25em;}
+      h3{font-size:.95em;margin:.9em 0 .25em;} .sub{color:#6c7a89;margin:.15em 0 .7em;}
+      table{border-collapse:collapse;} th{text-align:left;padding:.18em 1.2em .18em 0;color:#495057;font-weight:600;white-space:nowrap;vertical-align:top;}
+      td{padding:.18em 0;} ul{margin:.25em 0 .8em 1.2em;padding:0;}
+      .score{float:right;font-size:1.05em;padding:.05em .5em;border-radius:5px;color:#fff;}
+      .s\\.g,.sg{background:#2f9e44;} .sa{background:#f59f00;} .sr{background:#e03131;}
+      .pb{page-break-before:always;}
+      @media print { .noprint{display:none;} }
+    </style></head><body>
+    <h1>Portfolio appraisal</h1>
+    <p class="muted">${pf.results.length} sites, ranked by MasterMapper composite score · generated ${new Date().toLocaleDateString("en-GB")} · heuristic screen, not advice — verify against the local plan.</p>
+    ${secs}
+    <script>setTimeout(function(){window.print();}, 400);<\/script>
+    </body></html>`);
+  w.document.close();
 }
 
 function pfStatus(msg) {
@@ -9718,3 +9841,8 @@ map.on("load", async () => {
     console.error(err);
   }
 });
+
+// Test/debug handle: module-scoped internals reachable from the console and
+// the offline smoke harness. Read-only usage only — not a public API.
+window.__mm = { MAP_OVERLAYS, LAYER_INFO, renderOverlay, hoverContentForOverlay,
+                setOverlayOpacity, overlayDef, pf, pfPrintReport, _cellsToPoints };

@@ -8,12 +8,16 @@ name: Load Price Paid sales into Supabase
 # under the PPD licence (display use, with attribution).
 
 on:
+  schedule:
+    # Monthly (2nd, 02:40 UTC) — rolls the 36-month window forward and
+    # re-aggregates the price heatmap grid.
+    - cron: "40 2 2 * *"
   workflow_dispatch:
     inputs:
       months:
-        description: "How many months of sales to keep (default 12)"
+        description: "How many months of sales to keep (default 36)"
         required: false
-        default: "12"
+        default: "36"
 
 permissions:
   contents: read

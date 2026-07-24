@@ -26,6 +26,10 @@ name: Load datasets into Supabase
 # step below, which writes data/raw/osm_power.geojson for the builder.
 
 on:
+  schedule:
+    # Monthly full refresh (1st, 03:20 UTC): every dataset with a
+    # stable/default source re-downloads; *_SRC-gated ones warn and skip.
+    - cron: "20 3 1 * *"
   workflow_dispatch:
     inputs:
       datasets:
@@ -66,10 +70,11 @@ jobs:
           set -u
           mkdir -p data/raw
           # Which extracts does this run actually need? (blank input = all)
-          WANT_POWER=0; WANT_UNI=0; WANT_BUS=0
+          WANT_POWER=0; WANT_UNI=0; WANT_BUS=0; WANT_STU=0
           if [ -z "$DATASETS_INPUT" ] || echo "$DATASETS_INPUT" | grep -qE 'power|tec'; then WANT_POWER=1; fi
           if [ -z "$DATASETS_INPUT" ] || echo "$DATASETS_INPUT" | grep -q 'uni'; then WANT_UNI=1; fi
           if [ -z "$DATASETS_INPUT" ] || echo "$DATASETS_INPUT" | grep -q 'bus_route'; then WANT_BUS=1; fi
+          if [ -z "$DATASETS_INPUT" ] || echo "$DATASETS_INPUT" | grep -q 'student_accom'; then WANT_STU=1; fi
           if ! sudo apt-get update -qq || ! sudo apt-get install -y -qq osmium-tool gdal-bin; then
             echo "::warning::apt install of osmium-tool/gdal-bin failed — OSM datasets will be skipped"
             exit 0
@@ -143,6 +148,29 @@ jobs:
               echo "::warning::osmium university tags-filter failed — campus/building datasets will be skipped"
             fi
           fi
+          if [ "$WANT_STU" = 1 ]; then
+            echo "Filtering student accommodation features ..."
+            if osmium tags-filter data/raw/uk.osm.pbf nwr/building=dormitory \
+                 nwr/amenity=student_accommodation \
+                 -o data/raw/stuacc.osm.pbf --overwrite; then
+              cat > data/raw/osm_stu_export_config.json <<'EOF'
+          {
+            "attributes": { "type": false, "id": true, "version": false,
+                            "changeset": false, "timestamp": false,
+                            "uid": false, "user": false, "way_nodes": false },
+            "include_tags": ["building", "amenity", "name", "operator"],
+            "area_tags": ["building=dormitory", "amenity=student_accommodation"]
+          }
+          EOF
+              if ! osmium export data/raw/stuacc.osm.pbf \
+                   -c data/raw/osm_stu_export_config.json \
+                   -o data/raw/osm_student_accom.geojson -f geojson --overwrite; then
+                echo "::warning::student accommodation export failed — dataset will be skipped"
+              fi
+            else
+              echo "::warning::osmium student-accom tags-filter failed — dataset will be skipped"
+            fi
+          fi
           if [ "$WANT_BUS" = 1 ]; then
             echo "Filtering route=bus relations ..."
             # ogr2ogr's OSM driver assembles type=route relations into the
@@ -160,7 +188,7 @@ jobs:
             fi
           fi
           # Free the big PBFs before the build step (runner disk is finite).
-          rm -f data/raw/uk.osm.pbf data/raw/power.osm.pbf data/raw/university.osm.pbf data/raw/bus.osm.pbf
+          rm -f data/raw/uk.osm.pbf data/raw/power.osm.pbf data/raw/university.osm.pbf data/raw/bus.osm.pbf data/raw/stuacc.osm.pbf
           ls -lh data/raw || true
 
       - name: Build the datasets import CSV
@@ -189,6 +217,10 @@ jobs:
           NPG_SITES_SRC: ${{ vars.NPG_SITES_SRC }}
           ENWL_SITES_SRC: ${{ vars.ENWL_SITES_SRC }}
           SSEN_SITES_SRC: ${{ vars.SSEN_SITES_SRC }}
+          # Ofcom Connected Nations fixed coverage (LA level) — per-release
+          # link, see MANUAL_TASKS 11.
+          OFCOM_FIBRE_SRC: ${{ vars.OFCOM_FIBRE_SRC }}
+          CENSUS_STUDENTS_SRC: ${{ vars.CENSUS_STUDENTS_SRC }}
         run: |
           echo "Building supabase/datasets_import.csv (DATASETS='${DATASETS}')"
           python pipeline/build_datasets.py
@@ -214,3 +246,15 @@ jobs:
             exit 1
           fi
           python supabase/loaders/load_datasets.py
+
+      - name: Re-aggregate the connection queue by Grid Supply Point
+        if: ${{ inputs.datasets == '' || contains(inputs.datasets, 'tec') || contains(inputs.datasets, 'gsp') }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          curl -sS -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_gsp_queue" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/json" -d '{}' --max-time 600 \
+            || echo "::warning::rebuild_gsp_queue call failed — run it manually"

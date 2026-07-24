@@ -9,6 +9,10 @@ name: Load CCOD council-owned property into Supabase
 # CCOD refreshes monthly; re-run this workflow to pick up the new file.
 
 on:
+  schedule:
+    # Monthly (5th, 04:10 UTC) — HMLR refresh CCOD early each month; the
+    # API discovery route finds the newest full file automatically.
+    - cron: "10 4 5 * *"
   workflow_dispatch:
     inputs:
       ccod_file:

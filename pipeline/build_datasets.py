@@ -216,6 +216,7 @@ ALL_DATASETS = [
     "spen_sites", "npg_sites", "enwl_sites", "ssen_sites",
     "lad_boundary", "la_rents", "alc", "water_availability", "hdt",
     "planit_rates", "bus_route",
+    "ofcom_fibre", "census_students", "student_accom",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -1527,6 +1528,175 @@ def build_hdt():
     return {key: rows}
 
 
+def build_ofcom_fibre():
+    """Ofcom Connected Nations fixed-coverage stats joined onto LAD polygons
+    — full-fibre / gigabit availability per authority, the data-centre and
+    connectivity signal. Ofcom's download links are per-release, so this
+    needs OFCOM_FIBRE_SRC (or a drop-in ofcom-fixed-la.csv): the local
+    authority level 'fixed coverage' CSV from the latest Connected Nations
+    report."""
+    key = "ofcom_fibre"
+    path, how = _resolve_source(key, ["OFCOM_FIBRE_SRC"], None,
+                                "ofcom-fixed-la.csv")
+    if path is None:
+        _warn(key, "no Ofcom coverage CSV — set OFCOM_FIBRE_SRC to the "
+                   "Connected Nations fixed-coverage local-authority CSV "
+                   "(docs/MANUAL_TASKS.md 11)")
+        _note(key, how)
+        return {}
+    bpath, _b = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries to join coverage onto")
+        _note(key, "no LAD boundaries")
+        return {}
+    print(f"  [{key}] reading {path.name} ({how}) ...")
+    df = _read_csv(path)
+    print(f"  [{key}] columns: {list(df.columns)[:12]}")
+    code_col = _find_col(df, ["laua", "la code", "lacode", "area code",
+                              "ons code", "code"], contains=True)
+    fttp_col = _find_col(df, ["full fibre availability", "fttp availability",
+                              "fttp"], contains=True)
+    gig_col = _find_col(df, ["gigabit availability", "gigabit"],
+                        contains=True)
+    if code_col is None or (fttp_col is None and gig_col is None):
+        _warn(key, "couldn't find LA-code + FTTP/gigabit columns — is this "
+                   "the LA-level fixed coverage file?")
+        _note(key, "unrecognised columns")
+        return {}
+    by_code = {}
+    for _, r in df.iterrows():
+        code = _cell(r, code_col)
+        if not code:
+            continue
+        e = {}
+        for col, name in ((fttp_col, "fttp_pct"), (gig_col, "gigabit_pct")):
+            if col is None:
+                continue
+            v = _num(r, col)
+            if v is None:
+                continue
+            if v <= 1.5:               # published as a fraction
+                v *= 100
+            e[name] = round(v, 1)
+        if e:
+            by_code[code.strip()] = e
+    gdf = gpd.read_file(bpath)
+    gcode = next((c for c in gdf.columns
+                  if re.fullmatch(r"lad\d*cd", str(c).lower())), None)
+    gname = next((c for c in gdf.columns
+                  if re.fullmatch(r"lad\d*nm", str(c).lower())), None)
+
+    def fibre_props(f):
+        e = by_code.get(_cell(f, gcode)) if gcode else None
+        return dict(e) if e else {}
+
+    keep = gdf[gdf.apply(lambda f: bool(fibre_props(f)), axis=1)]
+    print(f"  [{key}] {len(keep)}/{len(gdf)} authorities matched")
+    rows = _emit(keep, key, name_col=gname, id_col=gcode, want="polygon",
+                 props_fn=fibre_props)
+    _note(key, how, len(rows))
+    return {key: rows}
+
+
+CENSUS_TS062_URL = "https://www.nomisweb.co.uk/output/census/2021/census2021-ts062.zip"
+
+
+def build_census_students():
+    """Census 2021 full-time students (NS-SeC class L15) per local authority
+    — the PBSA demand base. NOMIS bulk zip, no key; the ltla CSV inside is
+    joined onto LAD polygons."""
+    key = "census_students"
+    path, how = _resolve_source(key, ["CENSUS_STUDENTS_SRC"],
+                                CENSUS_TS062_URL, "census-ts062.zip")
+    if path is None:
+        _warn(key, f"{how} — set CENSUS_STUDENTS_SRC to the NOMIS "
+                   "census2021-ts062 bulk zip")
+        _note(key, how)
+        return {}
+    bpath, _b = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries to join students onto")
+        _note(key, "no LAD boundaries")
+        return {}
+    import zipfile as _zf
+    import io as _io
+    by_code = {}
+    with _zf.ZipFile(path) as z:
+        member = next((m for m in z.namelist()
+                       if "ltla" in m.lower() and m.lower().endswith(".csv")),
+                      None)
+        if member is None:
+            _warn(key, f"no ltla CSV inside {path.name} "
+                       f"(members: {z.namelist()[:6]})")
+            _note(key, "no ltla member")
+            return {}
+        with z.open(member) as fh:
+            df = pd.read_csv(_io.TextIOWrapper(fh, "utf-8", errors="ignore"))
+    print(f"  [{key}] columns: {[str(c)[:60] for c in df.columns][:8]}")
+    code_col = _find_col(df, ["geography code"], contains=True)
+    stu_col = next((c for c in df.columns
+                    if "l15" in str(c).lower()
+                    and "student" in str(c).lower()), None)
+    tot_col = next((c for c in df.columns if "total" in str(c).lower()), None)
+    if code_col is None or stu_col is None or tot_col is None:
+        _warn(key, "couldn't find geography/L15/total columns in TS062")
+        _note(key, "unrecognised columns")
+        return {}
+    for _, r in df.iterrows():
+        code = _cell(r, code_col)
+        stu, tot = _num(r, stu_col), _num(r, tot_col)
+        if code and stu is not None and tot:
+            by_code[code.strip()] = {
+                "students": int(stu),
+                "students_pct": round(100 * stu / tot, 1)}
+    gdf = gpd.read_file(bpath)
+    gcode = next((c for c in gdf.columns
+                  if re.fullmatch(r"lad\d*cd", str(c).lower())), None)
+    gname = next((c for c in gdf.columns
+                  if re.fullmatch(r"lad\d*nm", str(c).lower())), None)
+
+    def stu_props(f):
+        e = by_code.get(_cell(f, gcode)) if gcode else None
+        return dict(e) if e else {}
+
+    keep = gdf[gdf.apply(lambda f: bool(stu_props(f)), axis=1)]
+    print(f"  [{key}] {len(keep)}/{len(gdf)} authorities matched")
+    rows = _emit(keep, key, name_col=gname, id_col=gcode, want="polygon",
+                 props_fn=stu_props)
+    _note(key, how, len(rows))
+    return {key: rows}
+
+
+def build_student_accom():
+    """Existing purpose-built student accommodation stock from OSM
+    (building=dormitory / amenity=student_accommodation), reduced to points
+    — the PBSA competition map. Extracted by the workflow's osmium step."""
+    key = "student_accom"
+    path = RAW / "osm_student_accom.geojson"
+    if not path.exists():
+        _warn(key, "no osm_student_accom.geojson — run via the workflow "
+                   "(its osmium step extracts dormitories from the UK PBF)")
+        _note(key, "no OSM extract")
+        return {}
+    print(f"  [{key}] reading {path.name} ...")
+    gdf = gpd.read_file(path)
+    gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty].copy()
+    # One point per building/site: centroids for polygonal footprints.
+    gdf["geometry"] = gdf.geometry.centroid
+    name_col = _find_col(gdf, ["name"], contains=False)
+    op_col = _find_col(gdf, ["operator"], contains=False)
+    rows = _emit(gdf, key, name_col=name_col, want="point", simplify=False,
+                 props_fn=lambda f: {k: v for k, v in
+                                     (("operator", _cell(f, op_col) if op_col else None),)
+                                     if v})
+    _note(key, "OSM dormitories", len(rows))
+    return {key: rows}
+
+
 def build_bus_route():
     """OSM route=bus relations -> national bus route lines. The workflow's
     osmium step filters the UK PBF to bus routes and ogr2ogr assembles the
@@ -1571,18 +1741,22 @@ def build_bus_route():
 PLANIT_BASE = "https://www.planit.org.uk/api/applics/json"
 
 
+_PLANIT_DIAG = {"n": 0}
+
+
 def _planit_count(params, sleep_s):
     """One PlanIt count query -> int total, or None on failure. Sleeps
-    sleep_s before every request (their fair-use ask) and honours 429
-    Retry-After."""
+    sleep_s before the request (their fair-use ask), honours 429
+    Retry-After (capped), and fails FAST otherwise — a national sweep must
+    never turn one bad endpoint into a six-hour hang."""
     url = PLANIT_BASE + "?" + urllib.parse.urlencode(params)
-    for attempt in range(3):
+    for attempt in range(2):
         time.sleep(sleep_s)
         try:
             req = urllib.request.Request(
                 url, headers={"User-Agent": "mastermapper-pipeline/1.0",
                               "Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=90) as r:
+            with urllib.request.urlopen(req, timeout=20) as r:
                 j = json.loads(r.read().decode("utf-8", "replace"))
             for k in ("total", "count", "total_results"):
                 v = j.get(k)
@@ -1592,14 +1766,22 @@ def _planit_count(params, sleep_s):
                   f"{sorted(j.keys())[:8]}")
             return None
         except urllib.error.HTTPError as e:
-            if e.code == 429:
-                wait = min(int(e.headers.get("Retry-After") or "30"), 180)
+            if e.code == 429 and attempt == 0:
+                wait = min(int(e.headers.get("Retry-After") or "30"), 60)
                 print(f"  [planit_rates] 429 rate-limited, waiting {wait}s")
                 time.sleep(wait)
                 continue
+            if _PLANIT_DIAG["n"] < 5:
+                _PLANIT_DIAG["n"] += 1
+                print(f"  [planit_rates] HTTP {e.code} from PlanIt "
+                      f"({params.get('auth', '?')})")
             return None
-        except Exception:
-            time.sleep(3 * (attempt + 1))
+        except Exception as exc:
+            if _PLANIT_DIAG["n"] < 5:
+                _PLANIT_DIAG["n"] += 1
+                print(f"  [planit_rates] request failed "
+                      f"({params.get('auth', '?')}): {exc}")
+            return None
     return None
 
 
@@ -1631,6 +1813,10 @@ def build_planit():
 
     sleep_s = float(os.environ.get("PLANIT_SLEEP") or "1.2")
     max_auth = int(os.environ.get("PLANIT_MAX_AUTH") or "0") or None
+    # Hard wall-clock budget: emit whatever is gathered when it runs out,
+    # rather than letting a slow/tarpitting endpoint eat the whole job.
+    budget_s = float(os.environ.get("PLANIT_TIME_BUDGET_MIN") or "45") * 60
+    t0 = time.monotonic()
     end = pd.Timestamp.now(tz="UTC").date()
     start = end - pd.Timedelta(days=3 * 365)
     window = {"start_date": start.isoformat(), "end_date": end.isoformat(),
@@ -1645,29 +1831,33 @@ def build_planit():
 
     stats, missed = {}, []
     for i, (_, f) in enumerate(rows_src.iterrows()):
+        if time.monotonic() - t0 > budget_s:
+            print(f"  [{key}] time budget exhausted after {i} authorities — "
+                  f"emitting the {len(stats)} gathered so far")
+            break
         auth = _cell(f, gname)
         if not auth:
             continue
         got = {}
-        for state in ("Permitted", "Rejected", "Withdrawn"):
+        for state in ("Permitted", "Rejected"):
             n = _planit_count({**window, "auth": auth, "app_state": state},
                               sleep_s)
             if n is None:
                 break
             got[state] = n
-        if len(got) < 3 or (got["Permitted"] + got["Rejected"]) == 0:
+        if len(got) < 2 or (got["Permitted"] + got["Rejected"]) == 0:
             missed.append(auth)
             continue
         decided = got["Permitted"] + got["Rejected"]
         stats[re.sub(r"[^a-z0-9]", "", auth.lower())] = {
             "approved_3y": got["Permitted"], "refused_3y": got["Rejected"],
-            "withdrawn_3y": got["Withdrawn"],
             "approval_pct": round(100 * got["Permitted"] / decided, 1),
             "apps_year": round(decided / 3),
         }
         if (i + 1) % 25 == 0:
             print(f"  [{key}] {i + 1}/{len(rows_src)} authorities queried, "
-                  f"{len(stats)} with data")
+                  f"{len(stats)} with data, "
+                  f"{(time.monotonic() - t0) / 60:.0f} min elapsed")
     if missed:
         print(f"  [{key}] no PlanIt data for {len(missed)} authorities "
               f"(first few: {missed[:6]})")
@@ -1779,6 +1969,9 @@ GROUPS = (
         (["hdt"], build_hdt, []),
         (["planit_rates"], build_planit, []),
         (["bus_route"], build_bus_route, []),
+        (["ofcom_fibre"], build_ofcom_fibre, []),
+        (["census_students"], build_census_students, []),
+        (["student_accom"], build_student_accom, []),
     ]
 )
 

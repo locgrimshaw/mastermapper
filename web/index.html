@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws62-labels" />
+  <link rel="stylesheet" href="src/styles.css?v=ws63-phase2" />
 </head>
 <body>
   <div id="app">
@@ -60,6 +60,7 @@
             <div id="pf-results"></div>
             <div class="pf-actions" id="pf-actions" hidden>
               <button type="button" id="pf-export">Export CSV</button>
+              <button type="button" id="pf-report">Print report</button>
               <button type="button" class="ghost" id="pf-clear">Clear</button>
             </div>
           </section>
@@ -304,6 +305,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws62-labels"></script>
+  <script type="module" src="src/app.js?v=ws63-phase2"></script>
 </body>
 </html>
