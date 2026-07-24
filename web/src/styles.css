@@ -2170,3 +2170,13 @@ footer {
 /* University provider card extras */
 .ovp-dim { color: #5d6b80; font-size: 11px; }
 .ovp-note { margin: 6px 0 0; font-size: 11px; color: #5d6b80; line-height: 1.45; }
+
+/* Sub-heading inside overlay cards (accommodation mix section) */
+.ovp-sub {
+  margin: 8px 0 3px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #5d6b80;
+}

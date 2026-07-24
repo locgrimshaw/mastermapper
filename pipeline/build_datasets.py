@@ -531,13 +531,29 @@ def _load_hesa_stats():
                             f"without stats (columns: {list(df.columns)[:10]})")
         return {}
     fields = {
-        "students_total": _find_col(df, ["total students", "students_total",
-                                         "total", "all students"], contains=True),
+        "students_total": _find_col(df, ["total_students", "total students",
+                                         "students_total", "all students",
+                                         "total"], contains=True),
         "students_fulltime": _find_col(df, ["full-time", "fulltime", "full time"],
                                        contains=True),
         "students_intl": _find_col(df, ["international", "non-uk", "non uk",
                                         "overseas"], contains=True),
         "students_pg": _find_col(df, ["postgraduate", "pg "], contains=True),
+        # Term-time accommodation mix (HESA DT051 Table 57, full-time
+        # students) — the core PBSA demand signals: private halls = existing
+        # PBSA penetration, other rented = the HMO market, provider halls =
+        # university-run stock.
+        "acc_provider_halls": _find_col(df, ["acc_provider_halls",
+                                             "provider maintained"], contains=True),
+        "acc_private_halls": _find_col(df, ["acc_private_halls",
+                                            "private-sector halls",
+                                            "private sector halls"], contains=True),
+        "acc_parental_home": _find_col(df, ["acc_parental_home", "parental"],
+                                       contains=True),
+        "acc_own_residence": _find_col(df, ["acc_own_residence", "own residence"],
+                                       contains=True),
+        "acc_other_rented": _find_col(df, ["acc_other_rented", "other rented"],
+                                      contains=True),
     }
     found = {k: c for k, c in fields.items() if c is not None}
     if not found:
@@ -558,11 +574,19 @@ def _load_hesa_stats():
             if pd.notna(v):
                 row[k] = int(v)
         if row:
-            # Derived share the PBSA card leads with.
+            # Derived shares the PBSA card leads with.
             if "students_total" in row and row["students_total"] > 0 \
                     and "students_intl" in row:
                 row["intl_pct"] = round(100.0 * row["students_intl"]
                                         / row["students_total"], 1)
+            ft = row.get("students_fulltime")
+            if ft:
+                for acc, pct in (("acc_private_halls", "pbsa_pct"),
+                                 ("acc_provider_halls", "uni_halls_pct"),
+                                 ("acc_other_rented", "rented_pct"),
+                                 ("acc_parental_home", "home_pct")):
+                    if acc in row:
+                        row[pct] = round(100.0 * row[acc] / ft, 1)
             stats[ukprn] = row
     print(f"  [uni_campus] HESA stats joined for {len(stats)} providers ({how})")
     return stats

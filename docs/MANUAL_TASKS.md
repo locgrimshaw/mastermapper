@@ -18,20 +18,14 @@ the layer lights up on the map.
 
 ---
 
-## 1. HESA student numbers → powers the university deep-dive card
+## 1. HESA student numbers — ✅ DONE (2024/25 data committed)
 
-1. Go to <https://www.hesa.ac.uk/data-and-analysis/students/where-study>.
-2. Find the table of **HE student enrolments by HE provider** (latest year)
-   and download the CSV.
-3. Open it in Excel. Make a simple sheet with ONE ROW PER PROVIDER and these
-   columns (exact names don't matter — the pipeline detects them):
-   - `UKPRN` (required)
-   - `Total students`
-   - `Full-time` (full-time student count)
-   - `International` (non-UK domiciled count)
-   - `Postgraduate` (optional)
-   Delete any metadata/preamble rows above the header row.
-4. Save as CSV → **drop-in file** named **`hesa_students.csv`**.
+data/raw/hesa_students.csv now carries HESA DT051 Table 1 (enrolments +
+international share) merged with Table 57 (term-time accommodation mix) for
+304 providers, 2024/25, CC-BY 4.0. To refresh for a future academic year:
+download the two tables from <https://www.hesa.ac.uk/data-and-analysis/students>
+(Table 1 and Table 57, filtered to the latest year) and hand the raw CSVs to
+Claude — the merge is scripted.
 
 ## 2. NESO TEC register → the grid connection queue (MW per site)
 

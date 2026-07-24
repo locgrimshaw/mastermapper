@@ -1100,7 +1100,7 @@ const LAYER_INFO = {
   article4:            { about: "Article 4 directions removing permitted development rights — often HMO conversion, so a strong student-housing pressure signal.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   tpo_zone:            { about: "Tree preservation order zones.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   design_code_area:    { about: "Areas covered by an adopted design code.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
-  uni_campus:          { about: "One dot per registered HE provider (the HQ). Click a dot for the PBSA deep-dive card: student numbers, international share and more once HESA stats are loaded.", source: "UK Learning Providers / UKRLP (open data); stats: HESA (CC-BY)" },
+  uni_campus:          { about: "One dot per registered HE provider (the HQ). Click a dot for the PBSA deep-dive card: student numbers, international share and the term-time accommodation mix (private halls vs HMO vs living at home).", source: "UKRLP locations; HESA DT051 Tables 1 & 57, 2024/25 (CC-BY 4.0)" },
   uni_campus_site:     { about: "University campus grounds — the actual site extents, so multi-campus institutions show every campus, not just the HQ dot.", source: "© OpenStreetMap contributors (ODbL)" },
   uni_building:        { about: "Individual university building footprints. Zoom in close — these are dense.", source: "© OpenStreetMap contributors (ODbL)" },
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, graded 0–6b. Greater London only.", source: "TfL / London Datastore (OGL)" },
@@ -1354,6 +1354,24 @@ function uniProviderCardHTML(p) {
   const statsBlock = stats
     ? `<table class="ovp-table">${stats}</table>`
     : `<p class="ovp-note">Student stats not loaded yet — supply the HESA per-provider CSV (HESA_STUDENTS_SRC) and re-run the datasets workflow.</p>`;
+
+  // Term-time accommodation mix (HESA Table 57, full-time students): the
+  // PBSA developer's read — how much purpose-built stock already serves this
+  // institution, how big the HMO ("other rented") market is, and how many
+  // live at home (little accommodation demand at all).
+  const accRows = [
+    ["Private halls (PBSA)", num(p.acc_private_halls), num(p.pbsa_pct)],
+    ["University halls", num(p.acc_provider_halls), num(p.uni_halls_pct)],
+    ["Other rented (HMO etc.)", num(p.acc_other_rented), num(p.rented_pct)],
+    ["Living with parents", num(p.acc_parental_home), num(p.home_pct)],
+    ["Own residence", num(p.acc_own_residence), null],
+  ].filter(([, v]) => v != null);
+  const accBlock = accRows.length
+    ? `<div class="ovp-sub">Term-time accommodation (full-time students)</div>
+       <table class="ovp-table">` + accRows.map(([label, v, pct]) =>
+         `<tr><td class="ovp-k">${label}</td><td class="ovp-v"><strong>${v.toLocaleString()}</strong>${pct != null ? ` <span class="ovp-dim">(${pct}%)</span>` : ""}</td></tr>`
+       ).join("") + `</table>`
+    : "";
   const meta = [
     p.groups ? `<tr><td class="ovp-k">type</td><td class="ovp-v">${p.groups}</td></tr>` : "",
     p.ukprn ? `<tr><td class="ovp-k">UKPRN</td><td class="ovp-v">${p.ukprn}</td></tr>` : "",
@@ -1361,6 +1379,7 @@ function uniProviderCardHTML(p) {
   return `<div class="ovp">
     <div class="ovp-title">${p.name || "HE provider"}</div>
     ${statsBlock}
+    ${accBlock}
     <table class="ovp-table">${meta}</table>
     <p class="ovp-note">Physical footprint: turn on <em>Campus grounds</em> and <em>University buildings</em> in Student housing &amp; demand.</p>
   </div>`;
