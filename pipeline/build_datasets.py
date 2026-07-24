@@ -215,7 +215,7 @@ ALL_DATASETS = [
     "ukpn_sites", "nged_sites",
     "spen_sites", "npg_sites", "enwl_sites", "ssen_sites",
     "lad_boundary", "la_rents", "alc", "water_availability", "hdt",
-    "planit_rates",
+    "planit_rates", "bus_route",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -1527,6 +1527,47 @@ def build_hdt():
     return {key: rows}
 
 
+def build_bus_route():
+    """OSM route=bus relations -> national bus route lines. The workflow's
+    osmium step filters the UK PBF to bus routes and ogr2ogr assembles the
+    relation geometry (multilinestrings layer); route number and operator
+    are parsed from the OSM other_tags hstore. BODS GTFS adds frequencies
+    to the STOPS separately — this layer is the network's shape."""
+    key = "bus_route"
+    path = RAW / "osm_bus_routes.geojson"
+    if not path.exists():
+        _warn(key, "no osm_bus_routes.geojson — run via the workflow (its "
+                   "osmium step extracts route=bus from the UK PBF)")
+        _note(key, "no OSM bus extract")
+        return {}
+    print(f"  [{key}] reading {path.name} ...")
+    gdf = gpd.read_file(path)
+
+    def tagval(s, k):
+        if not isinstance(s, str):
+            return None
+        m = re.search('"' + k + '"=>"([^"]*)"', s)
+        return m.group(1) if m else None
+
+    gdf = gdf.copy()
+    if "other_tags" in gdf.columns:
+        rt = gdf["other_tags"].apply(lambda s: tagval(s, "route"))
+        gdf = gdf[(rt == "bus") | rt.isna()]
+        gdf["ref"] = gdf["other_tags"].apply(lambda s: tagval(s, "ref"))
+        gdf["operator"] = gdf["other_tags"].apply(
+            lambda s: tagval(s, "operator"))
+    name_col = "name" if "name" in gdf.columns else None
+    has_ref = "ref" in gdf.columns
+    has_op = "operator" in gdf.columns
+    rows = _emit(gdf, key, name_col=name_col, want="line",
+                 props_fn=lambda f: {k: v for k, v in (
+                     ("ref", _cell(f, "ref") if has_ref else None),
+                     ("operator", _cell(f, "operator") if has_op else None))
+                     if v})
+    _note(key, "OSM route=bus relations", len(rows))
+    return {key: rows}
+
+
 PLANIT_BASE = "https://www.planit.org.uk/api/applics/json"
 
 
@@ -1737,6 +1778,7 @@ GROUPS = (
         (["water_availability"], build_water_availability, []),
         (["hdt"], build_hdt, []),
         (["planit_rates"], build_planit, []),
+        (["bus_route"], build_bus_route, []),
     ]
 )
 

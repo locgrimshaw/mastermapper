@@ -1072,12 +1072,22 @@ const MAP_OVERLAYS = [
   // (~35 km -> ~550 m cells); the numFilter picks the resolution for the
   // zoom, so the same toggle reads cleanly from a national view down to
   // street blocks. Borderless fills — the colour IS the story.
-  { key: "price_heat", group: "market", label: "Sold prices (3-yr heatmap)", color: "#c2255c", dataset: "price_grid", minZoom: 4, lim: 8000, noOutline: true,
+  { key: "price_heat", group: "market", label: "Sold prices (3-yr heatmap)", color: "#c2255c", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
     datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
-                  : z < 11  ? "price_grid_m" : "price_grid_f" },
-  { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr heatmap, est.)", color: "#5f3dc4", dataset: "price_grid", minZoom: 4, lim: 8000, noOutline: true,
+                  : z < 11  ? "price_grid_m" : "price_grid_f",
+    // YlOrRd ramp: pale = cheap, deep red = expensive. Median sold price.
+    heatColor: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "med"]], 0],
+      80000, "#ffffcc", 150000, "#ffeda0", 220000, "#fed976",
+      300000, "#feb24c", 420000, "#fd8d3c", 600000, "#fc4e2a",
+      850000, "#e31a1c", 1200000, "#bd0026", 2000000, "#800026"] },
+  { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr heatmap)", color: "#5f3dc4", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
     datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
-                  : z < 11  ? "price_grid_m" : "price_grid_f" },
+                  : z < 11  ? "price_grid_m" : "price_grid_f",
+    // PuRd ramp for £/m² (EPC-measured where matched, else type-mix est.).
+    heatColor: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "ppm2"]], 0],
+      1200, "#f1eef6", 2000, "#d4b9da", 2800, "#c994c7",
+      3600, "#df65b0", 4500, "#e7298a", 6000, "#ce1256",
+      8000, "#980043", 12000, "#67001f"] },
   // Individual transactions stay for comparables work — close zooms only.
   { key: "ppd_sales",    group: "market", label: "Individual sales (comparables)",  color: "#d64550", dataset: "ppd_sales", render: "point", minZoom: 14, lim: 6000,
     radius: ["interpolate", ["linear"], ["zoom"], 12, 2.5, 15, 5, 17, 7],
@@ -1089,6 +1099,9 @@ const MAP_OVERLAYS = [
   // prop filter thins wide zooms to frequent-service stops, so the row cap
   // bites frequency-first rather than arbitrarily. Until the GTFS timetable
   // is loaded stops carry no buses_hr, so they only appear from z14.
+  // The network's shape from OSM route=bus relations; frequencies live on
+  // the stops (BODS GTFS) — together they read as service, not just streets.
+  { key: "bus_route", group: "bus", label: "Bus routes (OSM)", color: "#0c8599", dataset: "bus_route", render: "line", minZoom: 9, lim: 4000 },
   { key: "bus_stop", group: "bus", label: "Bus stops (frequency-coloured)", color: "#1098ad", dataset: "bus_stop", render: "point", minZoom: 10, lim: 8000,
     radius: ["interpolate", ["linear"], ["zoom"], 10, 2, 13, 3.5, 16, 6],
     numFilter: z => z < 12 ? { key: "buses_hr", min: 8 } : z < 14 ? { key: "buses_hr", min: 2 } : null,
@@ -1162,6 +1175,7 @@ const LAYER_INFO = {
   enwl_sites:         { about: "Electricity North West grid & primary substations with published demand headroom — click a dot for the full record.", source: "Electricity North West open data portal" },
   ssen_sites:         { about: "SSEN substations with published network capacity/headroom — click a dot for the full record.", source: "SSEN distribution open data" },
   planit_rates:       { about: "Share of planning applications APPROVED over the last 3 years per authority (approved ÷ (approved + refused); withdrawn excluded). Local decision culture in one number — pair with the Housing Delivery Test for the full NPPF picture.", source: "PlanIt (planit.org.uk) aggregation of council planning registers" },
+  bus_route:          { about: "Every mapped bus route (OpenStreetMap route relations) as lines, with route number and operator on hover. Coverage reflects OSM mapping — dense in urban areas, occasionally patchy on rural services.", source: "OpenStreetMap contributors (ODbL)" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
   grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },
   sssi:               { about: "Sites of Special Scientific Interest — statutory wildlife and geology designation; a hard constraint on development.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
@@ -1264,8 +1278,10 @@ function setOverlayOpacity(key, v) {
     map.setPaintProperty(`ov-${key}-line`, "line-opacity", lineAlpha);
   }
   if (map.getLayer(`ov-${key}-pt`)) {
-    map.setPaintProperty(`ov-${key}-pt`, "circle-opacity", Math.min(1, v * 2.5));
-    map.setPaintProperty(`ov-${key}-pt`, "circle-stroke-opacity", Math.min(1, v * 2.5));
+    const ptAlpha = def && def.heatPoint ? Math.min(0.85, v * 1.9) : Math.min(1, v * 2.5);
+    map.setPaintProperty(`ov-${key}-pt`, "circle-opacity", ptAlpha);
+    if (!(def && def.heatPoint))
+      map.setPaintProperty(`ov-${key}-pt`, "circle-stroke-opacity", Math.min(1, v * 2.5));
   }
   if (map.getLayer(`ov-${key}-icon`))
     map.setPaintProperty(`ov-${key}-icon`, "icon-opacity", Math.min(1, v * 2.5));
@@ -1413,9 +1429,34 @@ function ensureOverlayIcons() {
   });
 }
 
+// Grid cells -> centre points, so a "heatmap" layer can draw them as big
+// soft-edged circles whose overlaps blend into a flowing gradient instead of
+// hard rectangles. Cells are axis-aligned rectangles, so the ring average IS
+// the centre.
+function _cellsToPoints(fc) {
+  return { type: "FeatureCollection", features: (fc.features || []).map(f => {
+    const g = f.geometry;
+    const ring = g && (g.type === "Polygon" ? g.coordinates[0]
+                : g.type === "MultiPolygon" ? g.coordinates[0][0] : null);
+    if (!ring || !ring.length) return f;
+    let sx = 0, sy = 0;
+    for (const c of ring) { sx += c[0]; sy += c[1]; }
+    return { type: "Feature", properties: f.properties,
+             geometry: { type: "Point", coordinates: [sx / ring.length, sy / ring.length] } };
+  }) };
+}
+
+// Circle radius tracking the price-grid cell size on screen (×~1.5 diameter
+// so neighbours overlap): a sawtooth over zoom — each resolution band starts
+// small and doubles until the next band takes over.
+const HEAT_RADIUS = ["interpolate", ["exponential", 2], ["zoom"],
+  4, 5.5, 6.4, 29, 6.5, 7.7, 8.4, 29, 8.5, 7.7, 10.9, 41,
+  11, 11, 13, 44, 15, 120];
+
 function renderOverlay(key, def, fc) {
   const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`,
         ptId = `ov-${key}-pt`;
+  if (def.heatPoint) fc = _cellsToPoints(fc);
   if (map.getSource(srcId)) {
     map.getSource(srcId).setData(fc);
     return;
@@ -1423,7 +1464,16 @@ function renderOverlay(key, def, fc) {
   const opacity = overlayState[key]?.opacity ?? OVERLAY_DEFAULT_OPACITY;
   map.addSource(srcId, { type: "geojson", data: fc });
   const before = overlayBeforeId();
-  if (def.render === "point") {
+  if (def.heatPoint) {
+    map.addLayer({ id: ptId, type: "circle", source: srcId,
+      paint: {
+        "circle-radius": HEAT_RADIUS,
+        "circle-color": def.heatColor || def.color,
+        "circle-blur": 0.9,
+        "circle-opacity": Math.min(0.85, opacity * 1.9),
+        "circle-stroke-width": 0,
+      } }, before);
+  } else if (def.render === "point") {
     // Point dataset (campuses, substations, connection queue): circles that
     // scale slightly with zoom; opacity slider drives circle+stroke alpha.
     // Substation tiers pass their own radius curve so bigger sites = bigger dots.
@@ -1513,19 +1563,7 @@ function renderOverlay(key, def, fc) {
     // Attribute-driven fills where the data carries a classification —
     // painting these one flat colour throws the information away.
     const waterStatus = ["downcase", ["to-string", ["coalesce", ["get", "status"], ""]]];
-    const fillColor = def.key === "price_heat"
-      // YlOrRd ramp: pale = cheap, deep red = expensive. Median sold price.
-      ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "med"]], 0],
-         80000, "#ffffcc", 150000, "#ffeda0", 220000, "#fed976",
-         300000, "#feb24c", 420000, "#fd8d3c", 600000, "#fc4e2a",
-         850000, "#e31a1c", 1200000, "#bd0026", 2000000, "#800026"]
-      : def.key === "ppm2_heat"
-      // PuRd ramp for £/m² (type-mix estimate until EPC areas land).
-      ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "ppm2"]], 0],
-         1200, "#f1eef6", 2000, "#d4b9da", 2800, "#c994c7",
-         3600, "#df65b0", 4500, "#e7298a", 6000, "#ce1256",
-         8000, "#980043", 12000, "#67001f"]
-      : def.dataset === "ptal"
+    const fillColor = def.dataset === "ptal"
       ? ["match", ["to-string", ["get", "ptal"]],
          "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
          "3", "#fee391", "4", "#fe9929", "5", "#ec7014",
@@ -2824,6 +2862,10 @@ function hoverContentForOverlay(def, p) {
     rows = [row(p.approval_pct != null ? `${p.approval_pct}%` : null, "approved"),
             row(p.approved_3y != null ? `${Number(p.approved_3y).toLocaleString()} approved · ${Number(p.refused_3y).toLocaleString()} refused` : null, "decisions"),
             row(p.apps_year != null ? `${Number(p.apps_year).toLocaleString()}/yr` : null, "decision volume")];
+  } else if (d === "bus_route") {
+    title = p.ref ? `Bus ${p.ref}` : (p.name || "Bus route");
+    kind = p.name && p.ref ? p.name : "Bus route";
+    rows = [row(p.operator, "operator")];
   } else if (d === "bus_stop") {
     title = p.name || "Bus stop";
     kind = p.locality ? `Bus stop — ${p.locality}` : "Bus stop";
