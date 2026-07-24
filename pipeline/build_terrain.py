@@ -30,8 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 OUT = ROOT / "supabase" / "datasets_import.csv"
 
-TERRAIN_URL = os.environ.get(
-    "TERRAIN50_SRC",
+TERRAIN_URL = os.environ.get("TERRAIN50_SRC") or (
     "https://api.os.uk/downloads/v1/products/Terrain50/downloads"
     "?area=GB&format=ASCII+Grid+and+GML+%28Grid%29&redirect")
 
