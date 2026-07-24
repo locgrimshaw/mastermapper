@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws52-stacked-catchments" />
+  <link rel="stylesheet" href="src/styles.css?v=ws53-uni-dive" />
 </head>
 <body>
   <div id="app">
@@ -194,6 +194,9 @@
          growing stats for the selected catchment. Separate from the small
          floating detail panel so it doesn't obscure the map. -->
     <aside id="deepdive-panel" class="deepdive-panel" aria-hidden="true"></aside>
+    <!-- University deep-dive drawer — same right-side pattern as stations,
+         built by openUniPanel() in app.js. -->
+    <aside id="uni-panel" class="deepdive-panel" aria-hidden="true"></aside>
     <div id="legend"></div>
 
     <!-- Workstream 3: shortlist tray (bottom-left) + comparison modal -->
@@ -278,6 +281,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws52-stacked-catchments"></script>
+  <script type="module" src="src/app.js?v=ws53-uni-dive"></script>
 </body>
 </html>

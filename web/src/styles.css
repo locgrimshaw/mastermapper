@@ -2364,3 +2364,19 @@ footer {
 }
 .catch-precise input { margin-top: 2px; }
 .catch-precise .cp-dim { color: var(--text-dim); }
+
+/* ---- University deep-dive drawer ------------------------------------------ */
+#uni-panel { z-index: 36; }   /* above the station deep-dive if both open */
+.uni-head {
+  padding: 16px 18px 10px;
+  border-bottom: 1px solid var(--ink-line);
+  position: relative;
+  flex: 0 0 auto;
+}
+.uni-head .fd-close { top: 12px; right: 14px; }
+.uni-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 18px 22px;
+}
+.uni-body .pbsa-chips { margin-top: 2px; }

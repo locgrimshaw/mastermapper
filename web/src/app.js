@@ -1126,7 +1126,7 @@ const LAYER_INFO = {
   uni_campus_site:     { about: "University campus grounds — the actual site extents, so multi-campus institutions show every campus, not just the HQ dot.", source: "© OpenStreetMap contributors (ODbL)" },
   uni_building:        { about: "Individual university building footprints. Zoom in close — these are dense.", source: "© OpenStreetMap contributors (ODbL)" },
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only; zoom to city scale.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
-  la_rents:            { about: "Average monthly private rents by local authority, including per-bedroom breakdowns where published.", source: "ONS Price Index of Private Rents (OGL v3)" },
+  la_rents:            { about: "Average monthly private rents by local authority, shaded light (cheapest, ~£500) to deep teal (most expensive, £3,000+). Hover a district for its figure and annual change.", source: "ONS Price Index of Private Rents (OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
   power_line:          { about: "High-voltage lines, coloured and weight-scaled by voltage — deep red is the 275/400 kV transmission backbone, orange 90–200 kV, amber below. Wide zooms show the backbone; zoom in for the rest. Click a line for its details.", source: "© OpenStreetMap contributors (ODbL)" },
   power_sub_tx:        { about: "Transmission-scale substations (≥200 kV) — where the national grid itself can be tapped. The biggest dots; each shows its kV. Click one for details.", source: "© OpenStreetMap contributors (ODbL)" },
@@ -1456,6 +1456,12 @@ function renderOverlay(key, def, fc) {
          "Grade 4", "#e0b64b", "Grade 5", "#a97e56",
          "Non Agricultural", "#b8bfc6", "Urban", "#8d959e",
          "Exclusion", "#d0d4d9", def.color]
+      : def.dataset === "la_rents"
+      // Sequential rent choropleth: light teal cheap -> deep teal expensive.
+      ? ["case", ["!", ["has", "rent_mean"]], "rgba(160,170,175,0.4)",
+         ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "rent_mean"]], 0],
+          500, "#d5eef0", 800, "#a3d8dc", 1100, "#6dbcc5", 1500, "#3c96a6",
+          2000, "#20707f", 3000, "#0d4a5c"]]
       : def.dataset === "water_availability"
       // EA CAMS Q95 classification arrives as colour words (Green / Yellow /
       // Red / Grey); keep substring fallbacks for text-valued variants.
@@ -1483,8 +1489,10 @@ function renderOverlay(key, def, fc) {
 function openOverlayCard(key, p, lngLat) {
   hoverCardHide();
   if (key === "uni_campus") {
+    _uniPanelCtx = { p, lng: lngLat.lng, lat: lngLat.lat };
     openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, lngLat,
-      uniProviderCardHTML(p));
+      uniProviderCardHTML(p) +
+      `<button type="button" class="deepdive-btn uni-dd-open">Full deep dive →</button>`);
     return;
   }
   const skip = new Set(["dataset"]);
@@ -7710,6 +7718,47 @@ async function pbsaLoadUnis() {
   return pbsa.unis;
 }
 
+// Find the selected university's OTHER campuses (OSM campus polygons near the
+// HQ, or name/operator-matched further out) so catchments and the deep dive
+// treat a multi-site institution as multi-site — not just the HQ dot.
+async function pbsaLoadCampuses(u) {
+  const ukprn = String(u.ukprn || "");
+  if (pbsa.campusesFor === ukprn && pbsa.campuses) return pbsa.campuses;
+  const sb = getSupabase();
+  if (!sb || typeof turf === "undefined") return [];
+  const lng = u.coords ? u.coords[0] : u.lng, lat = u.coords ? u.coords[1] : u.lat;
+  if (lng == null || lat == null) return [];
+  const dd = 0.12;                                // ~13 km search box
+  try {
+    const { data, error } = await sb.rpc("features_in_bbox", {
+      p_dataset: "uni_campus_site", w: lng - dd, s: lat - dd, e: lng + dd, n: lat + dd,
+      lim: 400, p_zoom: 12 });
+    if (error || !data) return [];
+    const norm = s => String(s || "").toLowerCase()
+      .replace(/\b(the|university|univ|of|college|london)\b/g, " ")
+      .replace(/[^a-z0-9]+/g, " ").trim();
+    const uniTokens = norm(u.name).split(/\s+/).filter(t => t.length > 3);
+    const out = [];
+    for (const f of data.features || []) {
+      if (!f.geometry) continue;
+      let c;
+      try { c = turf.centroid(f).geometry.coordinates; } catch (_) { continue; }
+      const distM = _distMeters({ lng, lat }, { lng: c[0], lat: c[1] });
+      if (distM < 250) continue;                  // that's the HQ site itself
+      const hay = norm(`${f.properties.name || ""} ${f.properties.operator || ""}`);
+      const tokenHit = uniTokens.some(t => hay.includes(t));
+      // Near the HQ = almost certainly theirs; further out needs a name match.
+      if (distM <= 3000 || (tokenHit && distM <= 12000))
+        out.push({ name: f.properties.name || f.properties.operator || "Campus",
+                   lng: c[0], lat: c[1], distM: Math.round(distM) });
+    }
+    out.sort((a, b) => a.distM - b.distM);
+    pbsa.campuses = out.slice(0, 12);
+    pbsa.campusesFor = ukprn;
+    return pbsa.campuses;
+  } catch (_) { return []; }
+}
+
 function wirePbsaBox() {
   const input = document.getElementById("pbsa-uni-input");
   const results = document.getElementById("pbsa-uni-results");
@@ -7839,6 +7888,8 @@ async function pbsaSelect(u) {
   const catchBox = document.getElementById("pbsa-catchment");
   if (catchBox) catchBox.hidden = false;
   pbsaCatchClear();   // a catchment built for the previous university is stale
+  pbsa.campuses = null; pbsa.campusesFor = null;
+  pbsaLoadCampuses(u).then(() => { if (pbsa.selected === u) pbsaRender(); });
   pbsaRenderSummary();
   pbsaRender();
   // Frame the university with some breathing room.
@@ -7864,8 +7915,11 @@ function pbsaRenderSummary() {
     : "";
   const linksNote = d.links_loaded ? "" :
     `<p class="hint pbsa-warn">Rail journey links aren't loaded yet (needs the free National Rail Open Data credentials — docs/MANUAL_TASKS.md). Showing walkable gateway stations only.</p>`;
+  _uniPanelCtx = { p: { ...p, name: u.name || p.name, ukprn: u.ukprn ?? p.ukprn },
+                   lng: u.lng, lat: u.lat };
   document.getElementById("pbsa-summary").innerHTML =
-    `<div class="pbsa-chips">${chips}</div>${demand}${linksNote}`;
+    `<div class="pbsa-chips">${chips}</div>${demand}${linksNote}` +
+    `<button type="button" class="deepdive-btn uni-dd-open">Full deep dive →</button>`;
 }
 
 function pbsaFilteredFeeders() {
@@ -7920,28 +7974,21 @@ function pbsaDrawViz(gws, feeders) {
   const pt = (lng, lat, props) => ({ type: "Feature", properties: props || {},
     geometry: { type: "Point", coordinates: [lng, lat] } });
 
-  const campus = fc([pt(uni.lng, uni.lat, { name: uni.name })]);
+  // The HQ dot plus every matched campus, so multi-site institutions read as
+  // what they are. (The feeder->campus arc lines are gone — they streaked
+  // across the whole map and added noise, not information.)
+  const campus = fc([pt(uni.lng, uni.lat, { name: uni.name }),
+    ...(pbsa.campuses || []).map(c => pt(c.lng, c.lat, { name: c.name }))]);
   const gwFc = fc(gws.map(g => pt(g.lng, g.lat, { name: g.name, walk_m: g.walk_m })));
   const fdFc = fc(feeders.map(f => pt(f.lng, f.lat,
     { name: f.name, minutes: f.minutes, trains: f.trains_day,
       color: pbsaBand(f.minutes).color })));
-  const arcFc = fc(feeders.map(f => ({
-    type: "Feature",
-    properties: { color: pbsaBand(f.minutes).color,
-                  w: Math.min(3, 0.6 + Math.sqrt(f.trains_day || 1) / 5) },
-    geometry: { type: "LineString", coordinates: [[f.lng, f.lat], [uni.lng, uni.lat]] },
-  })));
 
   const ensure = (id, def) => {
     if (map.getSource(id)) { map.getSource(id).setData(def.data); return; }
     map.addSource(id, { type: "geojson", data: def.data });
     def.layers.forEach(l => map.addLayer(l));
   };
-  ensure("pbsa-arcs", { data: arcFc, layers: [{
-    id: "pbsa-arcs-line", type: "line", source: "pbsa-arcs",
-    layout: { "line-cap": "round" },
-    paint: { "line-color": ["get", "color"], "line-width": ["get", "w"],
-             "line-opacity": 0.55 } }] });
   ensure("pbsa-feeder-pts", { data: fdFc, layers: [{
     id: "pbsa-feeder-dot", type: "circle", source: "pbsa-feeder-pts",
     paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 4, 12, 7],
@@ -7975,9 +8022,9 @@ function pbsaDrawViz(gws, feeders) {
 }
 
 function pbsaClearViz() {
-  for (const id of ["pbsa-arcs-line", "pbsa-feeder-dot", "pbsa-gateway-ring", "pbsa-campus-halo"])
+  for (const id of ["pbsa-feeder-dot", "pbsa-gateway-ring", "pbsa-campus-halo"])
     if (map.getLayer(id)) map.removeLayer(id);
-  for (const id of ["pbsa-arcs", "pbsa-feeder-pts", "pbsa-gateways", "pbsa-campus"])
+  for (const id of ["pbsa-feeder-pts", "pbsa-gateways", "pbsa-campus"])
     if (map.getSource(id)) map.removeSource(id);
 }
 
@@ -8011,15 +8058,22 @@ async function pbsaBuildCatchment(mode, fit) {
   // Every catchment is a union of travel "sites": each has coordinates, the
   // minutes of onward travel from it, and the ring radius those minutes buy.
   // The precise toggle swaps rings for real street-network isochrones.
+  // Multi-campus: every matched campus is a starting point, not just the HQ.
+  const campuses = await pbsaLoadCampuses(pbsa.selected ||
+    { ukprn: uni.ukprn, name: uni.name, lng: uni.lng, lat: uni.lat });
+  if (pbsa.catchSeqs[mode] !== seq) return;
+  const origins = [{ lng: uni.lng, lat: uni.lat }, ...(campuses || [])];
+
   const sites = [];
   let noteText = "";
   let reached = 0;
   if (mode === "walk" || mode === "cycle") {
     const speed = mode === "walk" ? CATCH_WALK_MPM : CATCH_CYCLE_MPM;
-    sites.push({ lng: uni.lng, lat: uni.lat, mins: T, radiusM: T * speed });
-    noteText = `${T} min ${mode === "walk" ? "walking (4.8 km/h)" : "cycling (~15 km/h)"}`;
+    for (const o of origins) sites.push({ lng: o.lng, lat: o.lat, mins: T, radiusM: T * speed });
+    noteText = `${T} min ${mode === "walk" ? "walking (4.8 km/h)" : "cycling (~15 km/h)"}` +
+      (origins.length > 1 ? ` from all ${origins.length} campuses` : "");
   } else {
-    sites.push({ lng: uni.lng, lat: uni.lat, mins: T, radiusM: T * CATCH_WALK_MPM });
+    for (const o of origins) sites.push({ lng: o.lng, lat: o.lat, mins: T, radiusM: T * CATCH_WALK_MPM });
     const gwWalkMin = {};
     for (const g of d.gateways || []) {
       const w = (g.walk_m ?? 1200) / CATCH_WALK_MPM;
@@ -8183,6 +8237,165 @@ function pbsaCatchClear() {
   const note = document.getElementById("catch-note");
   if (note) note.textContent = "";
 }
+
+// ---- University deep-dive drawer (right side, like the station panel) ------
+// A growing home for everything about one institution: demand stats, the
+// accommodation mix, its campuses, rail access and the local market around
+// the HQ. Opened from the provider click-card or the PBSA box.
+
+let _uniPanelCtx = null;   // { p: provider props, lng, lat } for the delegate
+
+function uniPanelStatChips(p) {
+  const num = v => (v == null || v === "" || isNaN(Number(v))) ? null : Number(v);
+  const chip = (label, v) => v == null ? "" :
+    `<div class="pbsa-chip"><div class="pbsa-chip-v">${_esc(v)}</div><div class="pbsa-chip-l">${_esc(label)}</div></div>`;
+  const total = num(p.students_total), ft = num(p.students_fulltime),
+        pg = num(p.students_pg), intlPct = num(p.intl_pct);
+  return `<div class="pbsa-chips">` +
+    chip("students", total != null ? total.toLocaleString() : null) +
+    chip("full-time", ft != null ? ft.toLocaleString() : null) +
+    chip("international", intlPct != null ? intlPct + "%" : null) +
+    chip("postgraduate", total && pg != null ? Math.round(100 * pg / total) + "%" : null) +
+    `</div>`;
+}
+
+function uniPanelAccBars(p) {
+  const num = v => (v == null || v === "" || isNaN(Number(v))) ? null : Number(v);
+  const rows = [
+    ["Private halls (PBSA)", num(p.pbsa_pct), "#7048e8"],
+    ["University halls", num(p.uni_halls_pct), "#4dabf7"],
+    ["Other rented (HMO etc.)", num(p.rented_pct), "#f59f00"],
+    ["Living with parents", num(p.home_pct), "#868e96"],
+  ].filter(([, v]) => v != null);
+  if (!rows.length) return `<p class="hint">No accommodation data for this provider.</p>`;
+  return `<table class="metric-table">` + rows.map(([label, v, col]) =>
+    `<tr><td class="name">${_esc(label)}</td>
+     <td class="bar-cell"><div class="minibar"><span style="width:${Math.min(100, v)}%;background:${col}"></span></div></td>
+     <td class="num">${v}%</td></tr>`).join("") + `</table>`;
+}
+
+function openUniPanel(p, lng, lat) {
+  const panel = document.getElementById("uni-panel");
+  if (!panel || !p) return;
+  _uniPanelCtx = { p, lng, lat };
+  panel.innerHTML = `
+    <div class="uni-head">
+      <button class="fd-close uni-close" aria-label="Close">×</button>
+      <div class="fd-district">${_esc(p.name || "HE provider")}</div>
+      <div class="fd-sub">${_esc([p.groups, p.ukprn ? `UKPRN ${p.ukprn}` : ""].filter(Boolean).join(" · "))}</div>
+    </div>
+    <div class="uni-body">
+      <div class="sp-sec"><div class="sp-h">Students (HESA 2024/25)</div>${uniPanelStatChips(p)}</div>
+      <div class="sp-sec"><div class="sp-h">Term-time accommodation (full-time)</div>${uniPanelAccBars(p)}</div>
+      <div class="sp-sec"><div class="sp-h">Campuses</div><div id="uni-pn-campuses"><p class="hint">Finding campuses…</p></div></div>
+      <div class="sp-sec"><div class="sp-h">Rail access</div><div id="uni-pn-rail"><p class="hint">Loading rail access…</p></div></div>
+      <div class="sp-sec"><div class="sp-h">Around the HQ</div><div id="uni-pn-local"><p class="hint">Reading the local area…</p></div></div>
+      <p class="hint">This panel keeps growing — planning context, PBSA pipeline and competitor stock are on the roadmap.</p>
+    </div>`;
+  panel.classList.add("open");
+  panel.setAttribute("aria-hidden", "false");
+  panel.querySelector(".uni-close").addEventListener("click", closeUniPanel);
+  uniPanelHydrate(p, lng, lat);
+}
+
+function closeUniPanel() {
+  const panel = document.getElementById("uni-panel");
+  if (panel) { panel.classList.remove("open"); panel.setAttribute("aria-hidden", "true"); }
+}
+
+async function uniPanelHydrate(p, lng, lat) {
+  const line = (label, valueHTML) => valueHTML == null || valueHTML === "" ? "" :
+    `<div class="sp-row"><span class="sp-v">${valueHTML}</span><span class="sp-k">${_esc(label)}</span></div>`;
+  const strong = v => `<strong>${_esc(v)}</strong>`;
+
+  // Campuses (OSM-matched; shared with the catchment builder).
+  const campEl = () => document.getElementById("uni-pn-campuses");
+  pbsaLoadCampuses({ ukprn: p.ukprn, name: p.name, lng, lat }).then(campuses => {
+    const el = campEl();
+    if (!el) return;
+    if (!campuses || !campuses.length) {
+      el.innerHTML = `<p class="hint">No separate campuses matched near the HQ (OSM data).</p>`;
+      return;
+    }
+    el.innerHTML = campuses.map(c =>
+      `<button type="button" class="pbsa-row" data-lng="${c.lng}" data-lat="${c.lat}">
+         <span class="pbsa-row-name">${_esc(c.name)}</span>
+         <span class="pbsa-row-meta">${_fmtDist(c.distM)} from HQ</span></button>`).join("");
+    el.querySelectorAll(".pbsa-row").forEach(btn =>
+      btn.addEventListener("click", () =>
+        map.flyTo({ center: [parseFloat(btn.dataset.lng), parseFloat(btn.dataset.lat)], zoom: 15, duration: 700 })));
+  });
+
+  // Rail access: reuse the PBSA payload when it's this university, else fetch.
+  const railEl = () => document.getElementById("uni-pn-rail");
+  (async () => {
+    const el = railEl();
+    if (!el) return;
+    let d = (pbsa.data && String(pbsa.data.university?.ukprn) === String(p.ukprn)) ? pbsa.data : null;
+    if (!d) {
+      const sb = getSupabase();
+      if (sb) {
+        try {
+          const { data } = await sb.rpc("uni_rail_access", { p_ukprn: String(p.ukprn) });
+          d = data;
+        } catch (_) {}
+      }
+    }
+    if (!d) { el.innerHTML = `<p class="hint">Rail access unavailable.</p>`; return; }
+    const gws = d.gateways || [];
+    const feeders = (d.feeders || []).filter(f => f.minutes != null);
+    const quick = feeders.filter(f => f.minutes <= 30).length;
+    let html = "";
+    html += line("walkable gateway stations", strong(String(gws.length)));
+    if (d.links_loaded) {
+      html += line("stations with a direct train in", strong(feeders.length.toLocaleString()));
+      html += line("of those, ≤ 30 min away", strong(String(quick)));
+    }
+    html += gws.slice(0, 5).map(g =>
+      `<div class="sp-row"><span class="sp-v">${_esc(g.name)}</span><span class="sp-k">${g.walk_m} m walk</span></div>`).join("");
+    html += `<p class="hint">Full feeder ranking and the catchment builder live in the PBSA sift box.</p>`;
+    el.innerHTML = html;
+  })();
+
+  // Local market & context around the HQ, from the same spot-summary RPC.
+  const localEl = () => document.getElementById("uni-pn-local");
+  (async () => {
+    const el = localEl();
+    if (!el || lng == null) return;
+    const sb = getSupabase();
+    let ps = null;
+    if (sb) {
+      try {
+        const { data } = await sb.rpc("point_summary", { p_lon: lng, p_lat: lat });
+        ps = data || {};
+      } catch (_) {}
+    }
+    if (!ps) { el.innerHTML = `<p class="hint">Local context unavailable.</p>`; return; }
+    const areas = ps.areas || {};
+    let html = "";
+    if (areas.lad_boundary) html += line("district", strong(areas.lad_boundary.name || ""));
+    if (areas.la_rents && areas.la_rents.rent_mean != null) {
+      const ch = areas.la_rents.annual_rent_change_pct;
+      html += line("avg private rent", strong(`£${Number(areas.la_rents.rent_mean).toLocaleString()}/mo`) +
+        (ch != null ? ` <span class="sp-dim">${ch > 0 ? "+" : ""}${_esc(ch)}% y/y</span>` : ""));
+    }
+    if (areas.ptal) html += line("PTAL at HQ", strong(String(areas.ptal.ptal ?? "")));
+    if (areas.article4) html += line("Article 4", strong("yes — HMO controls likely"));
+    if (ps.brownfield_nearby > 0) html += line("brownfield sites ≤ 800 m", strong(String(ps.brownfield_nearby)));
+    const stn = nearestUsageStation({ lng, lat });
+    if (stn) html += line("nearest station", strong(stn.props.name || "Station") +
+      ` <span class="sp-dim">${_fmtDist(stn.dist)}</span>`);
+    el.innerHTML = html || `<p class="hint">Nothing notable found at the HQ location.</p>`;
+  })();
+}
+
+// Any "Full deep dive" button (provider click-card or PBSA box) routes here.
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".uni-dd-open");
+  if (!b || !_uniPanelCtx) return;
+  openUniPanel(_uniPanelCtx.p, _uniPanelCtx.lng, _uniPanelCtx.lat);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeUniPanel(); });
 
 // ---- Boot -----------------------------------------------------------------
 
