@@ -230,11 +230,16 @@ def main() -> int:
     for dataset in sorted(by_dataset):
         print(f"    {dataset:20s} {by_dataset[dataset]}")
 
-    # Full replace: clear each dataset present in the CSV (and the DATASETS
-    # filter) before upserting its fresh rows.
-    print("Clearing datasets being reloaded ...")
-    for dataset in sorted(by_dataset):
-        delete_dataset(dataset)
+    # Full replace by default: clear each dataset present in the CSV (and the
+    # DATASETS filter) before upserting its fresh rows. LOAD_MODE=append skips
+    # the delete — used for datasets built up incrementally across runs (the
+    # per-LA INSPIRE parcel ingests), where a delete would wipe earlier LAs.
+    if os.environ.get("LOAD_MODE", "replace").strip().lower() == "append":
+        print("LOAD_MODE=append — existing rows kept; matching keys refreshed.")
+    else:
+        print("Clearing datasets being reloaded ...")
+        for dataset in sorted(by_dataset):
+            delete_dataset(dataset)
 
     upsert(records)
     return 0

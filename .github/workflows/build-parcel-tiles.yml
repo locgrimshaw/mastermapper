@@ -1,0 +1,121 @@
+name: Build national INSPIRE parcel tiles
+
+# Nationwide land-parcel outlines (HM Land Registry INSPIRE index polygons,
+# ~26M parcels) as a single PMTiles file hosted on Supabase Storage (public
+# 'tiles' bucket). The map streams just the parcels in view from z13 — no
+# database involvement at all. Re-run occasionally (HMLR refresh monthly-ish);
+# takes roughly 2-5 hours for the full country.
+#
+# BEFORE the first full run: in the Supabase dashboard raise the global
+# upload size limit (Project Settings -> Storage -> Upload file size limit)
+# to at least 5 GB, or the final upload step will be rejected.
+#
+# Smoke test: set max_las to e.g. 3 to validate the whole pipeline (download,
+# convert, tile, upload) in ~10 minutes before committing to the full run.
+#
+# Licence: INSPIRE index polygons are subject to Crown copyright and database
+# right, reproduced with permission of HM Land Registry; geometry derived
+# from Ordnance Survey data (internal business use). The map displays the
+# attribution while the layer is shown.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_las:
+        description: "Limit the number of local authorities (blank = all ~330; use 3 for a smoke test)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  tiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Install GDAL + tippecanoe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin
+          if ! sudo apt-get install -y tippecanoe; then
+            sudo apt-get install -y build-essential libsqlite3-dev zlib1g-dev git
+            git clone --depth 1 https://github.com/felt/tippecanoe /tmp/tippecanoe
+            make -j"$(nproc)" -C /tmp/tippecanoe
+            sudo make -C /tmp/tippecanoe install
+          fi
+          tippecanoe --version
+
+      - name: Discover the local-authority download list
+        run: |
+          python3 - <<'EOF'
+          import re, urllib.request
+          UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+          req = urllib.request.Request(
+              "https://use-land-property-data.service.gov.uk/datasets/inspire",
+              headers={"User-Agent": UA})
+          html = urllib.request.urlopen(req, timeout=120).read().decode("utf-8", "replace")
+          slugs = sorted(set(re.findall(r"/datasets/inspire/download/([^\"'/]+)\.zip", html)))
+          if not slugs:
+              raise SystemExit("no download links found on the INSPIRE page — layout changed?")
+          with open("las.txt", "w") as fh:
+              fh.write("\n".join(slugs) + "\n")
+          print(f"{len(slugs)} local authorities discovered")
+          EOF
+
+      - name: Download and convert every LA to line-delimited GeoJSON
+        env:
+          MAX_LAS: ${{ inputs.max_las }}
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+          : > parcels.jsonl
+          n=0; ok=0; bad=0
+          while read -r slug; do
+            n=$((n+1))
+            if [ -n "$MAX_LAS" ] && [ "$n" -gt "$MAX_LAS" ]; then break; fi
+            echo "($n) $slug"
+            if ! curl -fsSL -A "$UA" -o la.zip "https://use-land-property-data.service.gov.uk/datasets/inspire/download/${slug}.zip"; then
+              echo "::warning::download failed for $slug"; bad=$((bad+1)); continue
+            fi
+            gml=$(python3 -c "import zipfile,sys; print(next((m for m in zipfile.ZipFile('la.zip').namelist() if m.lower().endswith('.gml')),''))")
+            if [ -z "$gml" ]; then echo "::warning::no gml in $slug"; bad=$((bad+1)); rm -f la.zip; continue; fi
+            if ogr2ogr -f GeoJSONSeq /vsistdout/ "/vsizip/la.zip/$gml" -t_srs EPSG:4326 >> parcels.jsonl 2>/dev/null; then
+              ok=$((ok+1))
+            else
+              echo "::warning::convert failed for $slug"; bad=$((bad+1))
+            fi
+            rm -f la.zip
+          done < las.txt
+          echo "converted $ok LAs ($bad failed)"
+          wc -l parcels.jsonl; df -h /
+
+      - name: Tile with tippecanoe
+        run: |
+          tippecanoe -o parcels.pmtiles -l parcels \
+            --minimum-zoom=12 --maximum-zoom=15 \
+            --coalesce-densest-as-needed --extend-zooms-if-still-dropping \
+            --force --read-parallel parcels.jsonl
+          ls -la parcels.pmtiles; df -h /
+
+      - name: Upload to Supabase storage (public tiles bucket)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."; exit 1
+          fi
+          code=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' -X POST \
+            "$SUPABASE_URL/storage/v1/object/tiles/parcels.pmtiles" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/octet-stream" \
+            -H "x-upsert: true" \
+            --data-binary @parcels.pmtiles)
+          cat /tmp/resp.txt; echo
+          if [ "$code" != "200" ]; then
+            echo "::error::Upload failed (HTTP $code). If this is a size rejection, raise Project Settings -> Storage -> Upload file size limit in the Supabase dashboard to at least 5 GB and re-run."
+            exit 1
+          fi
+          echo "Uploaded: $SUPABASE_URL/storage/v1/object/public/tiles/parcels.pmtiles"

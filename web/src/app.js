@@ -840,6 +840,9 @@ function updateDataSourceNote() {
     if (_osmPowerAttributionShown) {
       el.textContent += " Power network & university footprints © OpenStreetMap contributors (ODbL).";
     }
+    if (typeof parcelsState !== "undefined" && parcelsState.on) {
+      el.textContent += " Parcel outlines: HM Land Registry INSPIRE index polygons © Crown copyright and database right, geometry derived from Ordnance Survey data.";
+    }
   }
 }
 
@@ -1564,6 +1567,61 @@ function removeOverlayLayers(key) {
   updateOverlayAttribution();
 }
 
+// ---- National land parcels (HMLR INSPIRE index polygons, PMTiles) ----------
+// Nationwide parcel outlines streamed from a prebuilt tile file on Supabase
+// storage (built by .github/workflows/build-parcel-tiles.yml) — ~26M parcels
+// served with zero database load, visible from z13. The free INSPIRE data
+// carries parcel IDs, not owners: read alongside the CCOD council dots.
+const PARCEL_COLOR = "#5c7cfa";
+const parcelsState = { on: false, opacity: 0.85, available: null };
+
+function parcelTilesUrl() {
+  const cfg = window.MASTERMAPPER_CONFIG || {};
+  return cfg.SUPABASE_URL
+    ? `${cfg.SUPABASE_URL}/storage/v1/object/public/tiles/parcels.pmtiles`
+    : null;
+}
+
+async function setParcelsVisible(on) {
+  parcelsState.on = on;
+  const stat = document.getElementById("parcels-stat");
+  const url = parcelTilesUrl();
+  if (!url) { if (stat) stat.textContent = "n/a"; return; }
+  if (on && parcelsState.available === null) {
+    try {
+      const r = await fetch(url, { method: "HEAD" });
+      parcelsState.available = r.ok;
+    } catch (_) { parcelsState.available = false; }
+  }
+  if (on && parcelsState.available === false) {
+    if (stat) stat.textContent = "tiles not built yet";
+    return;
+  }
+  if (on && !map.getSource("parcels")) {
+    map.addSource("parcels", { type: "vector", url: "pmtiles://" + url });
+    const before = overlayBeforeId();
+    // Near-invisible fill = the hover/click hit target; the line carries the look.
+    map.addLayer({ id: "parcel-fill", type: "fill", source: "parcels",
+      "source-layer": "parcels", minzoom: 13,
+      paint: { "fill-color": PARCEL_COLOR, "fill-opacity": 0.04 } }, before);
+    map.addLayer({ id: "parcel-line", type: "line", source: "parcels",
+      "source-layer": "parcels", minzoom: 13,
+      paint: { "line-color": PARCEL_COLOR,
+               "line-width": ["interpolate", ["linear"], ["zoom"], 13, 0.4, 16, 1.3],
+               "line-opacity": parcelsState.opacity } }, before);
+  }
+  for (const id of ["parcel-fill", "parcel-line"])
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+  if (stat) stat.textContent = on ? "streams from z13" : "";
+  updateDataSourceNote();
+}
+
+function setParcelOpacity(v) {
+  parcelsState.opacity = v;
+  if (map.getLayer("parcel-line")) map.setPaintProperty("parcel-line", "line-opacity", v);
+  if (map.getLayer("parcel-fill")) map.setPaintProperty("parcel-fill", "fill-opacity", Math.min(0.15, v * 0.08));
+}
+
 // ---- Data layers panel (left box 1) ---------------------------------------
 // The grouped, sub-grouped layer tree. Every layer gets a visibility toggle
 // and a transparency slider; groups and sub-groups collapse. Data-gated rows
@@ -1666,6 +1724,14 @@ function buildLayersPanel() {
   const overlayGroupsHTML = OVERLAY_TREE.map(top => {
     const subHTML = top.subs.map(g => {
       let rows = "";
+      // National parcel outlines (PMTiles, not a bbox overlay) lead Land.
+      if (g.key === "land") {
+        rows += ltRowHTML({ cbId: "parcels-show", label: "Land parcels (HMLR INSPIRE)",
+                            color: PARCEL_COLOR, statId: "parcels-stat",
+                            checked: false, opacity: parcelsState.opacity, opacityKey: "parcels",
+                            info: { about: "The outline of every registered land parcel in England & Wales, nationwide from z13. The free data carries parcel IDs, not owners — read it alongside the council-property dots. Exact title-to-parcel ownership is only sold in HMLR's licensed National Polygon Service.",
+                                    source: "HM Land Registry INSPIRE index polygons © Crown copyright and database right; geometry derived from Ordnance Survey data" } });
+      }
       // Green Belt (a national static file, not a bbox overlay) leads Planning.
       if (g.key === "planning") {
         rows += ltRowHTML({ rowId: "greenbelt-row", cbId: "greenbelt-show", hidden: true,
@@ -1753,6 +1819,10 @@ function buildLayersPanel() {
   host.querySelectorAll("input[data-ov]").forEach(cb =>
     cb.addEventListener("change", e => toggleMapOverlay(e.target.dataset.ov, e.target.checked)));
 
+  // National parcel tiles (streams from storage, not a bbox overlay).
+  const parcelsCb = document.getElementById("parcels-show");
+  if (parcelsCb) parcelsCb.addEventListener("change", e => setParcelsVisible(e.target.checked));
+
   // Every transparency slider routes through one dispatcher.
   host.querySelectorAll(".lt-opacity").forEach(sl =>
     sl.addEventListener("input", e => {
@@ -1763,6 +1833,7 @@ function buildLayersPanel() {
       else if (k === "greenbelt") setGreenbeltOpacity(v);
       else if (k === "rail") setRailOverlayOpacity(v);
       else if (k === "stations") setStationOpacity(v);
+      else if (k === "parcels") setParcelOpacity(v);
       else if (k && k.startsWith("ov:")) setOverlayOpacity(k.slice(3), v);
     }));
 
@@ -2692,6 +2763,7 @@ function initHoverSystem() {
     if (state.hasGreenbelt && map.getLayer("greenbelt-fill")
         && map.getLayoutProperty("greenbelt-fill", "visibility") === "visible")
       prio.push("greenbelt-fill");
+    if (parcelsState.on && map.getLayer("parcel-fill")) prio.push("parcel-fill");
 
     let hits = [];
     if (prio.length) {
@@ -2735,6 +2807,10 @@ function initHoverSystem() {
       } else if (winner.id === "greenbelt-fill") {
         html = hoverCardHTML({ title: p.name || "Green Belt", kind: "Green Belt",
                                chip: GREENBELT_COLOR, rows: [] });
+      } else if (winner.id === "parcel-fill") {
+        html = hoverCardHTML({ title: `Parcel ${p.INSPIREID ?? p.inspireid ?? ""}`.trim(),
+                               kind: "HMLR INSPIRE index parcel", chip: PARCEL_COLOR, rows: [] },
+                             "outline only — click for details");
       } else {
         const def = overlayFromLayerId(winner.id);
         if (def) html = hoverCardHTML(hoverContentForOverlay(def, p), "click for full details");
@@ -3161,6 +3237,24 @@ function wireInteractions() {
           setDrawer(false);
           return true;
         }
+      }
+    }
+
+    // 3b. Land parcel (INSPIRE tiles) — below overlays, above the LSOA fallback.
+    if (parcelsState.on && map.getLayer("parcel-fill")) {
+      let hits = null;
+      try { hits = map.queryRenderedFeatures(box, { layers: ["parcel-fill"] }); } catch (_) {}
+      if (hits && hits.length) {
+        const p = hits[0].properties || {};
+        const pid = p.INSPIREID ?? p.inspireid ?? "?";
+        hoverCardHide();
+        openClickPopup({ closeButton: true, maxWidth: "300px", offset: 10 },
+          map.unproject([point.x, point.y]),
+          `<div class="ovp"><div class="ovp-title">Parcel ${_esc(pid)}</div>` +
+          `<table class="ovp-table"><tr><td class="ovp-k">INSPIRE ID</td><td class="ovp-v">${_esc(pid)}</td></tr></table>` +
+          `<p class="ovp-note">Registered parcel outline (HM Land Registry INSPIRE index). The free data doesn't name the owner — cross-reference the council-property dots; exact title-to-parcel ownership is HMLR's licensed National Polygon Service.</p></div>`);
+        setDrawer(false);
+        return true;
       }
     }
 
