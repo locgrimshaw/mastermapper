@@ -31,7 +31,9 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -54,8 +56,19 @@ def _api(path, key):
     req = urllib.request.Request(API_BASE + path,
                                  headers={"Authorization": key,
                                           "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")[:300]
+        print(f"ERROR: API {path} -> HTTP {exc.code}. {body}", file=sys.stderr)
+        if exc.code in (401, 403):
+            print("A 401/403 means the service rejected the API key: on "
+                  "use-land-property-data.service.gov.uk check that the CCOD "
+                  "dataset licence is ACCEPTED on your account and that the "
+                  "CCOD_API_KEY secret exactly matches the key on your account "
+                  "page (regenerate it if unsure).", file=sys.stderr)
+        sys.exit(1)
 
 
 def _walk_strings(obj):
@@ -67,6 +80,18 @@ def _walk_strings(obj):
             yield from _walk_strings(v)
     elif isinstance(obj, str):
         yield obj
+
+
+def file_link(fname, key):
+    """Resolve one named CCOD file to its signed download URL via the
+    per-file API route (works even when the dataset-listing route 403s)."""
+    link_meta = _api(f"/datasets/ccod/{fname}", key)
+    urls = [s for s in _walk_strings(link_meta) if s.startswith("http")]
+    if not urls:
+        print("ERROR: no download URL in file response. Keys:",
+              list(link_meta)[:8], file=sys.stderr)
+        sys.exit(1)
+    return urls[0]
 
 
 def discover_ccod(key):
@@ -84,13 +109,34 @@ def discover_ccod(key):
         sys.exit(1)
     fname = sorted(set(names))[-1]
     print(f"[ccod] latest full file: {fname}")
-    link_meta = _api(f"/datasets/ccod/{fname}", key)
-    urls = [s for s in _walk_strings(link_meta) if s.startswith("http")]
-    if not urls:
-        print("ERROR: no download URL in file response. Keys:",
-              list(link_meta)[:8], file=sys.stderr)
-        sys.exit(1)
-    return fname, urls[0]
+    return fname, file_link(fname, key)
+
+
+def download_zip(url, dest, key=None):
+    """Download to dest, trying with the API key header first (harmless for
+    presigned URLs, required if the direct route honours it), then without.
+    Verifies the result is actually a zip — the website's own /download route
+    answers a logged-out client with an HTML sign-in page, not the file."""
+    attempts = ([{"Authorization": key}] if key else []) + [{}]
+    for hdrs in attempts:
+        req = urllib.request.Request(url, headers=hdrs)
+        try:
+            with urllib.request.urlopen(req, timeout=900) as r, dest.open("wb") as out:
+                shutil.copyfileobj(r, out, 1 << 20)
+        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+            print(f"  download attempt ({'with key' if hdrs else 'anonymous'}) "
+                  f"failed: {exc}")
+            continue
+        if zipfile.is_zipfile(dest):
+            return
+        print(f"  download attempt ({'with key' if hdrs else 'anonymous'}) "
+              "returned something that isn't a zip (probably the sign-in "
+              "page) — the direct website URL needs a browser session.")
+    print("ERROR: could not download the CCOD file. Prefer setting CCOD_FILE "
+          "to the file name (e.g. CCOD_FULL_2026_07.zip) so the signed link "
+          "comes from the API with your key, rather than a raw website URL.",
+          file=sys.stderr)
+    sys.exit(1)
 
 
 def load_postcodes():
@@ -125,10 +171,26 @@ def main():
         return 0
 
     RAW.mkdir(parents=True, exist_ok=True)
-    fname, url = discover_ccod(key)
+    # Two overrides for when the dataset-listing API route is refusing the
+    # key but the per-file route (or a direct link) still works:
+    #   CCOD_FILE — a file name like CCOD_FULL_2026_07.zip: skip discovery,
+    #               resolve its signed link via the per-file API route.
+    #   CCOD_URL  — a full download URL: fetch it directly (tried with the
+    #               key header, then anonymously; must yield a real zip).
+    direct = os.environ.get("CCOD_URL", "").strip()
+    fname = os.environ.get("CCOD_FILE", "").strip()
+    if direct:
+        fname = fname or direct.rstrip("/").rsplit("/", 1)[-1] or "CCOD_FULL.zip"
+        print(f"[ccod] using direct CCOD_URL override ({fname})")
+        url = direct
+    elif fname:
+        print(f"[ccod] CCOD_FILE={fname} — skipping dataset discovery")
+        url = file_link(fname, key)
+    else:
+        fname, url = discover_ccod(key)
     ccod_zip = RAW / "ccod_full.zip"
     print(f"[ccod] downloading {fname} (~400 MB) ...")
-    urllib.request.urlretrieve(url, ccod_zip)
+    download_zip(url, ccod_zip, key)
 
     pcs = load_postcodes()
     try:
