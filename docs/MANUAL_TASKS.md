@@ -92,13 +92,11 @@ NESO publishes a NEWER release: copy its zip link from
 
 ## 9. DNO registrations → real grid capacity/headroom (v2 layers)
 
-1. **UKPN** (London/South East — the important one): go to
-   <https://ukpowernetworks.opendatasoft.com/> → Sign up (free). Then find the
-   **Grid and Primary sites** dataset (has demand headroom per substation),
-   open its **Export** tab, copy the **GeoJSON** link, and send it to Claude.
+1. **UKPN** — ✅ DONE: the Grid and Primary sites export is wired in as the
+   `ukpn_sites` dataset (stable API URL, no registration needed for export).
 2. **NGED** (Midlands/South West/South Wales): go to
-   <https://connecteddata.nationalgrid.co.uk/> → Register (free). Same idea:
-   find the network-capacity / substation dataset and copy its export link.
+   <https://connecteddata.nationalgrid.co.uk/> → Register (free). Find the
+   network-capacity / substation dataset and copy its export link for Claude.
 
 ---
 

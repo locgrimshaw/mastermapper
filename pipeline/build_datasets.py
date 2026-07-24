@@ -142,6 +142,12 @@ WATER_DEFAULT_URL = ("https://agrilake2live.file.core.windows.net/gms-datasets/"
                      "Availability_and_Abstraction_Reliability_Cycle_2.geojson.zip"
                      "?sv=2022-11-02&se=2026-07-25T11%3A52%3A40Z&sr=f&sp=r"
                      "&sig=H6EqLbVXS2UFyotMZOG98to4kUCurc8WcAJCUQXAZLE%3D")
+# UKPN "Grid and Primary sites" (opendatasoft export API — stable URL): every
+# UKPN grid/primary substation with its headroom attributes. The DNO's own
+# capacity view for London/South East/East.
+UKPN_SITES_URL = ("https://ukpowernetworks.opendatasoft.com/api/explore/v2.1/"
+                  "catalog/datasets/grid-and-primary-sites/exports/geojson/"
+                  "?lang=en&timezone=Europe%2FLondon")
 LAD_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
                    "services/Local_Authority_Districts_December_2024_Boundaries"
                    "_UK_BGC/FeatureServer/0/query?where=1%3D1&outFields=*"
@@ -163,6 +169,7 @@ ALL_DATASETS = [
     "design_code_area",
     "uni_campus", "uni_campus_site", "uni_building", "ptal",
     "power_line", "power_substation", "gsp_boundary", "tec_register",
+    "ukpn_sites",
     "lad_boundary", "la_rents", "alc", "water_availability",
 ]
 
@@ -929,6 +936,37 @@ def build_gsp_boundary():
     return {key: rows}
 
 
+def build_ukpn_sites():
+    """UKPN grid & primary substations with headroom attributes. All source
+    columns are kept as props (names vary; the click card shows everything)."""
+    key = "ukpn_sites"
+    path, how = _resolve_source(key, ["UKPN_SITES_SRC"], UKPN_SITES_URL,
+                                "ukpn-sites.geojson")
+    if path is None:
+        _warn(key, f"{how} — if the anonymous export is blocked, log into "
+                   "ukpowernetworks.opendatasoft.com and set UKPN_SITES_SRC "
+                   "to an authorised export URL.")
+        _note(key, how)
+        return {}
+    print(f"  [{key}] reading {path.name} ({how}) ...")
+    gdf = gpd.read_file(path)
+    name_col = _find_col(gdf, ["sitename", "site_name", "site", "name"],
+                         contains=True)
+    cols = [c for c in gdf.columns if c != "geometry"][:40]
+
+    def props_fn(f):
+        out = {}
+        for c in cols:
+            v = _jsonable(f[c])
+            if v not in (None, ""):
+                out[_slug_key(c)] = v
+        return out
+
+    rows = _emit(gdf, key, name_col=name_col, want="any", props_fn=props_fn)
+    _note(key, how, len(rows))
+    return {key: rows}
+
+
 def _norm_site(s):
     """Normalise a substation/connection-site name for fuzzy matching."""
     s = str(s or "").lower()
@@ -1208,6 +1246,7 @@ GROUPS = (
         (["uni_campus"], build_uni_campus, []),
         (["uni_campus_site", "uni_building"], build_university_group, []),
         (["ptal"], build_ptal, []),
+        (["ukpn_sites"], build_ukpn_sites, []),
         (["power_line", "power_substation"], build_power_group,
          ["tec_register"]),
         (["gsp_boundary"], build_gsp_boundary, []),

@@ -1062,6 +1062,7 @@ const MAP_OVERLAYS = [
     numFilter: z => z < 8 ? { key: "kv", min: 90 } : z < 10.5 ? { key: "kv", min: 20 } : null },
   { key: "gsp_boundary",     group: "grid", label: "Grid Supply Point boundaries",  color: "#845ef7", dataset: "gsp_boundary",     render: "line",  minZoom: 4 },
   { key: "tec_register",     group: "grid", label: "Connection queue (TEC register)", color: "#f59f00", dataset: "tec_register",   render: "point", minZoom: 5 },
+  { key: "ukpn_sites",       group: "grid", label: "UKPN substation headroom",        color: "#0ca678", dataset: "ukpn_sites",     render: "point", minZoom: 5 },
   // Site factors
   { key: "alc",                group: "sitefactors", label: "Agricultural land grades (ALC)", color: "#94d82d", dataset: "alc",                minZoom: 7 },
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
@@ -1110,6 +1111,7 @@ const LAYER_INFO = {
   power_substation:    { about: "Grid and primary substations — where new large connections plug in. Wide zooms show transmission-scale sites; zoom in for the rest. Click one for its details.", source: "© OpenStreetMap contributors (ODbL)" },
   gsp_boundary:        { about: "Grid Supply Point boundaries — where the national transmission grid hands over to regional distribution networks.", source: "NESO Data Portal (open licence)" },
   tec_register:        { about: "The transmission connection queue: projects holding capacity agreements, with MW and status. Shows where the grid is contested.", source: "NESO TEC Register (open licence)" },
+  ukpn_sites:          { about: "UK Power Networks grid & primary substations with the DNO's own headroom attributes — real connection-capacity data for London, the South East and East. Click a site for full details.", source: "UK Power Networks Open Data (opendatasoft)" },
   alc:                 { about: "Agricultural Land Classification grades 1–5. Grades 1–3a are 'best and most versatile' — policy steers development away.", source: "Natural England (OGL v3)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — a proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
 };
@@ -1305,6 +1307,10 @@ function wireOverlayTooltip(key, layerId) {
     power_substation: p => [p.name || "Substation", p.kv ? `${p.kv} kV` : (p.voltage || "")].filter(Boolean).join(" · "),
     power_line: p => ["Power line", p.kv ? `${p.kv} kV` : (p.voltage || ""), p.operator].filter(Boolean).join(" · "),
     tec_register: p => [p.name || p.site, p.mw ? `${p.mw} MW` : "", p.status].filter(Boolean).join(" · "),
+    ukpn_sites: p => {
+      const hk = Object.keys(p).find(k => k.includes("headroom") && !isNaN(Number(p[k])));
+      return [p.name || "UKPN site", hk ? `${Number(p[hk]).toLocaleString()} headroom` : ""].filter(Boolean).join(" · ");
+    },
   };
   const fmt = tipProps[key] || (p => p.name || key);
   const pop = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
