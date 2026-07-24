@@ -725,6 +725,30 @@ def build_ptal():
                    " from https://data.london.gov.uk (search: PTAL).")
         _note(key, "PTAL_SRC not set (no reliable default URL)")
         return {}
+    # The Datastore offers the grid BOTH as an attribute CSV (needs X/Y
+    # columns) and as vector files (shapefile zip / GeoJSON with the PTAL
+    # attribute on real 100 m cell polygons). Accept either: a zip or vector
+    # file takes the vector path; only a genuine CSV takes the X/Y path.
+    vec = _maybe_unzip_geo(path, key, prefer=("ptal",))
+    if vec is None:
+        _note(key, "zip source held no vector file")
+        return {}
+    if vec != path or vec.suffix.lower() in (".geojson", ".json", ".gpkg", ".shp"):
+        print(f"  [{key}] reading vector source {vec.name} ({how}) ...")
+        gdf = gpd.read_file(vec)
+        ptal_col = _find_col(gdf, ["ptal"], contains=True)
+        ai_col = _find_col(gdf, ["ai", "access index"], contains=False) \
+            or _find_col(gdf, ["access index"], contains=True)
+        if ptal_col is None:
+            _warn(key, f"no PTAL column in {vec.name} "
+                       f"(columns: {list(gdf.columns)[:10]}...)")
+            _note(key, "no PTAL column in vector source")
+            return {}
+        rows = _emit(gdf, key, want="any",
+                     props_fn=lambda f: {"ptal": _cell(f, ptal_col),
+                                         "ai": _num(f, ai_col) if ai_col else None})
+        _note(key, how, len(rows))
+        return {key: rows}
     print(f"  [{key}] reading {path.name} ({how}) ...")
     df = _read_csv(path)
     x_col = _find_col(df, ["x", "easting", "x_coord", "x (easting)"], contains=False) \

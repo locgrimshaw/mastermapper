@@ -46,11 +46,19 @@ NESO publishes a NEWER release: copy its zip link from
 
 1. Go to <https://data.london.gov.uk/dataset/public-transport-accessibility-levels-24rz6/>
    (or search "PTAL" on data.london.gov.uk).
-2. Download the **PTAL grid values CSV** (the file with X, Y coordinates and a
-   PTAL grade per 100 m grid point — pick the most recent base year).
-3. **Drop-in file** named **`ptal_grid.csv`**.
+2. Download EITHER the **shapefile/GeoJSON** version of the PTAL grid (a zip
+   is fine) OR a CSV **that includes X and Y coordinate columns** — the plain
+   attribute CSV (GridID + scores only) cannot be placed on the map.
+3. **Drop-in file** named **`ptal_grid.csv`** (keep that name even for a
+   zip/GeoJSON — the pipeline sniffs the content), or hand the file to Claude.
 
-## 5. ONS private rents → LA rents choropleth
+## 5. ONS private rents — ✅ DONE (June 2026 data committed)
+
+data/raw/ons-la-rents.csv carries the latest-month average rent + annual
+change for 335 local authorities, extracted from the PIPR workbook. To
+refresh: hand the new PIPR download to Claude (any format).
+
+## 5b. (superseded) ONS private rents original steps
 
 1. Go to <https://www.ons.gov.uk/economy/inflationandpriceindices/bulletins/privaterentandhousepricesuk/latest>
    and open the **Price Index of Private Rents** data downloads (or the
