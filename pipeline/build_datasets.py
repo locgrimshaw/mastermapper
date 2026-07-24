@@ -1023,6 +1023,16 @@ def build_nged_sites():
         return {}
     print(f"  [{key}] reading {path.name} ({how}) ...")
     df = _read_csv(path)
+    # NGED's export lists every SECONDARY (street-level 11 kV) substation —
+    # ~120k rows of noise for capacity mapping. Keep the Primary/BSP/GSP tiers,
+    # where the connection-capacity story lives (mirrors UKPN's granularity).
+    type_col = _find_col(df, ["type"], contains=False)
+    if type_col is not None:
+        before = len(df)
+        df = df[~df[type_col].astype(str).str.strip().str.lower().eq("secondary")]
+        if before - len(df):
+            print(f"  [{key}] dropped {before - len(df):,} secondary substations "
+                  f"({len(df):,} Primary/BSP/GSP kept)")
     lat_col = _find_col(df, ["latitude", "lat"], contains=True)
     lon_col = _find_col(df, ["longitude", "long", "lng"], contains=True)
     east_col = _find_col(df, ["easting", "x"], contains=True)

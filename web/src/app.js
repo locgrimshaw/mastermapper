@@ -1064,6 +1064,7 @@ const MAP_OVERLAYS = [
   { key: "gsp_boundary",     group: "grid", label: "Grid Supply Point boundaries",  color: "#845ef7", dataset: "gsp_boundary",     render: "line",  minZoom: 4 },
   { key: "tec_register",     group: "grid", label: "Connection queue (TEC register)", color: "#f59f00", dataset: "tec_register",   render: "point", minZoom: 5 },
   { key: "ukpn_sites",       group: "grid", label: "UKPN substation headroom",        color: "#0ca678", dataset: "ukpn_sites",     render: "point", minZoom: 5 },
+  { key: "nged_sites",       group: "grid", label: "NGED substation headroom",        color: "#5c940d", dataset: "nged_sites",     render: "point", minZoom: 5, lim: 8000 },
   // Site factors
   { key: "alc",                group: "sitefactors", label: "Agricultural land grades (ALC)", color: "#94d82d", dataset: "alc",                minZoom: 7 },
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
@@ -1113,6 +1114,7 @@ const LAYER_INFO = {
   gsp_boundary:        { about: "Grid Supply Point boundaries — where the national transmission grid hands over to regional distribution networks.", source: "NESO Data Portal (open licence)" },
   tec_register:        { about: "The transmission connection queue: projects holding capacity agreements, with MW and status. Shows where the grid is contested.", source: "NESO TEC Register (open licence)" },
   ukpn_sites:          { about: "UK Power Networks grid & primary substations with the DNO's own headroom attributes — real connection-capacity data for London, the South East and East. Click a site for full details.", source: "UK Power Networks Open Data (opendatasoft)" },
+  nged_sites:          { about: "National Grid Electricity Distribution primary & bulk supply substations with demand/generation headroom (MW) and RAG status — the Midlands, South West and South Wales capacity view. Click a site for full details.", source: "NGED Connected Data portal" },
   alc:                 { about: "Agricultural Land Classification grades 1–5. Grades 1–3a are 'best and most versatile' — policy steers development away.", source: "Natural England (OGL v3)" },
   la_property:         { about: "Property titles owned by local authorities, aggregated to postcode points with a title count. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — a proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
@@ -1319,6 +1321,10 @@ function wireOverlayTooltip(key, layerId) {
     ukpn_sites: p => {
       const hk = Object.keys(p).find(k => k.includes("headroom") && !isNaN(Number(p[k])));
       return [p.name || "UKPN site", hk ? `${Number(p[hk]).toLocaleString()} headroom` : ""].filter(Boolean).join(" · ");
+    },
+    nged_sites: p => {
+      const hr = p.demandconnectedheadroommw ?? p.demand_connected_headroom_mw;
+      return [p.name || "NGED site", hr != null && hr !== "" ? `${Number(hr).toLocaleString()} MW headroom` : "", p.demandconnectedrag || ""].filter(Boolean).join(" · ");
     },
   };
   const fmt = tipProps[key] || (p => p.name || key);
