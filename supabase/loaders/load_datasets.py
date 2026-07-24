@@ -1,0 +1,227 @@
+"""
+loaders/load_datasets.py
+------------------------
+Loads the generic map overlay datasets into the Supabase `public.map_features`
+table (dataset, source_id, name, props jsonb, geom geometry(Geometry,4326),
+PK (dataset, source_id)). The frontend reads them back via the
+`features_in_bbox` RPC.
+
+It mirrors loaders/load_constraints.py: read a prepared import file, normalise
+to the table's columns, and upsert in batches via PostgREST. Geometry is sent
+as SRID-tagged EWKT text ('SRID=4326;MULTIPOLYGON(...)' / 'SRID=4326;POINT(...)'),
+which PostgREST parses straight into the geometry column.
+
+One difference from the constraints loader: before upserting, existing rows
+for each dataset being loaded are DELETED, so a re-run fully REPLACES that
+dataset instead of accreting stale features whose source ids changed. The
+DATASETS env var (comma list, blank = all) restricts both the delete and the
+upsert to a subset of datasets, matching the builder's --datasets.
+
+Input (built by pipeline/build_datasets.py, in CI or locally):
+  supabase/datasets_import.csv
+    columns: dataset, source_id, name, props (JSON string), geom_wkt (EWKT)
+
+Environment (provided automatically by the GitHub Action from repo Secrets —
+see .github/workflows/load-datasets.yml; you don't set these by hand):
+  SUPABASE_URL          e.g. https://abcd.supabase.co
+  SUPABASE_SERVICE_KEY  the *service_role* key (writes bypass RLS) — secret
+  DATASETS              optional comma list restricting which datasets load
+
+How to run it: you don't run it locally. In GitHub, go to the Actions tab,
+pick "Load datasets into Supabase", and click Run workflow. (It can also be
+run from a command line with the env vars set, if you ever want to.)
+"""
+
+import csv
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+IMPORT_CSV = ROOT / "supabase" / "datasets_import.csv"
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+BATCH = 500   # rows per upsert request
+
+# CSV can carry very long WKT fields (polygon rings) — lift the field-size cap.
+csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
+
+
+def _wanted_datasets():
+    """The DATASETS env var as a set, or None for 'all'."""
+    raw = os.environ.get("DATASETS", "").strip()
+    if not raw:
+        return None
+    return {d.strip() for d in raw.replace(",", " ").split() if d.strip()}
+
+
+def _headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        # merge-duplicates = upsert; return minimal to keep responses small.
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+
+
+def read_records(path: Path, wanted) -> list:
+    """Read datasets_import.csv into upsert-ready dicts. Rows without a
+    geometry are skipped (nothing to store); rows outside the DATASETS
+    filter are skipped too."""
+    if not path.exists():
+        print(f"ERROR: import file not found: {path}")
+        print("Run pipeline/build_datasets.py first (it writes this CSV).")
+        return []
+
+    records, skipped, filtered = [], 0, 0
+    with path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            geom = (row.get("geom_wkt") or "").strip()
+            dataset = (row.get("dataset") or "").strip()
+            if not geom or not dataset:
+                skipped += 1
+                continue
+            if wanted is not None and dataset not in wanted:
+                filtered += 1
+                continue
+
+            # props is stored as a JSON string in the CSV; send it as an object.
+            props_raw = (row.get("props") or "").strip()
+            try:
+                props = json.loads(props_raw) if props_raw else {}
+            except json.JSONDecodeError:
+                props = {}
+
+            source_id = (row.get("source_id") or "").strip()
+            records.append({
+                "dataset": dataset,
+                # (dataset, source_id) is the primary key — the builder always
+                # fills a stable id, but keep None-safety anyway.
+                "source_id": source_id or None,
+                "name": (row.get("name") or "").strip() or None,
+                "props": props,
+                # EWKT text -> geometry(Geometry,4326), exactly like the
+                # constraints loader sends 'SRID=4326;MULTIPOLYGON(...)'.
+                "geom": geom,
+            })
+    if skipped:
+        print(f"  skipped {skipped} row(s) with no geometry/dataset")
+    if filtered:
+        print(f"  filtered out {filtered} row(s) not in DATASETS")
+
+    # Belt-and-braces: collapse duplicate (dataset, source_id) pairs (keeping
+    # the last), so a single upsert batch never asks ON CONFLICT to touch the
+    # same row twice (Postgres 21000).
+    deduped, by_key, dupes = [], {}, 0
+    for rec in records:
+        key = (rec["dataset"], rec.get("source_id"))
+        if rec.get("source_id") is None:
+            deduped.append(rec)          # null id can't upsert-conflict; keep all
+            continue
+        if key in by_key:
+            deduped[by_key[key]] = rec   # replace earlier occurrence
+            dupes += 1
+        else:
+            by_key[key] = len(deduped)
+            deduped.append(rec)
+    if dupes:
+        print(f"  collapsed {dupes} duplicate (dataset, source_id) row(s)")
+    return deduped
+
+
+def delete_dataset(dataset: str) -> bool:
+    """DELETE every existing row for one dataset, so the upsert fully replaces
+    it (stale features whose source ids changed don't linger). Best-effort:
+    a failed delete is reported but doesn't stop the load — the upsert still
+    overwrites every current key."""
+    url = (f"{SUPABASE_URL}/rest/v1/map_features"
+           f"?dataset=eq.{urllib.parse.quote(dataset)}")
+    req = urllib.request.Request(url, headers=_headers(), method="DELETE")
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            resp.read()
+        print(f"  cleared existing rows for dataset '{dataset}'")
+        return True
+    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        detail = ""
+        if isinstance(exc, urllib.error.HTTPError):
+            detail = " " + exc.read().decode("utf-8", "replace")[:300]
+        print(f"  WARNING: delete for dataset '{dataset}' failed: {exc}{detail}")
+        print("  continuing — the upsert still replaces every current key, "
+              "but stale rows may remain.")
+        return False
+
+
+def upsert(records: list):
+    """Upsert records into Supabase via PostgREST (on_conflict dataset,source_id).
+
+    Resilient: if a batch fails, it reports the reason and keeps going, so one
+    hiccup doesn't throw away the whole run. Exits non-zero only if nothing at
+    all loaded."""
+    url = (f"{SUPABASE_URL}/rest/v1/map_features"
+           "?on_conflict=dataset,source_id")
+    headers = _headers()
+    total, failed = 0, 0
+    for i in range(0, len(records), BATCH):
+        batch = records[i:i + BATCH]
+        body = json.dumps(batch).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                resp.read()
+            total += len(batch)
+            print(f"  upserted {total} / {len(records)}")
+        except urllib.error.HTTPError as exc:
+            failed += len(batch)
+            detail = exc.read().decode("utf-8", "replace")[:500]
+            print(f"  batch starting {i} failed: HTTP {exc.code} {detail}")
+            # Keep going — a later batch may be fine, and partial load beats none.
+        except urllib.error.URLError as exc:
+            failed += len(batch)
+            print(f"  batch starting {i} failed: {exc}")
+    if total == 0:
+        print("Nothing loaded — every batch failed. See the error above.")
+        sys.exit(1)
+    print(f"Done: upserted {total} map features"
+          + (f" ({failed} failed)." if failed else "."))
+
+
+def main() -> int:
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        print("ERROR: set SUPABASE_URL and SUPABASE_SERVICE_KEY env vars.")
+        return 1
+
+    wanted = _wanted_datasets()
+    records = read_records(IMPORT_CSV, wanted)
+    if not records:
+        print("Nothing to upsert. Aborting.")
+        return 1
+
+    # Per-dataset tally so the log shows what went in.
+    by_dataset = {}
+    for r in records:
+        by_dataset[r["dataset"]] = by_dataset.get(r["dataset"], 0) + 1
+    print(f"Loaded {len(records)} rows from {IMPORT_CSV.name}:")
+    for dataset in sorted(by_dataset):
+        print(f"    {dataset:20s} {by_dataset[dataset]}")
+
+    # Full replace: clear each dataset present in the CSV (and the DATASETS
+    # filter) before upserting its fresh rows.
+    print("Clearing datasets being reloaded ...")
+    for dataset in sorted(by_dataset):
+        delete_dataset(dataset)
+
+    upsert(records)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

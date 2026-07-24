@@ -1,0 +1,160 @@
+name: Load datasets into Supabase
+
+# Builds the generic map overlay datasets (planning.data.gov.uk boundary
+# layers, university campuses, PTAL, OSM power lines/substations, GSP
+# boundaries, the TEC register, LAD boundaries + ONS rents, ALC grades, EA
+# water availability) and loads them into your Supabase `map_features` table.
+# You trigger this with a button in the GitHub "Actions" tab — no command line
+# needed. It reads your Supabase keys from repository Secrets, so they never
+# appear in your code.
+#
+# SOURCES ARE BEST-EFFORT. pipeline/build_datasets.py downloads each dataset's
+# default source itself (planning.data.gov.uk, learning-provider.data.ac.uk,
+# ONS/Natural England ArcGIS, NESO); anything that fails or has no stable
+# public URL is skipped with a warning rather than failing the run. Datasets
+# with NO working default need an operator-supplied source, passed here as a
+# repository *Variable* (Settings > Secrets and variables > Actions >
+# Variables) — each accepts a URL or a repo-relative file path:
+#   PTAL_SRC        TfL PTAL grid CSV (London Datastore file paths are hashed)
+#   TEC_SRC         NESO TEC Register CSV export
+#   GSP_SRC         NESO "GIS Boundaries for GB Grid Supply Points" GeoJSON
+#                   (only if the guessed default resource hash 404s)
+#   ONS_RENTS_SRC   latest ONS PIPR local-authority rents CSV
+#   WATER_SRC       EA CAMS water resource availability GeoJSON/SHP
+# The OSM power extract is the one source prepared IN THIS WORKFLOW (osmium
+# needs the ~1.8 GB Geofabrik UK PBF): see the "Extract OSM power features"
+# step below, which writes data/raw/osm_power.geojson for the builder.
+
+on:
+  workflow_dispatch:
+    inputs:
+      datasets:
+        description: "Which datasets to build (comma-separated, blank = all): lpa_boundary, local_plan_boundary, article4, tpo_zone, design_code_area, uni_campus, ptal, power_line, power_substation, gsp_boundary, tec_register, lad_boundary, la_rents, alc, water_availability"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # geopandas installs binary wheels (shapely/pyogrio/pyproj bundle their
+      # own GDAL/GEOS/PROJ), so no apt GDAL is required for the Python build.
+      # build_datasets.py downloads with the stdlib (urllib) — no extra deps.
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      # power_line / power_substation (and the tec_register join that geocodes
+      # against the substations) need an OSM extract. Only run this heavy step
+      # when a power/tec dataset is requested — a BLANK datasets input means
+      # "all", which counts as requested. Best-effort throughout: any failure
+      # emits a ::warning and the builder simply skips the power datasets.
+      - name: Extract OSM power features (osmium)
+        if: ${{ inputs.datasets == '' || contains(inputs.datasets, 'power') || contains(inputs.datasets, 'tec') }}
+        env:
+          OSM_PBF_SRC: ${{ vars.OSM_PBF_SRC }}
+        run: |
+          set -u
+          mkdir -p data/raw
+          if ! sudo apt-get update -qq || ! sudo apt-get install -y -qq osmium-tool gdal-bin; then
+            echo "::warning::apt install of osmium-tool/gdal-bin failed — power datasets will be skipped"
+            exit 0
+          fi
+          PBF_URL="${OSM_PBF_SRC:-https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf}"
+          echo "Downloading OSM PBF (~1.8 GB): $PBF_URL"
+          if ! curl -fL --retry 3 --retry-delay 15 -o data/raw/uk.osm.pbf "$PBF_URL"; then
+            echo "::warning::OSM PBF download failed — power datasets will be skipped"
+            exit 0
+          fi
+          echo "Filtering power=line ways and power=substation features ..."
+          if ! osmium tags-filter data/raw/uk.osm.pbf w/power=line nwr/power=substation \
+               -o data/raw/power.osm.pbf --overwrite; then
+            echo "::warning::osmium tags-filter failed — power datasets will be skipped"
+            exit 0
+          fi
+          # Export config: keep only the tags the builder reads, and force
+          # closed power=substation ways to POLYGONS and power=line to LINES.
+          cat > data/raw/osm_export_config.json <<'EOF'
+          {
+            "attributes": { "type": false, "id": true, "version": false,
+                            "changeset": false, "timestamp": false,
+                            "uid": false, "user": false, "way_nodes": false },
+            "include_tags": ["power", "voltage", "operator", "cables",
+                             "substation", "name", "circuits"],
+            "linear_tags": ["power=line"],
+            "area_tags": ["power=substation"]
+          }
+          EOF
+          # osmium export (assembles ways/areas itself and keeps tags as plain
+          # GeoJSON properties) is more robust here than ogr2ogr, whose OSM
+          # driver buries tags in an `other_tags` hstore by default.
+          if ! osmium export data/raw/power.osm.pbf \
+               -c data/raw/osm_export_config.json \
+               -o data/raw/osm_power.geojson -f geojson --overwrite; then
+            echo "::warning::osmium export failed — trying ogr2ogr fallback"
+            rm -f data/raw/osm_power.geojson
+            ok=1
+            for layer in lines multipolygons points; do
+              if [ ! -f data/raw/osm_power.geojson ]; then
+                ogr2ogr -f GeoJSON data/raw/osm_power.geojson \
+                  data/raw/power.osm.pbf "$layer" -t_srs EPSG:4326 || ok=0
+              else
+                ogr2ogr -f GeoJSON -append data/raw/osm_power.geojson \
+                  data/raw/power.osm.pbf "$layer" -t_srs EPSG:4326 || ok=0
+              fi
+            done
+            if [ "$ok" -eq 0 ] || [ ! -s data/raw/osm_power.geojson ]; then
+              echo "::warning::OSM export failed entirely — power datasets will be skipped"
+            fi
+          fi
+          # Free the big PBFs before the build step (runner disk is finite).
+          rm -f data/raw/uk.osm.pbf data/raw/power.osm.pbf
+          ls -lh data/raw || true
+
+      - name: Build the datasets import CSV
+        env:
+          DATASETS: ${{ inputs.datasets }}
+          SIMPLIFY_M: "10"
+          # Operator-supplied sources with no stable public default URL.
+          # Configure these as repository Variables; blanks are ignored and
+          # the builder skips that dataset with a warning.
+          PTAL_SRC: ${{ vars.PTAL_SRC }}
+          GSP_SRC: ${{ vars.GSP_SRC }}
+          TEC_SRC: ${{ vars.TEC_SRC }}
+          ONS_RENTS_SRC: ${{ vars.ONS_RENTS_SRC }}
+          LAD_BOUNDARIES_SRC: ${{ vars.LAD_BOUNDARIES_SRC }}
+          ALC_SRC: ${{ vars.ALC_SRC }}
+          WATER_SRC: ${{ vars.WATER_SRC }}
+        run: |
+          echo "Building supabase/datasets_import.csv (DATASETS='${DATASETS}')"
+          python pipeline/build_datasets.py
+
+      - name: Upload import CSV as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: datasets_import_csv
+          path: supabase/datasets_import.csv
+          if-no-files-found: error
+
+      - name: Load the datasets into Supabase
+        env:
+          # These come from your repository Secrets (Settings > Secrets and
+          # variables > Actions). The service key is write-access and secret.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: ${{ inputs.datasets }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing secrets. Add SUPABASE_URL and SUPABASE_SERVICE_KEY"
+            echo "::error::under Settings > Secrets and variables > Actions, then re-run."
+            exit 1
+          fi
+          python supabase/loaders/load_datasets.py
