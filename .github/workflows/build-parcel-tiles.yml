@@ -56,13 +56,20 @@ jobs:
           python3 - <<'EOF'
           import re
           html = open("inspire.html", encoding="utf-8", errors="replace").read()
-          slugs = sorted(set(re.findall(r"/datasets/inspire/download/([^\"'/]+)\.zip", html)))
+          # Primary pattern, plus fallbacks for layout drift; if nothing hits,
+          # dump every download-ish href so the logs teach us the real shape.
+          slugs = sorted(set(re.findall(r"/datasets/inspire/download/([^\"'/?#]+?)(?:\.zip)?[\"'?#]", html)))
           if not slugs:
-              raise SystemExit("no download links found on the INSPIRE page — layout changed? "
-                               "First 300 chars: " + html[:300])
+              slugs = sorted(set(re.findall(r"inspire[^\"']*/([A-Za-z0-9_%\-]+)\.zip", html)))
+          if not slugs:
+              hrefs = sorted(set(re.findall(r"(?:href|action)=[\"']([^\"']*(?:download|\.zip|inspire)[^\"']*)[\"']", html, re.I)))
+              print("DIAGNOSTIC — candidate hrefs on the page:")
+              for h in hrefs[:100]:
+                  print("  ", h)
+              raise SystemExit("no download links matched — see the href dump above")
           with open("las.txt", "w") as fh:
               fh.write("\n".join(slugs) + "\n")
-          print(f"{len(slugs)} local authorities discovered")
+          print(f"{len(slugs)} local authorities discovered; first: {slugs[:5]}")
           EOF
 
       - name: Download and convert every LA to line-delimited GeoJSON
