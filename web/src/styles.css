@@ -2319,3 +2319,35 @@ footer {
   border-radius: 50%;
   flex: 0 0 auto;
 }
+
+/* ---- PBSA build-catchment controls ---------------------------------------- */
+.pbsa-catchment { margin-top: 12px; border-top: 1px solid var(--ink-line); padding-top: 10px; }
+.catch-modes { display: flex; gap: 6px; margin: 8px 0; }
+.catch-mode {
+  flex: 1;
+  padding: 6px 4px;
+  border: 1px solid var(--ink-line);
+  border-radius: 8px;
+  background: var(--surface-float-soft);
+  color: var(--text-dim);
+  font: 12px var(--font-ui);
+  cursor: pointer;
+}
+.catch-mode.on {
+  border-color: #7048e8;
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px #7048e8 inset;
+}
+.catch-actions { display: flex; gap: 8px; margin: 6px 0 4px; }
+#catch-build {
+  flex: 1;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: #7048e8;
+  color: #fff;
+  font: 600 12.5px var(--font-ui);
+  cursor: pointer;
+}
+#catch-build:hover { background: #5f3dc4; }

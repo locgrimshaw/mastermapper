@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws46-interrogate" />
+  <link rel="stylesheet" href="src/styles.css?v=ws47-catchment" />
 </head>
 <body>
   <div id="app">
@@ -155,6 +155,23 @@
                 <input type="number" id="pbsa-min-trains" min="1" max="200" value="10" /></label>
             </div>
             <div id="pbsa-feeders"></div>
+            <div id="pbsa-catchment" class="pbsa-catchment" hidden>
+              <div class="pbsa-sec">Build catchment</div>
+              <p class="hint">Everywhere a student could live and still reach this campus inside the time budget. The zone stays full-strength; the rest of the map fades back.</p>
+              <div class="catch-modes" role="group" aria-label="Catchment mode">
+                <button type="button" class="catch-mode" data-mode="walk">Walk</button>
+                <button type="button" class="catch-mode" data-mode="cycle">Cycle</button>
+                <button type="button" class="catch-mode on" data-mode="rail">Rail + walk</button>
+              </div>
+              <label class="pbsa-crit"><span>Travel time</span>
+                <input type="range" id="catch-mins" min="10" max="60" step="5" value="30" />
+                <span class="pbsa-crit-val" id="catch-mins-val">30 min</span></label>
+              <div class="catch-actions">
+                <button type="button" id="catch-build">Build catchment</button>
+                <button type="button" class="ghost" id="catch-clear" hidden>Remove</button>
+              </div>
+              <p class="hint" id="catch-note"></p>
+            </div>
             <button type="button" class="ghost" id="pbsa-clear" hidden>Clear from map</button>
           </section>
         </div>
@@ -259,6 +276,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws46-interrogate"></script>
+  <script type="module" src="src/app.js?v=ws47-catchment"></script>
 </body>
 </html>

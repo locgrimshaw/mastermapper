@@ -7447,6 +7447,9 @@ const pbsa = {
   data: null,          // uni_rail_access payload
   maxMin: 45,
   minTrains: 10,
+  catchMode: "rail",   // walk | cycle | rail
+  catchMins: 30,
+  catchOn: false,
 };
 
 const PBSA_BANDS = [
@@ -7542,9 +7545,36 @@ function wirePbsaBox() {
     document.getElementById("pbsa-summary").innerHTML = "";
     document.getElementById("pbsa-feeders").innerHTML = "";
     document.getElementById("pbsa-criteria").hidden = true;
+    const catchBox = document.getElementById("pbsa-catchment");
+    if (catchBox) catchBox.hidden = true;
     clearBtn.hidden = true;
+    pbsaCatchClear();
     pbsaClearViz();
   });
+
+  // --- Build catchment controls ---
+  document.querySelectorAll(".catch-mode").forEach(btn =>
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".catch-mode").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+      pbsa.catchMode = btn.dataset.mode;
+      if (pbsa.catchOn) pbsaBuildCatchment(false);
+    }));
+  const catchMins = document.getElementById("catch-mins");
+  const catchMinsVal = document.getElementById("catch-mins-val");
+  let catchDebounce = null;
+  if (catchMins) catchMins.addEventListener("input", () => {
+    pbsa.catchMins = parseInt(catchMins.value, 10);
+    if (catchMinsVal) catchMinsVal.textContent = `${pbsa.catchMins} min`;
+    if (pbsa.catchOn) {
+      clearTimeout(catchDebounce);
+      catchDebounce = setTimeout(() => pbsaBuildCatchment(false), 350);
+    }
+  });
+  const buildBtn = document.getElementById("catch-build");
+  if (buildBtn) buildBtn.addEventListener("click", () => pbsaBuildCatchment(true));
+  const catchClear = document.getElementById("catch-clear");
+  if (catchClear) catchClear.addEventListener("click", pbsaCatchClear);
 }
 
 async function pbsaSelect(u) {
@@ -7562,6 +7592,9 @@ async function pbsaSelect(u) {
   pbsa.data = data;
   document.getElementById("pbsa-criteria").hidden = false;
   document.getElementById("pbsa-clear").hidden = false;
+  const catchBox = document.getElementById("pbsa-catchment");
+  if (catchBox) catchBox.hidden = false;
+  pbsaCatchClear();   // a catchment built for the previous university is stale
   pbsaRenderSummary();
   pbsaRender();
   // Frame the university with some breathing room.
@@ -7702,6 +7735,136 @@ function pbsaClearViz() {
     if (map.getLayer(id)) map.removeLayer(id);
   for (const id of ["pbsa-arcs", "pbsa-feeder-pts", "pbsa-gateways", "pbsa-campus"])
     if (map.getSource(id)) map.removeSource(id);
+}
+
+// --- Build catchment: travel-time zone + fade-back mask ---------------------
+// Everywhere someone could live and still reach the campus within the time
+// budget. Rail mode is the honest one — real timetable minutes (station_links)
+// for the train leg, walking legs at 4.8 km/h, a fixed 5-minute interchange —
+// so each reachable station gets a ring sized by the minutes LEFT after the
+// journey. Walk/cycle modes are labelled straight-line approximations
+// (speed × time × a detour factor), not street routing.
+
+const CATCH_WALK_MPM = 62;    // effective straight-line metres/min at 4.8 km/h
+const CATCH_CYCLE_MPM = 185;  // effective straight-line metres/min at ~15 km/h
+const CATCH_INTERCHANGE_MIN = 5;
+const CATCH_COLORS = { walk: "#2f9e44", cycle: "#0ca678", rail: "#7048e8" };
+
+function pbsaBuildCatchment(fit) {
+  const d = pbsa.data;
+  const note = document.getElementById("catch-note");
+  if (!d || !d.university) return;
+  if (typeof turf === "undefined") {
+    if (note) note.textContent = "Catchment maths needs the Turf library, which didn't load — check the network and refresh.";
+    return;
+  }
+  const uni = d.university;
+  const T = pbsa.catchMins;
+  const mode = pbsa.catchMode;
+  const circle = (lng, lat, meters) =>
+    turf.circle([lng, lat], Math.max(meters, 150) / 1000, { steps: 40, units: "kilometers" });
+
+  const discs = [];
+  let noteText = "";
+  if (mode === "walk" || mode === "cycle") {
+    const speed = mode === "walk" ? CATCH_WALK_MPM : CATCH_CYCLE_MPM;
+    discs.push(circle(uni.lng, uni.lat, T * speed));
+    noteText = `${T} min ${mode === "walk" ? "walking (4.8 km/h)" : "cycling (~15 km/h)"} — a straight-line ring adjusted for street detours, not full routing.`;
+  } else {
+    // Rail + walk: walk ring from campus, plus a ring per reachable station
+    // sized by the time left after walking + train + interchange.
+    discs.push(circle(uni.lng, uni.lat, T * CATCH_WALK_MPM));
+    const gwWalkMin = {};
+    for (const g of d.gateways || []) {
+      const w = (g.walk_m ?? 1200) / CATCH_WALK_MPM;
+      gwWalkMin[g.crs] = w;
+      const r = T - w;
+      if (r > 3) discs.push(circle(g.lng, g.lat, r * CATCH_WALK_MPM));
+    }
+    let reached = 0;
+    const feeders = (d.feeders || [])
+      .filter(f => f.minutes != null && (f.trains_day ?? 0) >= pbsa.minTrains)
+      .map(f => {
+        const total = f.minutes + CATCH_INTERCHANGE_MIN + (gwWalkMin[f.via_crs] ?? 12);
+        return { ...f, remaining: T - total };
+      })
+      .filter(f => f.remaining > 3)
+      .sort((a, b) => b.remaining - a.remaining)
+      .slice(0, 200);
+    for (const f of feeders) { discs.push(circle(f.lng, f.lat, f.remaining * CATCH_WALK_MPM)); reached++; }
+    noteText = d.links_loaded
+      ? `${reached} station${reached === 1 ? "" : "s"} reachable door-to-campus in ≤ ${T} min (timetable train times + walking at 4.8 km/h + ${CATCH_INTERCHANGE_MIN} min interchange). Each ring is sized by the minutes left after the journey. Respects the min trains/day criterion above.`
+      : `Rail journey links aren't loaded yet, so this shows the walking zone only — run the rail-links workflow to light up the full rail catchment.`;
+  }
+
+  // Dissolve the rings into one zone. Turf v7 unions a FeatureCollection;
+  // fall back to the v6 pairwise signature if that's what loaded.
+  let zone = discs[0];
+  for (let i = 1; i < discs.length; i++) {
+    let merged = null;
+    try { merged = turf.union(turf.featureCollection([zone, discs[i]])); } catch (_) {}
+    if (!merged) { try { merged = turf.union(zone, discs[i]); } catch (_) {} }
+    if (merged) zone = merged;
+  }
+
+  pbsaCatchDraw(zone, CATCH_COLORS[mode]);
+  pbsa.catchOn = true;
+  const clearBtn = document.getElementById("catch-clear");
+  if (clearBtn) clearBtn.hidden = false;
+  if (note) note.textContent = noteText;
+  if (fit) {
+    try {
+      const bb = turf.bbox(zone);
+      map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 48, duration: 900 });
+    } catch (_) {}
+  }
+}
+
+// World-with-holes polygon so everything OUTSIDE the zone gets a dim wash.
+function pbsaCatchMask(zone) {
+  const worldRing = [[-180, -85], [-180, 85], [180, 85], [180, -85], [-180, -85]];
+  const g = zone.geometry;
+  const outers = g.type === "Polygon" ? [g.coordinates[0]] : g.coordinates.map(c => c[0]);
+  return { type: "Feature", properties: {},
+           geometry: { type: "Polygon", coordinates: [worldRing, ...outers] } };
+}
+
+function pbsaCatchDraw(zone, color) {
+  const maskF = pbsaCatchMask(zone);
+  const setOrAdd = (id, data) => {
+    if (map.getSource(id)) map.getSource(id).setData(data);
+    else map.addSource(id, { type: "geojson", data });
+  };
+  setOrAdd("pbsa-catch-mask", maskF);
+  setOrAdd("pbsa-catch", zone);
+  // Mask goes on TOP of every current layer (no beforeId) so the whole map —
+  // basemap, choropleths, overlays — fades back outside the zone. Data layers
+  // toggled later insert beneath the station dots, so they stay under it too.
+  if (!map.getLayer("pbsa-catch-dim"))
+    map.addLayer({ id: "pbsa-catch-dim", type: "fill", source: "pbsa-catch-mask",
+      paint: { "fill-color": "#0b0d10", "fill-opacity": 0.5 } });
+  // Thick boundary: white casing + mode colour, crisp on any background.
+  if (!map.getLayer("pbsa-catch-case"))
+    map.addLayer({ id: "pbsa-catch-case", type: "line", source: "pbsa-catch",
+      layout: { "line-join": "round" },
+      paint: { "line-color": "#ffffff", "line-width": 6, "line-opacity": 0.85 } });
+  if (!map.getLayer("pbsa-catch-line"))
+    map.addLayer({ id: "pbsa-catch-line", type: "line", source: "pbsa-catch",
+      layout: { "line-join": "round" },
+      paint: { "line-color": color, "line-width": 3, "line-opacity": 0.95 } });
+  else map.setPaintProperty("pbsa-catch-line", "line-color", color);
+}
+
+function pbsaCatchClear() {
+  pbsa.catchOn = false;
+  for (const id of ["pbsa-catch-dim", "pbsa-catch-case", "pbsa-catch-line"])
+    if (map.getLayer(id)) map.removeLayer(id);
+  for (const id of ["pbsa-catch-mask", "pbsa-catch"])
+    if (map.getSource(id)) map.removeSource(id);
+  const clearBtn = document.getElementById("catch-clear");
+  if (clearBtn) clearBtn.hidden = true;
+  const note = document.getElementById("catch-note");
+  if (note) note.textContent = "";
 }
 
 // ---- Boot -----------------------------------------------------------------
