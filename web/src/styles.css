@@ -2148,3 +2148,7 @@ footer {
   padding: 2px 0;
 }
 .lt-view input { accent-color: var(--accent); }
+
+/* Group master toggle (Transport & rail all-on/off). */
+.lt-master { padding: 6px 0 2px; font-weight: 600; }
+.lt-master .lt-label { font-size: 12.5px; }

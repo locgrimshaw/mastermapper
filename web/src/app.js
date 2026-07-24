@@ -1410,6 +1410,10 @@ function buildLayersPanel() {
         <span class="box-caret" aria-hidden="true">▾</span>
       </button>
       <div class="lt-body">
+        <label class="lt-main lt-master">
+          <input type="checkbox" id="transport-all" checked />
+          <span class="lt-label">All transport &amp; rail</span>
+        </label>
         ${ltRowHTML({ rowId: "station-row", cbId: "station-show", hidden: true,
                       label: "Stations (heavy rail, usage-scaled)", color: STATION_COLOR,
                       statId: "station-count-stat", checked: true,
@@ -1469,6 +1473,63 @@ function buildLayersPanel() {
   // House-price toggle.
   const priceCb = host.querySelector("#price-show");
   if (priceCb) priceCb.addEventListener("change", e => setPriceVisible(e.target.checked));
+
+  // Transport & rail master toggle: flips stations + every rail mode at once,
+  // and reflects the children's state (indeterminate when mixed).
+  const master = host.querySelector("#transport-all");
+  if (master) master.addEventListener("change", e => setAllTransport(e.target.checked));
+  const tGroup = host.querySelector('[data-group="transport"]');
+  if (tGroup) tGroup.addEventListener("change", (e) => {
+    if (e.target && e.target.id !== "transport-all") syncTransportMaster();
+  });
+}
+
+// All checkboxes the transport master governs (only those currently rendered
+// and relevant — the station row and rail toggles appear once data loads).
+function transportChildCheckboxes() {
+  const cbs = [];
+  const stationRow = document.getElementById("station-row");
+  const stationCb = document.getElementById("station-show");
+  if (stationCb && stationRow && !stationRow.hidden) cbs.push(stationCb);
+  for (const m of RAIL_MODES) {
+    for (const kind of ["line", "stop"]) {
+      const cb = document.getElementById(`rail-${kind}-${m.key}`);
+      if (cb) cbs.push(cb);
+    }
+  }
+  return cbs;
+}
+
+function setAllTransport(on) {
+  const stationRow = document.getElementById("station-row");
+  const stationCb = document.getElementById("station-show");
+  if (stationCb && stationRow && !stationRow.hidden && stationCb.checked !== on) {
+    stationCb.checked = on;
+    setStationsVisible(on);
+  }
+  for (const m of RAIL_MODES) {
+    const lineCb = document.getElementById(`rail-line-${m.key}`);
+    if (lineCb && lineCb.checked !== on) {
+      lineCb.checked = on;
+      setRailModeVisibility("line", m.key, on);
+    }
+    const stopCb = document.getElementById(`rail-stop-${m.key}`);
+    if (stopCb && stopCb.checked !== on) {
+      stopCb.checked = on;
+      setRailModeVisibility("stop", m.key, on);
+    }
+  }
+  syncTransportMaster();
+}
+
+function syncTransportMaster() {
+  const master = document.getElementById("transport-all");
+  if (!master) return;
+  const cbs = transportChildCheckboxes();
+  if (!cbs.length) { master.checked = true; master.indeterminate = false; return; }
+  const on = cbs.filter(cb => cb.checked).length;
+  master.checked = on === cbs.length;
+  master.indeterminate = on > 0 && on < cbs.length;
 }
 
 // Reveal the House prices group once loadData knows the tiles carry prices.
@@ -1602,6 +1663,7 @@ function buildRailToggle() {
     if (stopCb) stopCb.addEventListener("change", (e) =>
       setRailModeVisibility("stop", m.key, e.target.checked));
   }
+  syncTransportMaster();   // rail children just appeared — reflect their state
 }
 
 function setRailModeVisibility(kind, mode, on) {
@@ -1645,6 +1707,7 @@ function buildStationControls() {
   if (!state.hasStations) { block.hidden = true; return; }
   block.hidden = false;
   if (layerRow) layerRow.hidden = false;
+  syncTransportMaster();   // station row just appeared — reflect its state
 
   const feats = (state.stationsData && state.stationsData.features) || [];
   const countStat = document.getElementById("station-count-stat");
