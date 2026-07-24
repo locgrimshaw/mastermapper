@@ -108,9 +108,21 @@ monthly when HMLR refresh; INSPIRE parcel outlines are the next phase).
 
 1. **UKPN** — ✅ DONE: the Grid and Primary sites export is wired in as the
    `ukpn_sites` dataset (stable API URL, no registration needed for export).
-2. **NGED** (Midlands/South West/South Wales): go to
-   <https://connecteddata.nationalgrid.co.uk/> → Register (free). Find the
-   network-capacity / substation dataset and copy its export link for Claude.
+2. **NGED** — ✅ DONE: the substations capacity CSV is wired in as the
+   `nged_sites` dataset (stable CKAN resource URL).
+
+## 10. National Rail Open Data account → the PBSA rail sift's journey data
+
+The new "PBSA sift" box ranks feeder stations by DIRECT train time into a
+university's gateway stations. That needs the National Rail timetable:
+1. Register (free) at <https://opendata.nationalrail.co.uk/> and subscribe to
+   the **Timetable** feed.
+2. Add TWO repository secrets at
+   <https://github.com/locgrimshaw/mastermapper/settings/secrets/actions>:
+   **`NR_EMAIL`** (your login email) and **`NR_PASSWORD`**.
+3. Run the **"Load rail station links into Supabase"** workflow from the
+   Actions tab. Until then the PBSA box shows walkable gateway stations only,
+   with an honest note.
 
 ---
 

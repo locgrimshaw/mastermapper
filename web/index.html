@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws41-ptal-ccod" />
+  <link rel="stylesheet" href="src/styles.css?v=ws42-pbsa" />
 </head>
 <body>
   <div id="app">
@@ -128,6 +128,38 @@
         </div>
       </section>
 
+      <!-- ============ BOX 3 · PBSA SIFT ============
+           Student-housing site finding, university-first: pick an institution,
+           see its walkable gateway stations and every feeder station with a
+           direct train in, ranked and visualised. Driven by uni_rail_access()
+           in Supabase; see docs/PLAN_SIFT_PBSA.md. -->
+      <section class="side-box" id="pbsa-box">
+        <button type="button" class="box-head" aria-expanded="true">
+          <span class="box-title">PBSA sift</span>
+          <span class="box-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="box-body">
+          <section class="block" id="pbsa-block">
+            <h2>University rail access</h2>
+            <p class="hint">Pick a university to see its demand profile, its walkable gateway stations, and every station with a direct train in — the well-connected towns where student housing could sit. Adjust the criteria; the list and map update together.</p>
+            <div class="station-search">
+              <input type="text" id="pbsa-uni-input" placeholder="Search a university…" autocomplete="off" />
+              <div id="pbsa-uni-results" class="station-results" hidden></div>
+            </div>
+            <div id="pbsa-summary"></div>
+            <div id="pbsa-criteria" class="pbsa-criteria" hidden>
+              <label class="pbsa-crit"><span>Max rail time</span>
+                <input type="range" id="pbsa-max-min" min="10" max="90" step="5" value="45" />
+                <span class="pbsa-crit-val" id="pbsa-max-min-val">45 min</span></label>
+              <label class="pbsa-crit"><span>Min direct trains/day</span>
+                <input type="number" id="pbsa-min-trains" min="1" max="200" value="10" /></label>
+            </div>
+            <div id="pbsa-feeders"></div>
+            <button type="button" class="ghost" id="pbsa-clear" hidden>Clear from map</button>
+          </section>
+        </div>
+      </section>
+
       <!-- Batch analysis setup + results overlays -->
       <div id="batch-setup" class="batch-setup" hidden></div>
       <div id="batch-results" class="batch-results" hidden></div>
@@ -227,6 +259,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws41-ptal-ccod"></script>
+  <script type="module" src="src/app.js?v=ws42-pbsa"></script>
 </body>
 </html>

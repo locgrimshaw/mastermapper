@@ -153,6 +153,12 @@ PTAL_DEFAULT_URL = ("https://hub.arcgis.com/api/v3/datasets/"
 UKPN_SITES_URL = ("https://ukpowernetworks.opendatasoft.com/api/explore/v2.1/"
                   "catalog/datasets/grid-and-primary-sites/exports/geojson/"
                   "?lang=en&timezone=Europe%2FLondon")
+# NGED (National Grid Electricity Distribution) substation capacity CSV from
+# their Connected Data portal (CKAN resource URL — stable).
+NGED_SITES_URL = ("https://connecteddata.nationalgrid.co.uk/dataset/"
+                  "967404e0-f25c-469b-8857-1a396f3c363f/resource/"
+                  "d1895bd3-d9d2-4886-a0a3-b7eadd9ab6c2/download/"
+                  "substations.csv?format=csv")
 LAD_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
                    "services/Local_Authority_Districts_December_2024_Boundaries"
                    "_UK_BGC/FeatureServer/0/query?where=1%3D1&outFields=*"
@@ -174,7 +180,7 @@ ALL_DATASETS = [
     "design_code_area",
     "uni_campus", "uni_campus_site", "uni_building", "ptal",
     "power_line", "power_substation", "gsp_boundary", "tec_register",
-    "ukpn_sites",
+    "ukpn_sites", "nged_sites",
     "lad_boundary", "la_rents", "alc", "water_availability",
 ]
 
@@ -995,6 +1001,60 @@ def build_ukpn_sites():
     return {key: rows}
 
 
+def build_nged_sites():
+    """NGED substation capacity CSV -> points. Column names vary by release;
+    detect coordinates defensively (lat/long or easting/northing) and keep all
+    other columns as props for the click card."""
+    key = "nged_sites"
+    path, how = _resolve_source(key, ["NGED_SITES_SRC"], NGED_SITES_URL,
+                                "nged-sites.csv")
+    if path is None:
+        _warn(key, f"{how} — set NGED_SITES_SRC to the substations CSV from "
+                   "connecteddata.nationalgrid.co.uk")
+        _note(key, how)
+        return {}
+    print(f"  [{key}] reading {path.name} ({how}) ...")
+    df = _read_csv(path)
+    lat_col = _find_col(df, ["latitude", "lat"], contains=True)
+    lon_col = _find_col(df, ["longitude", "long", "lng"], contains=True)
+    east_col = _find_col(df, ["easting", "x"], contains=True)
+    north_col = _find_col(df, ["northing", "y"], contains=True)
+    name_col = _find_col(df, ["substation name", "site name", "name",
+                              "substation"], contains=True)
+    df = df.copy()
+    if lat_col is not None and lon_col is not None:
+        df["_lat"] = pd.to_numeric(df[lat_col], errors="coerce")
+        df["_lon"] = pd.to_numeric(df[lon_col], errors="coerce")
+        df = df[df["_lat"].notna() & df["_lon"].notna()]
+        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df["_lon"], df["_lat"]),
+                               crs=4326)
+    elif east_col is not None and north_col is not None:
+        df["_e"] = pd.to_numeric(df[east_col], errors="coerce")
+        df["_n"] = pd.to_numeric(df[north_col], errors="coerce")
+        df = df[df["_e"].notna() & df["_n"].notna()]
+        gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df["_e"], df["_n"]),
+                               crs=27700).to_crs(4326)
+    else:
+        _warn(key, f"no coordinate columns detected in {path.name} "
+                   f"(columns: {list(df.columns)[:12]}...)")
+        _note(key, "no coordinate columns in CSV")
+        return {}
+    cols = [c for c in gdf.columns
+            if c not in ("geometry", "_lat", "_lon", "_e", "_n")][:40]
+
+    def props_fn(f):
+        out = {}
+        for c in cols:
+            v = _jsonable(f[c])
+            if v not in (None, ""):
+                out[_slug_key(c)] = v
+        return out
+
+    rows = _emit(gdf, key, name_col=name_col, want="point", props_fn=props_fn)
+    _note(key, how, len(rows))
+    return {key: rows}
+
+
 def _norm_site(s):
     """Normalise a substation/connection-site name for fuzzy matching."""
     s = str(s or "").lower()
@@ -1275,6 +1335,7 @@ GROUPS = (
         (["uni_campus_site", "uni_building"], build_university_group, []),
         (["ptal"], build_ptal, []),
         (["ukpn_sites"], build_ukpn_sites, []),
+        (["nged_sites"], build_nged_sites, []),
         (["power_line", "power_substation"], build_power_group,
          ["tec_register"]),
         (["gsp_boundary"], build_gsp_boundary, []),

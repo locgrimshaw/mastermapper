@@ -45,6 +45,9 @@ from pathlib import Path
 RAW = Path(__file__).resolve().parent.parent / "data" / "raw"
 TIMETABLE_ZIP = RAW / "rail_timetable.zip"
 OUT_CSV = RAW / "station_connectivity.csv"
+# Station-to-station direct links (the PBSA rail sift's input): one row per
+# ordered (from, to) pair with a direct scheduled service on the sample day.
+OUT_LINKS = RAW / "station_links.csv"
 
 # Representative weekday: 0=Mon .. 6=Sun. Tuesday avoids Monday/Friday quirks.
 SAMPLE_WEEKDAY = 1            # Tuesday
@@ -293,6 +296,8 @@ def build(msn_path: Path, mca_path: Path) -> dict:
 
     # Per-CRS accumulators.
     stats = {}  # crs -> dict(dep_count, peak, first, last, dests:set, cities:set)
+    # (crs_from, crs_to) -> {"n": direct trains, "mins": sample journey times}.
+    pairs = {}
 
     def acc(crs):
         return stats.setdefault(crs, {
@@ -333,12 +338,27 @@ def build(msn_path: Path, mca_path: Path) -> dict:
                 st_xy = tiploc_to_xy.get(tip)
                 brg = bearing_group(st_xy, term_xy)
                 s["dep_dir"].append((t, brg))
-            # Onward one-seat destinations: every later call point.
-            for onward in crs_seq[idx + 1:]:
-                if onward != crs:
-                    s["dests"].add(onward)
-                    if onward in KEY_CITIES:
-                        s["cities"].add(KEY_CITIES[onward])
+            # Onward one-seat destinations: every later call point. Also
+            # record the (from, to) pair with the scheduled journey minutes so
+            # station_links.csv can carry real times + frequencies.
+            for j in range(idx + 1, len(calls)):
+                onward, _tip2, t2, _d2 = calls[j]
+                if onward == crs:
+                    continue
+                s["dests"].add(onward)
+                if onward in KEY_CITIES:
+                    s["cities"].add(KEY_CITIES[onward])
+                if is_dep and t is not None and t2 is not None:
+                    m1 = (t // 100) * 60 + (t % 100)
+                    m2 = (t2 // 100) * 60 + (t2 % 100)
+                    mins = m2 - m1
+                    if mins < 0:
+                        mins += 1440          # over-midnight leg
+                    if 0 < mins <= 600:       # sanity: drop >10 h artefacts
+                        pr = pairs.setdefault((crs, onward), {"n": 0, "mins": []})
+                        pr["n"] += 1
+                        if len(pr["mins"]) < 40:
+                            pr["mins"].append(mins)
 
     n_lines = n_sched = n_kept = 0
     with mca_path.open(encoding="latin-1") as fh:
@@ -427,7 +447,7 @@ def build(msn_path: Path, mca_path: Path) -> dict:
             "meets_2tph_per_dir": int(meets_2tph_dir),
             "meets_frequency": int(meets_frequency),
         }
-    return out
+    return out, pairs
 
 
 def main() -> int:
@@ -441,7 +461,7 @@ def main() -> int:
     msn_path, mca_path = found
     print(f"  MSN: {msn_path.name} · MCA: {mca_path.name}")
 
-    out = build(msn_path, mca_path)
+    out, pairs = build(msn_path, mca_path)
     if not out:
         print("  No connectivity rows produced — check the parse. Not writing.")
         return 1
@@ -456,6 +476,8 @@ def main() -> int:
         w.writeheader()
         for crs in sorted(out):
             w.writerow(out[crs])
+
+    write_links(pairs)
 
     # Quick sanity summary.
     busiest = sorted(out.values(), key=lambda r: r["trains_per_day"], reverse=True)[:5]
@@ -472,6 +494,17 @@ def main() -> int:
               f"{r['sustained_tph_per_dir']}/hr per dir, "
               f"freq-pass={'Y' if r['meets_frequency'] else 'N'}")
     return 0
+
+
+def write_links(pairs):
+    import statistics
+    with OUT_LINKS.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["crs_from", "crs_to", "minutes", "trains_day"])
+        for (a, b), pr in sorted(pairs.items()):
+            med = round(statistics.median(pr["mins"]), 1) if pr["mins"] else ""
+            w.writerow([a, b, med, pr["n"]])
+    print(f"  wrote {OUT_LINKS.name}: {len(pairs):,} direct station pairs")
 
 
 if __name__ == "__main__":

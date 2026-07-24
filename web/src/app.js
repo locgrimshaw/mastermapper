@@ -6969,6 +6969,279 @@ function dropPlotPoint(lngLat) {
   setPlotStatus("Point set. Choose mode/time, then build the catchment.");
 }
 
+
+// ============================================================================
+// PBSA sift · University rail access (box 3). Pick a university -> show its
+// HESA demand profile, gateway stations (walkable to a campus) and feeder
+// stations (direct train into a gateway), ranked by adjustable criteria and
+// drawn on the map (colour-banded dots + arcs). Powered by the
+// uni_rail_access() RPC; degrades honestly to gateways-only until the
+// station_links table is loaded (needs National Rail credentials).
+// ============================================================================
+
+const pbsa = {
+  unis: null,          // cached uni_campus features [{name, ukprn, props, coords}]
+  selected: null,      // {name, ukprn, ...}
+  data: null,          // uni_rail_access payload
+  maxMin: 45,
+  minTrains: 10,
+};
+
+const PBSA_BANDS = [
+  { max: 20, color: "#2f9e44", label: "under 20 min" },
+  { max: 40, color: "#e0a32e", label: "20–40 min" },
+  { max: 60, color: "#e8590c", label: "40–60 min" },
+  { max: 999, color: "#c92a2a", label: "60+ min" },
+];
+function pbsaBand(mins) {
+  return PBSA_BANDS.find(b => (mins ?? 999) <= b.max) || PBSA_BANDS[PBSA_BANDS.length - 1];
+}
+
+async function pbsaLoadUnis() {
+  if (pbsa.unis) return pbsa.unis;
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb.rpc("features_in_bbox",
+    { p_dataset: "uni_campus", w: -9, s: 49, e: 2.5, n: 61.5, lim: 600 });
+  if (error || !data || !Array.isArray(data.features)) return null;
+  pbsa.unis = data.features
+    .filter(f => f.geometry && f.geometry.type === "Point")
+    .map(f => ({
+      name: f.properties.name || "HE provider",
+      ukprn: f.properties.ukprn,
+      props: f.properties,
+      coords: f.geometry.coordinates,
+      hay: (f.properties.name || "").toLowerCase(),
+    }))
+    .sort((a, b) => (Number(b.props.students_total) || 0) - (Number(a.props.students_total) || 0));
+  return pbsa.unis;
+}
+
+function wirePbsaBox() {
+  const input = document.getElementById("pbsa-uni-input");
+  const results = document.getElementById("pbsa-uni-results");
+  if (!input || !results) return;
+
+  const render = (matches) => {
+    if (!matches.length) { results.hidden = true; results.innerHTML = ""; return; }
+    results.hidden = false;
+    results.innerHTML = matches.map((m, i) => `
+      <button type="button" class="station-result" data-i="${i}">
+        <span class="sr-name">${m.name}</span>
+        <span class="sr-meta">${m.props.students_total ? Number(m.props.students_total).toLocaleString() + " students" : (m.props.groups || "")}</span>
+      </button>`).join("");
+    results.querySelectorAll(".station-result").forEach(btn =>
+      btn.addEventListener("click", () => {
+        const m = matches[parseInt(btn.dataset.i, 10)];
+        input.value = m.name;
+        results.hidden = true;
+        pbsaSelect(m);
+      }));
+  };
+
+  let lastMatches = [];
+  input.addEventListener("input", async () => {
+    const q = input.value.trim().toLowerCase();
+    if (q.length < 2) { results.hidden = true; return; }
+    const unis = await pbsaLoadUnis();
+    if (!unis) { results.hidden = false; results.innerHTML = "<div class='hint' style='padding:8px'>University list unavailable (database offline?)</div>"; return; }
+    lastMatches = unis.filter(u => u.hay.includes(q)).slice(0, 8);
+    render(lastMatches);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && lastMatches.length) {
+      e.preventDefault();
+      input.value = lastMatches[0].name;
+      results.hidden = true;
+      pbsaSelect(lastMatches[0]);
+    } else if (e.key === "Escape") results.hidden = true;
+  });
+  document.addEventListener("click", (e) => {
+    if (!document.getElementById("pbsa-block").contains(e.target)) results.hidden = true;
+  });
+
+  const maxMin = document.getElementById("pbsa-max-min");
+  const maxMinVal = document.getElementById("pbsa-max-min-val");
+  if (maxMin) maxMin.addEventListener("input", () => {
+    pbsa.maxMin = parseInt(maxMin.value, 10);
+    if (maxMinVal) maxMinVal.textContent = `${pbsa.maxMin} min`;
+    pbsaRender();
+  });
+  const minTrains = document.getElementById("pbsa-min-trains");
+  if (minTrains) minTrains.addEventListener("change", () => {
+    pbsa.minTrains = Math.max(1, parseInt(minTrains.value, 10) || 10);
+    minTrains.value = pbsa.minTrains;
+    pbsaRender();
+  });
+  const clearBtn = document.getElementById("pbsa-clear");
+  if (clearBtn) clearBtn.addEventListener("click", () => {
+    pbsa.selected = pbsa.data = null;
+    input.value = "";
+    document.getElementById("pbsa-summary").innerHTML = "";
+    document.getElementById("pbsa-feeders").innerHTML = "";
+    document.getElementById("pbsa-criteria").hidden = true;
+    clearBtn.hidden = true;
+    pbsaClearViz();
+  });
+}
+
+async function pbsaSelect(u) {
+  pbsa.selected = u;
+  const summary = document.getElementById("pbsa-summary");
+  summary.innerHTML = `<p class="hint">Loading rail access for ${u.name}…</p>`;
+  const sb = getSupabase();
+  if (!sb) { summary.innerHTML = `<p class="hint">Database unavailable.</p>`; return; }
+  const { data, error } = await sb.rpc("uni_rail_access", { p_ukprn: String(u.ukprn) });
+  if (error || !data) {
+    console.error("uni_rail_access failed", error);
+    summary.innerHTML = `<p class="hint">Could not load rail access (${error?.message || "no data"}).</p>`;
+    return;
+  }
+  pbsa.data = data;
+  document.getElementById("pbsa-criteria").hidden = false;
+  document.getElementById("pbsa-clear").hidden = false;
+  pbsaRenderSummary();
+  pbsaRender();
+  // Frame the university with some breathing room.
+  if (data.university) {
+    map.flyTo({ center: [data.university.lng, data.university.lat], zoom: 9, duration: 900 });
+  }
+}
+
+function pbsaRenderSummary() {
+  const d = pbsa.data, u = d.university || {};
+  const p = u.props || {};
+  const chip = (label, v) => v == null ? "" :
+    `<div class="pbsa-chip"><div class="pbsa-chip-v">${v}</div><div class="pbsa-chip-l">${label}</div></div>`;
+  const total = p.students_total ? Number(p.students_total).toLocaleString() : null;
+  const chips = [
+    chip("students", total),
+    chip("international", p.intl_pct != null ? p.intl_pct + "%" : null),
+    chip("in PBSA", p.pbsa_pct != null ? p.pbsa_pct + "%" : null),
+    chip("in HMO/rented", p.rented_pct != null ? p.rented_pct + "%" : null),
+  ].join("");
+  const demand = (p.students_fulltime && p.rented_pct != null)
+    ? `<p class="hint">≈ <strong>${Math.round(p.students_fulltime * p.rented_pct / 100).toLocaleString()}</strong> full-time students privately renting — the addressable pool PBSA competes for.</p>`
+    : "";
+  const linksNote = d.links_loaded ? "" :
+    `<p class="hint pbsa-warn">Rail journey links aren't loaded yet (needs the free National Rail Open Data credentials — docs/MANUAL_TASKS.md). Showing walkable gateway stations only.</p>`;
+  document.getElementById("pbsa-summary").innerHTML =
+    `<div class="pbsa-chips">${chips}</div>${demand}${linksNote}`;
+}
+
+function pbsaFilteredFeeders() {
+  const d = pbsa.data;
+  if (!d || !Array.isArray(d.feeders)) return [];
+  return d.feeders.filter(f =>
+    (f.minutes == null || f.minutes <= pbsa.maxMin) &&
+    (f.trains_day == null || f.trains_day >= pbsa.minTrains))
+    .slice(0, 60);
+}
+
+function pbsaRender() {
+  const d = pbsa.data;
+  if (!d) return;
+  const host = document.getElementById("pbsa-feeders");
+  const gws = d.gateways || [];
+  const feeders = pbsaFilteredFeeders();
+  let html = "";
+  if (gws.length) {
+    html += `<div class="pbsa-sec">Gateway stations (walkable)</div>` +
+      gws.slice(0, 8).map(g =>
+        `<button type="button" class="pbsa-row" data-lng="${g.lng}" data-lat="${g.lat}">
+           <span class="pbsa-row-name">${g.name}</span>
+           <span class="pbsa-row-meta">${g.walk_m} m walk</span></button>`).join("");
+  } else {
+    html += `<p class="hint">No stations within walking distance of the campus.</p>`;
+  }
+  if (d.links_loaded) {
+    html += `<div class="pbsa-sec">Feeder stations (direct train in)</div>`;
+    html += feeders.length ? feeders.map(f => {
+      const band = pbsaBand(f.minutes);
+      return `<button type="button" class="pbsa-row" data-lng="${f.lng}" data-lat="${f.lat}">
+        <span class="pbsa-dot" style="background:${band.color}"></span>
+        <span class="pbsa-row-name">${f.name}</span>
+        <span class="pbsa-row-meta">${f.minutes != null ? Math.round(f.minutes) + " min" : "—"} · ${f.trains_day ?? "?"}/day</span>
+      </button>`;
+    }).join("") : `<p class="hint">No feeder stations pass the current criteria — loosen them above.</p>`;
+  }
+  host.innerHTML = html;
+  host.querySelectorAll(".pbsa-row").forEach(btn =>
+    btn.addEventListener("click", () =>
+      map.flyTo({ center: [parseFloat(btn.dataset.lng), parseFloat(btn.dataset.lat)], zoom: 13, duration: 700 })));
+  pbsaDrawViz(gws, feeders);
+}
+
+// --- Map visualisation: campus halo, gateway rings, feeder dots + arcs -----
+function pbsaDrawViz(gws, feeders) {
+  const d = pbsa.data;
+  if (!d || !d.university) return;
+  const uni = d.university;
+  const fc = (features) => ({ type: "FeatureCollection", features });
+  const pt = (lng, lat, props) => ({ type: "Feature", properties: props || {},
+    geometry: { type: "Point", coordinates: [lng, lat] } });
+
+  const campus = fc([pt(uni.lng, uni.lat, { name: uni.name })]);
+  const gwFc = fc(gws.map(g => pt(g.lng, g.lat, { name: g.name, walk_m: g.walk_m })));
+  const fdFc = fc(feeders.map(f => pt(f.lng, f.lat,
+    { name: f.name, minutes: f.minutes, trains: f.trains_day,
+      color: pbsaBand(f.minutes).color })));
+  const arcFc = fc(feeders.map(f => ({
+    type: "Feature",
+    properties: { color: pbsaBand(f.minutes).color,
+                  w: Math.min(3, 0.6 + Math.sqrt(f.trains_day || 1) / 5) },
+    geometry: { type: "LineString", coordinates: [[f.lng, f.lat], [uni.lng, uni.lat]] },
+  })));
+
+  const ensure = (id, def) => {
+    if (map.getSource(id)) { map.getSource(id).setData(def.data); return; }
+    map.addSource(id, { type: "geojson", data: def.data });
+    def.layers.forEach(l => map.addLayer(l));
+  };
+  ensure("pbsa-arcs", { data: arcFc, layers: [{
+    id: "pbsa-arcs-line", type: "line", source: "pbsa-arcs",
+    layout: { "line-cap": "round" },
+    paint: { "line-color": ["get", "color"], "line-width": ["get", "w"],
+             "line-opacity": 0.55 } }] });
+  ensure("pbsa-feeder-pts", { data: fdFc, layers: [{
+    id: "pbsa-feeder-dot", type: "circle", source: "pbsa-feeder-pts",
+    paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 4, 12, 7],
+             "circle-color": ["get", "color"],
+             "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.2 } }] });
+  ensure("pbsa-gateways", { data: gwFc, layers: [{
+    id: "pbsa-gateway-ring", type: "circle", source: "pbsa-gateways",
+    paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 7, 12, 12],
+             "circle-color": "rgba(0,0,0,0)",
+             "circle-stroke-color": "#0ca678", "circle-stroke-width": 3 } }] });
+  ensure("pbsa-campus", { data: campus, layers: [{
+    id: "pbsa-campus-halo", type: "circle", source: "pbsa-campus",
+    paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 10, 12, 18],
+             "circle-color": "rgba(112,72,232,0.25)",
+             "circle-stroke-color": "#7048e8", "circle-stroke-width": 3 } }] });
+
+  if (!map.getLayer("pbsa-feeder-tip-wired")) {
+    const pop = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
+    map.on("mouseenter", "pbsa-feeder-dot", (e) => {
+      const p = e.features[0].properties;
+      map.getCanvas().style.cursor = "pointer";
+      pop.setLngLat(e.lngLat)
+        .setHTML(`<strong>${p.name}</strong> · ${p.minutes != null ? Math.round(p.minutes) + " min" : ""} · ${p.trains ?? "?"} trains/day`)
+        .addTo(map);
+    });
+    map.on("mouseleave", "pbsa-feeder-dot", () => { map.getCanvas().style.cursor = ""; pop.remove(); });
+    // Sentinel so the handlers wire once (layer never actually added).
+    map.addLayer({ id: "pbsa-feeder-tip-wired", type: "background",
+                   layout: { visibility: "none" }, paint: {} });
+  }
+}
+
+function pbsaClearViz() {
+  for (const id of ["pbsa-arcs-line", "pbsa-feeder-dot", "pbsa-gateway-ring", "pbsa-campus-halo"])
+    if (map.getLayer(id)) map.removeLayer(id);
+  for (const id of ["pbsa-arcs", "pbsa-feeder-pts", "pbsa-gateways", "pbsa-campus"])
+    if (map.getSource(id)) map.removeSource(id);
+}
+
 // ---- Boot -----------------------------------------------------------------
 
 // Reflect the default theme onto <body> immediately so the UI starts in the
@@ -7721,6 +7994,7 @@ wireImdToggle();          // IMD choropleth is a context layer, OFF by default
 wireSideBoxes();          // minimiseable left boxes (persisted per box)
 wireCollapsibleBlocks();  // secondary blocks (define-an-area) ship collapsed
 wireModeSwitch();         // Explore / Site-sift mode switch
+wirePbsaBox();            // PBSA sift (university rail access, box 3)
 
 map.on("load", async () => {
   try {

@@ -1,0 +1,83 @@
+name: Load rail station links into Supabase
+
+# Parses the National Rail DTD/CIF timetable into direct station-to-station
+# links (median scheduled minutes + weekday direct trains) and loads them into
+# public.station_links — the PBSA rail sift's routing data. Also refreshes
+# data/raw/station_connectivity.csv as a build artifact.
+#
+# Requires secrets:
+#   NR_EMAIL / NR_PASSWORD — a (free) National Rail Open Data account from
+#     https://opendata.nationalrail.co.uk (subscribe to the Timetable feed).
+#   SUPABASE_URL / SUPABASE_SERVICE_KEY — as the other loaders.
+# Re-run weekly-ish: the timetable is a rolling snapshot.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download the National Rail timetable (DTD/CIF)
+        env:
+          NR_EMAIL: ${{ secrets.NR_EMAIL }}
+          NR_PASSWORD: ${{ secrets.NR_PASSWORD }}
+        run: |
+          set -u
+          if [ -z "${NR_EMAIL:-}" ] || [ -z "${NR_PASSWORD:-}" ]; then
+            echo "::error::NR_EMAIL / NR_PASSWORD secrets not set. Register at"
+            echo "::error::https://opendata.nationalrail.co.uk (free), subscribe to the"
+            echo "::error::Timetable feed, then add both as repository secrets."
+            exit 1
+          fi
+          mkdir -p data/raw
+          echo "Authenticating with National Rail Open Data ..."
+          TOKEN=$(curl -fsS -X POST "https://opendata.nationalrail.co.uk/authenticate" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "username=${NR_EMAIL}" \
+            --data-urlencode "password=${NR_PASSWORD}" \
+            | python3 -c "import sys, json; print(json.load(sys.stdin)['token'])")
+          if [ -z "$TOKEN" ]; then
+            echo "::error::authentication failed — check the NR_EMAIL/NR_PASSWORD secrets"
+            exit 1
+          fi
+          echo "Downloading the timetable zip (~100 MB) ..."
+          curl -fSL -o data/raw/rail_timetable.zip \
+            -H "X-Auth-Token: ${TOKEN}" \
+            "https://opendata.nationalrail.co.uk/api/staticfeeds/3.0/timetable"
+          ls -lh data/raw/rail_timetable.zip
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Parse CIF into connectivity + station links
+        run: python pipeline/build_connectivity_cif.py
+
+      - name: Upload connectivity CSVs as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: station_connectivity_and_links
+          path: |
+            data/raw/station_connectivity.csv
+            data/raw/station_links.csv
+          if-no-files-found: error
+
+      - name: Load station_links into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          python supabase/loaders/load_station_links.py

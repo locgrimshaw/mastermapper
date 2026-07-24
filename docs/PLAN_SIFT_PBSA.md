@@ -1,242 +1,296 @@
-# Plan · PBSA (purpose-built student accommodation) site-finding sift
+# Plan · PBSA (purpose-built student accommodation) site-finding sift — v2
 
 A sift tool for student-housing locations, built to the same architecture as
 the NPPF station funnel in `web/src/app.js` (`SIFT_STEPS` / `enterSiftMode` /
 `computeViability` over precomputed `public.station_assessments`): precomputed
-per-candidate rows loaded once from Supabase, a sequential wizard of hard gates
-then weighted scored axes recomputed instantly client-side, live shortlist
-table, localStorage persistence, CSV export, shortlist tray / compare /
-printable report reuse. Sits beside the station and data-centre sifts behind a
-shared tool picker (see §6; the picker/refactor is specified once in
-`PLAN_SIFT_DATACENTRE.md` §6 and shared).
+per-candidate rows loaded once from Supabase, hard gates then weighted scored
+axes recomputed instantly client-side, shortlist tray / compare / CSV /
+printable report reuse.
+
+**What changed since v1.** The data this plan treated as hypothetical is now
+live, and it changes the shape of the tool:
+
+- **HESA DT051 2024/25 per-provider stats are loaded onto the `uni_campus`
+  points in `public.map_features`**: `students_total`, `students_fulltime`,
+  `students_intl` + `intl_pct`, and — decisively — the **term-time
+  accommodation mix** from Table 57: `acc_provider_halls`,
+  `acc_private_halls`, `acc_parental_home`, `acc_own_residence`,
+  `acc_other_rented`, with derived `pbsa_pct` (private-halls share of FT),
+  `uni_halls_pct`, `rented_pct`, `home_pct` (see
+  `pipeline/build_datasets.py` and the campus popup in `web/src/app.js`).
+  Unmet PBSA demand is now **measurable per university** — `students_fulltime
+  × rented_pct` = students currently housed in HMOs/other rented and
+  addressable by PBSA; `pbsa_pct` = existing PBSA penetration — instead of
+  proxied from Census student shares. Real spread: UCL 44.6k FT, 51.9%
+  international, `pbsa_pct` 7.1, `rented_pct` 40.6 (≈ 18k HMO-housed students,
+  huge unmet demand); Manchester `pbsa_pct` 23.6 (already saturated). The
+  Demand and Supply-balance axes are reworked around these measured
+  quantities; Census TS062 keeps a role for *spatial* demand distribution only.
+- Also live: **PTAL 2023** grid (`ptal`, grade + AI), **LA rents June 2026**
+  (`la_rents`: `rental_price_mean` + `annual_rent_change_pct` on LAD
+  polygons), **`article4`** areas, **`uni_campus_site`** (OSM campus polygons)
+  + **`uni_building`** footprints, **`lad_boundary`**; **`la_property`**
+  (council-owned CCOD postcode points) loading.
+- **New headline feature: a rail-based sift mode** — pick a university, see
+  which stations feed it by direct train, rank them. This is now **the MVP,
+  built first**; the LSOA funnel of v1 becomes phase 2 (§2, mode B).
 
 ## 1. Purpose & user
 
-Find well-connected neighbourhoods where purpose-built student accommodation
-would let quickly and consent plausibly — deliberately including places
-*outside* the saturated core university districts (the roadmap's stated goal,
-especially for London). The user is a PBSA developer/operator or investor
-analyst screening nationally: they want to move from "every university city"
-to "a dozen neighbourhoods worth agent calls and a planning pre-app", with the
-demand, saturation, policy and rent assumptions all visible and adjustable —
-because operators disagree precisely on those assumptions (e.g. whether
-Article 4 areas are an opportunity or a warning).
+Find well-connected locations where purpose-built student accommodation would
+let quickly and consent plausibly — deliberately including places *outside*
+the saturated core university districts (the roadmap's stated goal, especially
+for London). The user is a PBSA developer/operator or investor analyst: they
+want to move from "every university city" to "a dozen sites worth agent calls
+and a planning pre-app", with the demand, saturation, policy and rent
+assumptions visible and adjustable — because operators disagree precisely on
+those assumptions (e.g. whether Article 4 areas are an opportunity or a
+warning). New in v2: the primary question becomes *"for this specific
+university, with this measured unmet demand, which commuter stations are the
+underpriced supply frontier?"* — a question the HESA accommodation mix and the
+rail timetable can now answer together.
 
-## 2. Candidate universe
+## 2. Candidate universe — two modes
 
-**Recommended: LSOAs (2021), filtered to university catchments.** One row per
-LSOA whose population-weighted centroid lies within 8 km of a university
-campus with ≥ 2,000 full-time students — roughly 8–15k rows in England, the
-same order as the station sift's paged load.
+### Mode A (MVP): feeder stations, per university
 
-Rationale:
+One university at a time; the candidate universe is **stations with a direct
+rail service into that university's gateway stations**. Rationale:
 
-- **PBSA demand is neighbourhood-scale**, and nearly every input is LSOA-native
-  or trivially joined: Census student % (TS062), IMD, PTAL (area-weighted from
-  the 100 m grid), Article 4 polygons, LA rents (LA→LSOA lookup). No invented
-  geography, and ONS lookups give the LA/region join spine for free.
-- **The app already has LSOA plumbing**: the LSOA/IMD PMTiles layer means
-  survivors can be highlighted by `setFilter`/feature-state on an existing
-  vector layer — the direct analogue of `highlightSiftSurvivors` on
-  `station-dot` — with zero new geometry shipping.
-- **Why not stations**, despite the existing station-centric plumbing: student
-  travel to campus is dominated by walking, cycling and buses, not heavy rail;
-  a station-centred universe would silently exclude most real PBSA locations
-  (and most of London's, where the tube/bus network is what PTAL measures).
-  Stations re-enter as a *connectivity input* (distance to nearest station),
-  not the ranked unit.
-- **Why not a hybrid** (stations + LSOAs): two candidate types in one funnel
-  breaks the "one row = one candidate" model the whole sift UI assumes.
+- **The insight is university-specific.** A UCL-shaped opportunity (7%
+  penetration, 40% in HMOs) and a Manchester-shaped one (24% penetration) need
+  opposite strategies; a single national ranking blurs exactly the measured
+  distinction DT051 gives us.
+- **Rail is the right frame for the out-of-core play.** The unmet-demand
+  student priced out of Zone 1/2 HMOs trades rent for a direct train; "one
+  seat, ≤ 45 min, turn-up-and-go frequency" is the actual product spec of
+  commuter PBSA. Journey time from a real timetable beats any straight-line
+  or PTAL proxy for this question.
+- **It reuses the heaviest plumbing we have**: the CIF parser
+  (`pipeline/build_connectivity_cif.py`), the stations layer, and
+  `station_assessments` (developable land, IMD, usage) for feeder-end
+  enrichment.
 
-The campus-catchment filter is a fixed precompute screen (not a user gate) to
-cap payload; the *adjustable* travel gate in §3 operates within it.
+### Mode B (phase 2): LSOA funnel
 
-## 3. Funnel design
+The v1 national LSOA screen survives as phase 2, with its Demand and
+Supply-balance axes rebuilt on measured HESA quantities (§3B). It answers the
+complementary question — "rank all neighbourhoods near any university" — and
+still needs the Census TS062 ingest (not yet done) for spatial distribution.
+Two candidate types never share one funnel ("one row = one candidate" holds);
+they are two tools behind the shared sift picker specified in
+`PLAN_SIFT_DATACENTRE.md` §6.
 
-### Gates (eliminate)
+## 3A. Mode A criteria (feeder-station sift)
 
-| # | Stage | What it checks | Default threshold (rationale) | Dataset(s) | User adjusts |
-|---|-------|----------------|-------------------------------|------------|--------------|
-| 1 | Demand anchor | Distance from LSOA centroid to nearest campus above a size floor; total FT students reachable | ≤ 4 km to a campus with ≥ 5,000 FT students. 4 km ≈ a 20-min cycle / short bus hop, the practical edge of the student letting market; 5,000 students ≈ the floor for institutional PBSA demand in one settlement | `uni_campus` (HESA headcount in props) | Max distance (1–8 km; v2 minutes when isochrones land); min campus FT students (1,000–20,000); alt. criterion "≥ N students within reach" (default 10,000 within 4 km) |
-| 2 | Connectivity | London: PTAL band of the LSOA. Elsewhere: distance to nearest rail/tram station OR within 2 km of campus (walkable trumps transit) | London: PTAL ≥ 3 (boroughs expect 4+ for car-free high-density; 3 keeps the outer-London opportunity belt in play for scoring). Elsewhere: station ≤ 1,600 m (the app's standard 800 m–1.6 km walk band) or campus ≤ 2 km | `ptal`; existing stations GeoJSON | Min PTAL band (0–6b); non-London max station distance; "walkable-to-campus exemption" toggle (default on — mirrors the NPPF in-settlement exemption pattern) |
-| 3 | Saturation cap | Existing full-time-student share of the LSOA's population (Census 2021 TS062) | Exclude > 50% student share. Above ~50% an area is a saturated core: peak competition from HMOs and existing PBSA, and 'studentification' planning resistance. Kept high so the *score* (not the gate) does the steering | census student % (LSOA PMTiles join / `map_features`) | Max student % (10–100, 100 = gate off) |
-| 4 | Market floor | LA-level average private rent (ONS PIPR) | ≥ £700/month LA average. Below that, PBSA rents (~£160+/wk ensuite outside London) cannot compete with cheap HMO stock, whatever the demand | `la_rents` | Min LA rent £/month; optional min year-on-year rent growth % (default off) |
+Selection: university typeahead over `uni_campus` (HESA name, UKPRN). The
+chosen university's **demand card** shows the measured quantities that frame
+everything downstream: FT students, `intl_pct`, the full accommodation mix,
+`pbsa_pct`, and the headline `students_fulltime × rented_pct / 100` =
+**addressable HMO-housed students**.
 
-### Scored axes (final step "5 · Score & rank" — 0–100 each, weighted, adjustable)
+| # | Criterion | What it checks | Default (rationale) | Dataset(s) | User adjusts |
+|---|-----------|----------------|---------------------|------------|--------------|
+| 1 | Gateway walk | Stations within walk distance of the university HQ point or its associated OSM campus polygons (within 3 km of the point) | 1,500 m — upper bound of an acceptable daily campus walk; polygons catch multi-site campuses the point misses | `uni_campus`, `uni_campus_site`, stations | Max gateway walk 500–2,500 m |
+| 2 | Journey time | Median scheduled direct journey time feeder → any gateway | ≤ 45 min — the practical edge of daily student commuting; beyond it, term-time attendance patterns break | `station_links` | 15–90 min |
+| 3 | Service frequency | Weekday direct trains/day feeder → gateways | ≥ 10 — below roughly two trains/hour across the day, a missed train costs a lecture | `station_links` | 2–60 trains/day |
+
+Direct services only at MVP: one-seat journeys are what the timetable gives us
+cheaply and what students actually tolerate; interchange routing is a later
+refinement, flagged honestly in the about-panel.
+
+## 3B. Mode B funnel (phase 2, revised)
+
+Gates 1–4 of v1 stand structurally (demand anchor ≤ 4 km / ≥ 5,000 FT;
+connectivity PTAL ≥ 3 or station ≤ 1,600 m; saturation cap; market floor
+`rental_price_mean` ≥ £700/month from `la_rents`), but the scored axes change
+where measurement replaced proxy:
 
 | Axis | Weight | 0–100 scoring (piecewise-linear bands) | Dataset(s) |
 |------|--------|----------------------------------------|------------|
-| Demand | 30 | Campus proximity: ≤ 1 km = 100, 2 km = 85, 4 km = 60, 6 km = 35, ≥ 8 km = 0; blended 60/40 with reachable-students volume: ≥ 30k FT students within 4 km = 100, 10k = 60, 2k = 20. v2: international-student share and enrolment-growth uplifts | `uni_campus` |
-| Connectivity | 20 | London: PTAL 3 = 40, 4 = 65, 5 = 80, 6a = 90, 6b = 100. Elsewhere: station ≤ 400 m = 100, 800 m = 80, 1.6 km = 50, > 3 km = 10; v2 replaced by bus-frequency/JTS travel-time bands | `ptal`, stations; v2 BODS/JTS |
-| Market | 20 | LA rent: £700/m = 30, £900 = 55, £1,200 = 80, ≥ £1,500 = 100 (proxy for achievable PBSA rents; band edges editable as assumptions). v2: +10 capped growth bonus (≥ 6% y/y) | `la_rents` |
-| Supply balance | 15 | Peaks at *proven but unsaturated*: student share 5–20% = 100, fading to 40 at 0% (no proven demand) and to 0 at 50% (saturated). +15 capped bonus if a C3→C4 Article 4 direction covers the LSOA — HMO restriction diverts demand into PBSA and signals existing pressure. v2: minus pipeline-beds penalty | census student %, `article4`; v2 PBSA pipeline (London Datahub) |
-| Site supply | 15 | Brownfield-register land intersecting the LSOA: ≥ 2 ha = 100, 0.5 ha = 60, any site = 40, none = 0 — a proxy for "is there actually a plot". Softened by IMD living-environment context (v2) | existing brownfield layer |
+| Demand (**reworked**) | 30 | Reachable **unmet demand**: Σ over campuses ≤ 4 km of `students_fulltime × rented_pct/100`, distance-decayed (≤ 1 km × 1.0, 4 km × 0.4). ≥ 15k addressable students = 100, 5k = 60, 1k = 20. International share ≥ 40% adds +10 capped (intl students disproportionately choose PBSA) | `uni_campus` (HESA DT051) |
+| Connectivity | 20 | Unchanged: London PTAL 3 = 40 … 6b = 100; elsewhere station ≤ 400 m = 100, 1.6 km = 50 | `ptal`, stations |
+| Market | 20 | `rental_price_mean`: £700/m = 30, £900 = 55, £1,200 = 80, ≥ £1,500 = 100; +10 capped if `annual_rent_change_pct` ≥ 6 | `la_rents` |
+| Supply balance (**reworked**) | 15 | **Measured penetration**: weighted-mean `pbsa_pct` of reachable campuses — ≤ 8% = 100, 15% = 60, ≥ 25% = 0 (Manchester-grade saturation). Blended 60/40 with the v1 LSOA student-share curve (TS062, 5–20% = 100) for *where within the catchment*. Article 4 bonus ±15 unchanged | `uni_campus`, TS062, `article4` |
+| Site supply | 15 | Brownfield ≥ 2 ha = 100, 0.5 ha = 60, any = 40, none = 0 | brownfield layer |
 
-Article 4 direction-of-travel is deliberately a *bonus with an adjustable sign*
-(+15 default, settable to −15 for operators who read it as planning hostility)
-— the classic disputed assumption belongs in the controls, not the pipeline.
+TS062 remains the only spatial demand-distribution input — HESA numbers are
+per-provider, not per-neighbourhood — so the TS062 ingest stays on the phase-2
+critical path (§7).
 
-## 4. Scoring model
+## 4. Scoring model — ranking feeder stations (mode A)
 
-Identical shape to the DC sift and the app's weighted-domain plot report,
-extending the `computeViability` pattern (transparent client-side recompute,
-no DB round-trip):
+Same shape as `computeViability`: raw columns precomputed or fetched, all
+banding and weighting client-side, instant recompute, weights and breakpoints
+persisted via `mmStore` (`mastermapper:sift:pbsa:config`).
 
 ```
-composite = Σ (w_i × axisScore_i) / Σ w_i    over axes with non-null data
+feederScore = Σ (w_i × axis_i) / Σ w_i        over axes with non-null data
 ```
 
-- Default weights 30/20/20/15/15, slider-adjustable and persisted via
-  `mmStore` (`mastermapper:sift:pbsa:config`); band breakpoints exposed as
-  editable assumptions (advanced disclosure), like `VIABILITY_DEFAULTS`.
-- Renormalisation over non-null axes = graceful degradation (missing PTAL
-  outside London simply isn't an axis there — the non-London connectivity
-  variant fills in; a null column drops the axis).
-- Final-step filter `minComposite` (default 0, rank-only) plus rank-by:
-  composite | demand | market. RAG chip: ≥ 70 strong / 45–70 possible / < 45
-  weak.
-- England-only at launch (Census TS062, PTAL, PIPR are England datasets); the
-  country toggle is hidden for this tool. A Scotland pass needs SIMD/Scottish
-  Census equivalents — out of scope here.
-- Raw columns, never scores, are precomputed — all banding/weighting stays
-  client-side so every control recomputes instantly.
+| Axis | Weight | 0–100 formula (defaults; band edges editable) | Source |
+|------|--------|-----------------------------------------------|--------|
+| Journey time | 30 | Decay on `minutes`: ≤ 15 = 100, 25 = 80, 35 = 60, 45 = 40, 60 = 15, ≥ 75 = 0 | `station_links` |
+| Frequency | 15 | `trains_day`: ≥ 60 = 100, 30 = 75, 15 = 50, 10 = 40, 4 = 10, < 2 = 0 | `station_links` |
+| Rent differential | 20 | `(homeRent − feederRent) / homeRent` where rents are `rental_price_mean` of the feeder's LAD vs the university's home LAD: ≥ 30% cheaper = 100, 15% = 70, parity = 40, ≥ 10% dearer = 0. Cheaper is the whole commuter-PBSA thesis | `la_rents`, `lad_boundary` point-in-polygon |
+| Article 4 | 10 | No HMO Article 4 near the feeder station = 100, present = 0 — default reads absence as freedom to operate; **sign flippable** (some operators read Article 4 as demand diverted into PBSA), the same disputed-assumption slider as v1 | `article4` |
+| Saturation headroom | 10 | Student share near the feeder (TS062, phase 2 until ingested): ≤ 5% = 100, 15% = 60, ≥ 35% = 0 — greenfield student markets score high because the demand is imported by rail, not local | TS062 via LSOA feature-state |
+| Site supply | 15 | Reuse `station_assessments` where the feeder has a row: `developable_ha` ≥ 2 = 100, 0.5 = 60, any = 40, none/null = axis dropped | `station_assessments` |
+
+Renormalisation over non-null axes gives graceful degradation: at first ship
+only journey time + frequency may exist for some feeders and the ranking still
+works; each about-panel badges what is missing. RAG chip thresholds as v1
+(≥ 70 / 45–70 / < 45).
 
 ## 5. Precompute pipeline
 
-**Table** (no geometry — LSOA polygons already ship in the PMTiles layer;
-centroids stored for flyTo):
+### 5.1 Station links (build first — the MVP dependency)
+
+`pipeline/build_connectivity_cif.py` is being extended to emit
+**station-to-station direct service links** from the National Rail CIF
+timetable, alongside its existing per-station output:
+
+- **Output**: `data/raw/station_links.csv` — `crs_from, crs_to, minutes`
+  (median scheduled journey time over the sample weekday's direct services),
+  `trains_day` (weekday direct services).
+- **Credentials**: the timetable feed needs National Rail Open Data
+  credentials — a **user task** (§7). Workflow `load-rail-links.yml` runs the
+  build + load with secrets `NR_EMAIL` / `NR_PASSWORD`.
+- **Table**:
 
 ```sql
-create table public.pbsa_assessments (
-  lsoa             text primary key,      -- LSOA21CD
-  lsoa_name        text,
-  la_code          text,
-  la_name          text,
-  region           text,
-  in_london        boolean not null default false,
-  lng              double precision,      -- population-weighted centroid
-  lat              double precision,
-  -- demand
-  campus_id        text,                  -- map_features(uni_campus).source_id, nearest qualifying
-  campus_name      text,
-  campus_dist_m    integer,
-  campus_students  integer,               -- FT headcount of that campus
-  students_4km     integer,               -- Σ FT students of campuses ≤ 4 km
-  students_8km     integer,
-  -- people & policy
-  ft_student_pct   numeric,               -- Census 2021 TS062
-  imd_decile       integer,
-  article4_hmo     boolean,               -- any C3→C4 direction intersects
-  article4_pct     numeric,               -- area share covered
-  -- connectivity
-  ptal_band        text,                  -- London only (area-weighted mode of 100 m grid), else null
-  station_dist_m   integer,
-  -- market & supply
-  la_rent_month    numeric,               -- ONS PIPR average, joined by la_code
-  la_rent_yoy_pct  numeric,
-  brownfield_ha    numeric,               -- register sites intersecting the LSOA
-  pipeline_beds    integer,               -- v2: consented/pending PBSA beds (London Datahub)
-  updated_at       timestamptz not null default now()
+create table public.station_links (
+  crs_from   text not null,
+  crs_to     text not null,
+  minutes    integer not null,      -- median scheduled direct journey time
+  trains_day integer not null,      -- weekday direct services
+  primary key (crs_from, crs_to)
 );
+-- RLS public-read + anon select grant, per the 0022_map_features.sql convention
 ```
 
-RLS public-read + `anon` select grant, per the `0022_map_features.sql`
-convention.
+### 5.2 RPC `uni_rail_access`
 
-**Script** `pipeline/build_pbsa_assessments.py` + a migration adding
-`rebuild_pbsa_assessments(prefix text)` (batch by LSOA-code prefix, like
-`rebuild_station_assessments`):
+```sql
+create function public.uni_rail_access(p_ukprn text, p_gateway_m int default 1500)
+returns jsonb;
+```
 
-1. Universe: LSOA population-weighted centroids (ONS Open Geography CSV,
-   loaded once) within 8 km of any `uni_campus` with `props->>'ft_students'
-   ≥ 2000` — a KNN `<->` join with geography distance.
-2. Demand: nearest qualifying campus + `students_4km`/`students_8km` as sums
-   over a `ST_DWithin` join.
-3. `ft_student_pct`: Census TS062 CSV joined by LSOA code (pure attribute
-   join, done in Python like `build_lsoa_imd_points.py`).
-4. `ptal_band`: area-weighted modal band of `ptal` grid cells intersecting the
-   LSOA polygon (LSOA polygons loaded to a working table or read from the
-   boundary source used by `build_tiles.py`); null outside the PTAL extent.
-5. `article4_hmo`/`article4_pct`: `ST_Intersects` / area share against
-   `article4`, filtered to HMO-type directions where the props allow (badge
-   coverage-incomplete regardless).
-6. `station_dist_m`: KNN against the stations table. `brownfield_ha`:
-   intersection area with the existing brownfield layer. `la_rent_*`: attribute
-   join from `la_rents` by `la_code`.
+For one university, returns as JSON:
 
-**Cadence:** monthly pipeline run — rents monthly (ONS PIPR), Article 4 and
-brownfield on the quarterly planning.data.gov.uk sweep, Census/PTAL static.
-`updated_at` shown in the tool footer. Client load pages 1,000 rows at a time
-ordered by `students_4km desc`, exactly like `loadSiftData()`.
+- **Gateways**: stations within `p_gateway_m` of the HQ point **or of any
+  associated `uni_campus_site` polygon** (polygons matched by proximity —
+  within 3 km of the point; name/operator matching is a phase-2 refinement),
+  with walk distance each.
+- **Feeders**: every station with a `station_links` row into any gateway, with
+  `minutes` (min over gateways) and `trains_day` (sum over gateways), plus
+  coordinates for map placement.
+
+One RPC call per university selection; all filtering/ranking of the feeder
+list is then client-side per §4.
+
+### 5.3 `pbsa_assessments` (phase 2)
+
+The v1 LSOA table stands as specified (schema unchanged apart from the demand
+columns, which gain `addressable_students` and `campus_pbsa_pct` per §3B) and
+is built by `pipeline/build_pbsa_assessments.py` +
+`rebuild_pbsa_assessments(prefix)` batching, monthly cadence. Not on the MVP
+path.
+
+### 5.4 Feeder-row enrichment (the step after the visualiser)
+
+Once the mode-A visualiser works end-to-end, enrich each feeder row —
+client-side joins or a widened RPC, whichever profiles better:
+
+- **LA rent** + growth (`la_rents` via `lad_boundary` point-in-polygon);
+- **Article 4** presence near the station (`article4` intersects a 1 km buffer);
+- **IMD** and **station usage** (both already in `station_assessments`);
+- **developable land** near the station (ditto).
+
+This is what activates the four lower-weighted scoring axes of §4.
 
 ## 6. UI
 
-- **Tool picker & refactor**: as specified in `PLAN_SIFT_DATACENTRE.md` §6 —
-  Explore | Site sift mode switch, then a three-chip tool selector
-  (`Stations (NPPF)` · `Data centres` · `Student housing`), with the sift shell
-  (stepper, funnel counts, about-panels, table, tray, compare, CSV/report
-  export) parameterised by a `SIFT_TOOLS` definition and per-tool namespaced
-  persistence. This doc only specifies the PBSA tool definition.
-- **Steps**: the four gates + score step of §3, each with the standard
-  what/source/calc about-panel (sources: HESA, Census 2021 TS062, TfL PTAL,
-  ONS PIPR, planning.data.gov.uk Article 4 — with the coverage-incomplete
-  caveat surfaced in the Article 4 about-panel).
-- **Map**: survivors highlighted on the **existing LSOA PMTiles layer** via
-  filter/feature-state on LSOA code — the LSOA analogue of
-  `highlightSiftSurvivors`. Practical cap: apply the highlight to the top ~2k
-  survivors by composite (a huge `in`-list filter is slow); below the cap it is
-  exact. Optional choropleth-by-composite once feature-state is wired. Campus
-  points from `features_in_bbox('uni_campus', …)` drawn while the tool is
-  active, so the demand anchors are visible context.
-- **Table columns**: LSOA name + LA, nearest campus (name, km), student %,
-  PTAL/station, LA rent, composite RAG — hover titles carrying the
-  full-precision values, mirroring the station table.
-- **Click-to-profile**: fly to the LSOA, show a profile card (campus list with
-  headcounts, student %, rents, Article 4 status, brownfield sites listed), and
-  offer the existing **plot report** run over the LSOA polygon (fetched from
-  the boundary source) for the full context deep-dive.
-- **Shortlist / compare / export**: star-pin keyed on LSOA code, per-tool
-  shortlist store, existing CSV exporters + printable report with PBSA
-  `exportCols`.
+- **A new minimiseable side-box, "PBSA sift", directly below the "Rail &
+  stations" box** (same collapse/expand pattern — see the side-box block in
+  `web/src/app.js`). Not part of the sift-picker shell at MVP: mode A is a
+  focused single-university tool and ships faster standalone; it folds into
+  the shared picker when mode B lands.
+- **Flow**: university typeahead → demand summary card (HESA numbers incl.
+  the full accommodation mix, `pbsa_pct`, addressable-students headline) →
+  ranked feeder list, filtered live by the §3A criteria sliders (max rail
+  minutes 45, min trains/day 10, max gateway walk 1,500 m).
+- **Map visualisation** while a university is selected: campus polygons
+  highlighted (`uni_campus_site`), gateway stations ringed, feeder stations
+  colour-banded by journey time (e.g. ≤ 20 / ≤ 35 / ≤ 45 / > 45 min), and
+  arcs feeder → campus for the visible list. Clicking a feeder flies to it and
+  opens its enrichment card (§5.4) with the existing plot-report deep-dive
+  offered around the station.
+- **Table columns**: station, minutes, trains/day, LA rent (Δ vs home LA),
+  Article 4 flag, feeder score RAG — hover titles with full precision, CSV
+  export via the existing exporters, shortlist star-pins keyed on CRS.
+- **Graceful degradation**: until `station_links` is populated (NR credentials
+  pending) the box still works — gateways plus nearby stations ranked by
+  straight-line distance, with an honest inline note ("journey times appear
+  once the National Rail timetable is loaded"). No fake minutes.
+- Mode B UI: as v1 §6 (LSOA feature-state highlight, tool picker), phase 2.
 
 ## 7. Data gaps & phasing
 
-**MVP** (buildable with first-wave ingestion — `uni_campus`, `ptal`,
-`la_rents`, `article4`, `lpa_boundary` — plus in-app layers: LSOA/IMD PMTiles,
-stations, brownfield; plus two attribute CSV joins added by this pipeline:
-Census TS062 and HESA headcounts, both single-file open downloads):
+**MVP (mode A)** — build order:
 
-- All four gates live (gate 2 uses the PTAL/station dual rule; PTAL missing
-  outside London is by-design, not degradation).
-- All five axes live in first-order form (straight-line distances, LA-level
-  rents, brownfield presence). Composite fully functional.
+1. `station_links.csv` emitter in `build_connectivity_cif.py` + table + load
+   workflow. **The one blocking user task: National Rail Open Data
+   credentials** (`NR_EMAIL`/`NR_PASSWORD` secrets for `load-rail-links.yml`).
+   Everything else on the MVP path is already ingested.
+2. `uni_rail_access` RPC.
+3. "PBSA sift" box: typeahead, demand card, feeder list + map visualiser
+   (degraded distance-only mode ships even before step 1 completes).
+4. Feeder enrichment (§5.4) → activates the full §4 scoring.
 
-**v2**: campus isochrones (OpenTripPlanner/r5 over BODS GTFS) replacing
-straight-line bands in gate 1 and the demand axis; bus-frequency / DfT JTS
-connectivity outside London; HESA enrolment growth + international share;
-PBSA pipeline beds (London Datahub; national is commercial-only — flag);
-HMO licence density (per-council registers, target cities only); LSOA-level
-rent modelling (VOA room-level stats) replacing the LA average.
+**Phase 2 (mode B)**: Census TS062 ingest (route via LSOA feature-state, as
+the IMD layer), `pbsa_assessments` pipeline, sift-picker integration, campus
+name/operator matching for `uni_campus_site` association, interchange-aware
+journey times.
 
-**Degradation rule** (same as the DC sift): null gate column → row passes,
-null axis column → axis dropped from the weighted sum and the about-panel
-badges the gap. Specifically: missing `article4` rows mean "no bonus", never
-"penalty"; missing `ptal_band` outside its extent switches to the non-London
-rule; missing `la_rent_month` passes gate 4 and drops the Market axis.
+**Further data worth adding for PBSA** (in rough value order):
+
+- **HESA Table 57 time series** — accommodation mix by year; the 2024/25
+  download route already exists, so trend (`pbsa_pct` rising/falling per
+  provider) is a repeat-run away. Turns saturation from a snapshot into a
+  direction.
+- **Census TS062 student share** — still to ingest; the spatial
+  demand-distribution spine for mode B and the mode-A saturation axis.
+- **ONS/VOA room-level rents** — summary stats for shared-house rents,
+  replacing the LA mean with the rent PBSA actually competes against.
+- **PBSA planning applications** (London Datahub) — pipeline beds at the
+  feeder end; national coverage is commercial-only, flag as gap.
+- **University expansion plans** (qualitative) — enrolment-growth intent per
+  provider; annotation, not a scored axis.
+- **NR timetable-derived journey times into major employment centres** — the
+  same `station_links` data cut towards CBDs, for the young-professional /
+  co-living overlap at feeder stations (de-risks single-market exposure).
+
+**Degradation rule** (as v1): null criterion column → row passes; null axis →
+axis dropped from the weighted sum and badged. Missing `station_links` → the
+distance-only mode with the honest note; missing `article4` → "no signal",
+never a penalty; missing `station_assessments` row → site-supply axis dropped.
 
 ## 8. Open questions for the product owner
 
-1. Article 4 default sign: is HMO restriction a +15 opportunity (proposed
-   default) or a planning-hostility penalty? Both are one slider, but the
+1. Article 4 default sign at the feeder end: absence = freedom to operate
+   (proposed default) or presence = diverted demand? One slider, but the
    default frames the tool.
-2. Should the demand gate count *all* campuses or exclude small specialist
-   providers (conservatoires etc.) below the size floor even as bonus demand?
-3. London vs regions: one national ranking (proposed, with PTAL/non-PTAL
-   variants) or a London/rest-of-England split like England/Scotland in the
-   station sift?
-4. Is LA-level rent acceptable for MVP ranking, or is the VOA room-rent join
-   a launch requirement?
-5. Saturation default: is the 50% cap too permissive — should the gate default
-   to 35%?
-6. Do we need a beds-capacity estimate per LSOA (brownfield ha × plot ratio)
-   in the table, mirroring dwelling yield, or is that false precision at MVP?
+2. Gateway association: is proximity-only campus-polygon matching (within
+   3 km) acceptable for MVP, or do multi-city providers (e.g. UAL) need the
+   name/operator matching pulled forward?
+3. Direct services only: acceptable MVP simplification, or is one-change
+   routing (e.g. via a London terminal) needed before the tool is credible
+   for London universities?
+4. Should the demand card lead on `rented_pct × FT` (addressable HMO
+   students, proposed) or on `pbsa_pct` (penetration)? Same data, different
+   sales pitch.
+5. Rent differential vs the *home LA*: right comparator, or should it be the
+   cheapest LAD already hosting the university's students?
+6. Does mode B still justify its pipeline once mode A ships, or should
+   phase 2 instead deepen mode A (interchanges, employment-centre overlap)?
