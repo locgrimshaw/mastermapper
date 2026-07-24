@@ -41,13 +41,12 @@ the layer lights up on the map.
 3. **Repo variable** `TEC_SRC` = that link. (If the link looks unstable,
    download the CSV instead → drop-in file named **`tec-register.csv`**.)
 
-## 3. NESO Grid Supply Point boundaries
+## 3. NESO Grid Supply Point boundaries — ✅ DONE, no action needed
 
-1. Go to <https://www.neso.energy/data-portal/gis-boundaries-gb-grid-supply-points>.
-2. Copy the download link of the **GeoJSON** version (there's usually GeoJSON
-   alongside the shapefile).
-3. **Repo variable** `GSP_SRC` = that link (or drop-in file named
-   **`gsp-boundaries.geojson`**).
+The Feb 2026 "GSP regions" zip release is now the pipeline's built-in default
+(the builder unzips it and picks the WGS84 GeoJSON automatically). Only when
+NESO publishes a NEWER release: copy its zip link from
+<https://www.neso.energy/data-portal> and set repo variable `GSP_SRC` to it.
 
 ## 4. TfL PTAL grid → London transport accessibility
 

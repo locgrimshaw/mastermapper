@@ -55,9 +55,9 @@ REGISTRY (dataset -> default source; all downloads land in data/raw/):
                  power=line LineStrings -> power_line (props voltage/operator/
                  cables + parsed props.kv); power=substation points/polygons ->
                  power_substation. power=minor_line is skipped.
-    gsp_boundary NESO "GIS Boundaries for GB Grid Supply Points" GeoJSON. The
-                 default URL is a guess at the current resource hash; a 4xx is
-                 a skip-with-warning — set GSP_SRC from the NESO Data Portal.
+    gsp_boundary NESO "GSP regions" zip (Feb 2026 release) — holds the same
+                 regions GeoJSON in BNG and WGS84; _maybe_unzip_geo picks the
+                 WGS84 member. GSP_SRC overrides for future releases.
     tec_register NO default (set TEC_SRC to a NESO TEC Register CSV export).
                  No geometry of its own: rows are geocoded by fuzzy-joining
                  the connection-site name against power_substation names built
@@ -124,10 +124,12 @@ PLANNING_DATASETS = {
 
 UNI_CAMPUS_URL = ("https://learning-provider.data.ac.uk/data/"
                   "learning-providers-plus.csv")
+# NESO "GSP regions" release (Feb 2026) — a zip holding the regions GeoJSON in
+# both British National Grid and WGS84; _maybe_unzip_geo picks the WGS84 one.
 GSP_DEFAULT_URL = ("https://api.neso.energy/dataset/"
-                   "2810092e-d4b2-472f-b955-d8bea01f9ec9/resource/"
-                   "d95e8c1b-9cb1-41a2-b18c-c378b74cbbc2/download/"
-                   "gis-boundaries-for-gb-grid-supply-points.geojson")
+                   "2810092e-d4b2-472f-b955-d8bea01f9ec0/resource/"
+                   "5dfab3dd-f192-40ab-b97f-b365a594293c/download/"
+                   "gsp_regions_20260209.zip")
 LAD_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
                    "services/Local_Authority_Districts_December_2024_Boundaries"
                    "_UK_BGC/FeatureServer/0/query?where=1%3D1&outFields=*"
@@ -808,10 +810,53 @@ def build_power_group():
     return out
 
 
+def _maybe_unzip_geo(path, key):
+    """If `path` is actually a ZIP (checked by magic bytes, not extension —
+    downloads are cached under a fixed name), extract it and return the best
+    vector member: prefer a GeoJSON whose name suggests WGS84/4326 (NESO ships
+    the same layer in British National Grid AND WGS84), else any member whose
+    first coordinate looks like lon/lat (|x| <= 360), else the first vector
+    file. Non-zip paths pass straight through."""
+    import zipfile
+    try:
+        with open(path, "rb") as fh:
+            if fh.read(4) != b"PK\x03\x04":
+                return path
+    except OSError:
+        return path
+    dest = RAW / f"{key}_unzipped"
+    dest.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path) as zf:
+        zf.extractall(dest)
+    vecs = sorted([f for f in dest.rglob("*")
+                   if f.suffix.lower() in (".geojson", ".json", ".gpkg", ".shp")])
+    if not vecs:
+        _warn(key, f"zip source {path.name} holds no vector file")
+        return None
+    named = [f for f in vecs if any(t in f.name.lower()
+                                    for t in ("wgs84", "wgs_84", "4326"))]
+    if named:
+        print(f"  [{key}] zip source: using WGS84 member {named[0].name}")
+        return named[0]
+    for f in vecs:
+        if f.suffix.lower() in (".geojson", ".json"):
+            # Cheap probe: the first coordinate pair's magnitude tells BNG
+            # (six-figure metres) apart from lon/lat without a full parse.
+            head = f.read_text(encoding="utf-8-sig", errors="ignore")[:100000]
+            m = re.search(r"\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", head)
+            if m and abs(float(m.group(1))) <= 360 and abs(float(m.group(2))) <= 360:
+                print(f"  [{key}] zip source: {f.name} looks like lon/lat")
+                return f
+    print(f"  [{key}] zip source: falling back to {vecs[0].name}")
+    return vecs[0]
+
+
 def build_gsp_boundary():
     key = "gsp_boundary"
     path, how = _resolve_source(key, ["GSP_BOUNDARY_SRC", "GSP_SRC"],
                                 GSP_DEFAULT_URL, "gsp-boundaries.geojson")
+    if path is not None:
+        path = _maybe_unzip_geo(path, key)
     if path is None:
         _warn(key, f"{how} — the NESO resource hash changes between releases."
                    " Set GSP_SRC to the current 'GIS Boundaries for GB Grid"
@@ -1067,6 +1112,8 @@ def build_water_availability():
     key = "water_availability"
     path, how = _resolve_source(key, ["WATER_AVAILABILITY_SRC", "WATER_SRC"],
                                 None, "water-availability.geojson")
+    if path is not None:
+        path = _maybe_unzip_geo(path, key)
     if path is None:
         _warn(key, "no source — set WATER_AVAILABILITY_SRC (or WATER_SRC) to"
                    " the EA CAMS 'water resource availability' GeoJSON/SHP"
