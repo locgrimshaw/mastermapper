@@ -1760,7 +1760,10 @@ def _planit_count(params, sleep_s):
     Retry-After (capped), and fails FAST otherwise — a national sweep must
     never turn one bad endpoint into a six-hour hang."""
     url = PLANIT_BASE + "?" + urllib.parse.urlencode(params)
-    for attempt in range(2):
+    # The diagnostic run proved PlanIt WORKS from CI but 429s hard (60s
+    # Retry-After on most requests) — so patience on 429 is the strategy,
+    # while every other failure stays fast-fail.
+    for attempt in range(4):
         time.sleep(sleep_s)
         try:
             req = urllib.request.Request(
@@ -1776,9 +1779,8 @@ def _planit_count(params, sleep_s):
                   f"{sorted(j.keys())[:8]}")
             return None
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt == 0:
-                wait = min(int(e.headers.get("Retry-After") or "30"), 60)
-                print(f"  [planit_rates] 429 rate-limited, waiting {wait}s")
+            if e.code == 429 and attempt < 3:
+                wait = min(int(e.headers.get("Retry-After") or "30"), 90)
                 time.sleep(wait)
                 continue
             if _PLANIT_DIAG["n"] < 5:
@@ -1827,6 +1829,19 @@ def build_planit():
     # rather than letting a slow/tarpitting endpoint eat the whole job.
     budget_s = float(os.environ.get("PLANIT_TIME_BUDGET_MIN") or "45") * 60
     t0 = time.monotonic()
+    # Progress persists across runs (actions/cache in load-planit.yml):
+    # already-gathered authorities are skipped, so the daily job walks the
+    # country a chunk at a time under PlanIt's rate limit.
+    prog_path = Path(os.environ.get("PLANIT_PROGRESS")
+                     or (RAW / "planit_progress.json"))
+    prior = {}
+    if prog_path.exists():
+        try:
+            prior = json.loads(prog_path.read_text())
+            print(f"  [{key}] resuming — {len(prior)} authorities already "
+                  "gathered in previous runs")
+        except Exception:
+            prior = {}
     end = pd.Timestamp.now(tz="UTC").date()
     start = end - pd.Timedelta(days=3 * 365)
     window = {"start_date": start.isoformat(), "end_date": end.isoformat(),
@@ -1839,7 +1854,7 @@ def build_planit():
     if max_auth:
         rows_src = rows_src.head(max_auth)
 
-    stats, missed = {}, []
+    stats, missed = dict(prior), []
     for i, (_, f) in enumerate(rows_src.iterrows()):
         if time.monotonic() - t0 > budget_s:
             print(f"  [{key}] time budget exhausted after {i} authorities — "
@@ -1848,6 +1863,8 @@ def build_planit():
         auth = _cell(f, gname)
         if not auth:
             continue
+        if re.sub(r"[^a-z0-9]", "", auth.lower()) in stats:
+            continue                    # gathered in a previous run
         got = {}
         for state in ("Permitted", "Rejected"):
             n = _planit_count({**window, "auth": auth, "app_state": state},
@@ -1871,6 +1888,12 @@ def build_planit():
     if missed:
         print(f"  [{key}] no PlanIt data for {len(missed)} authorities "
               f"(first few: {missed[:6]})")
+    try:
+        prog_path.parent.mkdir(parents=True, exist_ok=True)
+        prog_path.write_text(json.dumps(stats))
+        print(f"  [{key}] progress saved: {len(stats)} authorities total")
+    except Exception as exc:
+        print(f"  [{key}] progress save failed ({exc})")
 
     def planit_props(f):
         e = stats.get(re.sub(r"[^a-z0-9]", "", _cell(f, gname).lower()))

@@ -62,7 +62,7 @@ jobs:
       # "all", which counts as requested. Best-effort throughout: any failure
       # emits a ::warning and the builder simply skips the power datasets.
       - name: Extract OSM power + university features (osmium)
-        if: ${{ inputs.datasets == '' || contains(inputs.datasets, 'power') || contains(inputs.datasets, 'tec') || contains(inputs.datasets, 'uni') || contains(inputs.datasets, 'bus_route') }}
+        if: ${{ inputs.datasets == '' || contains(inputs.datasets, 'power') || contains(inputs.datasets, 'tec') || contains(inputs.datasets, 'uni') || contains(inputs.datasets, 'bus_route') || contains(inputs.datasets, 'student_accom') }}
         env:
           OSM_PBF_SRC: ${{ vars.OSM_PBF_SRC }}
           DATASETS_INPUT: ${{ inputs.datasets }}

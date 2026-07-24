@@ -1,0 +1,64 @@
+name: Load PlanIt approval rates into Supabase
+
+# PlanIt's API works from CI but rate-limits hard (60s Retry-After 429s),
+# so a national sweep can't finish in one sitting. This job runs DAILY,
+# persists its progress file via actions/cache, skips authorities already
+# gathered, and reloads the growing dataset each time — the approval-rate
+# choropleth fills in over roughly a week, then the daily run just
+# refreshes the oldest data (delete the cache to force a full re-sweep).
+# Data: PlanIt (planit.org.uk) aggregation of council planning registers.
+
+on:
+  schedule:
+    - cron: "10 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 320
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Restore PlanIt progress
+        uses: actions/cache/restore@v4
+        with:
+          path: data/raw/planit_progress.json
+          key: planit-progress-${{ github.run_id }}
+          restore-keys: planit-progress-
+
+      - name: Build the planit_rates import CSV
+        env:
+          DATASETS: planit_rates
+          PYTHONUNBUFFERED: "1"
+          PLANIT_TIME_BUDGET_MIN: "280"
+        run: python pipeline/build_datasets.py
+
+      - name: Save PlanIt progress
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw/planit_progress.json
+          key: planit-progress-${{ github.run_id }}
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: planit_rates
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          python supabase/loaders/load_datasets.py
