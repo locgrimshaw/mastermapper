@@ -51,11 +51,19 @@ jobs:
           # curl with a cookie jar: the site sets a session cookie and then
           # redirects; cookie-less clients (urllib) loop on the 302 forever.
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+          # The landing page only links to /datasets/inspire/download — the
+          # per-LA list lives on that second page. Fetch both.
           curl -fsSL -A "$UA" -c /tmp/ck -b /tmp/ck --max-redirs 10 \
             -o inspire.html "https://use-land-property-data.service.gov.uk/datasets/inspire"
+          curl -fsSL -A "$UA" -c /tmp/ck -b /tmp/ck --max-redirs 10 \
+            -o inspire2.html "https://use-land-property-data.service.gov.uk/datasets/inspire/download" || true
           python3 - <<'EOF'
           import re
           html = open("inspire.html", encoding="utf-8", errors="replace").read()
+          try:
+              html += open("inspire2.html", encoding="utf-8", errors="replace").read()
+          except OSError:
+              pass
           # Primary pattern, plus fallbacks for layout drift; if nothing hits,
           # dump every download-ish href so the logs teach us the real shape.
           slugs = sorted(set(re.findall(r"/datasets/inspire/download/([^\"'/?#]+?)(?:\.zip)?[\"'?#]", html)))
