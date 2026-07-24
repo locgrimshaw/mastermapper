@@ -145,6 +145,11 @@ WATER_DEFAULT_URL = ("https://agrilake2live.file.core.windows.net/gms-datasets/"
 # UKPN "Grid and Primary sites" (opendatasoft export API — stable URL): every
 # UKPN grid/primary substation with its headroom attributes. The DNO's own
 # capacity view for London/South East/East.
+# TfL PTAL grid via ArcGIS Hub (stable v3 download API): 100 m cell polygons
+# with the PTAL_2023 grade + AI, EPSG:4326.
+PTAL_DEFAULT_URL = ("https://hub.arcgis.com/api/v3/datasets/"
+                    "b932a6039c0f4967a7cb7e3b2b58c1b3_33/downloads/data"
+                    "?format=geojson&spatialRefId=4326&where=1%3D1")
 UKPN_SITES_URL = ("https://ukpowernetworks.opendatasoft.com/api/explore/v2.1/"
                   "catalog/datasets/grid-and-primary-sites/exports/geojson/"
                   "?lang=en&timezone=Europe%2FLondon")
@@ -717,13 +722,12 @@ def build_university_group():
 
 def build_ptal():
     key = "ptal"
-    path, how = _resolve_source(key, ["PTAL_SRC"], None, "ptal_grid.csv")
+    path, how = _resolve_source(key, ["PTAL_SRC"], PTAL_DEFAULT_URL,
+                                "ptal_grid.csv")
     if path is None:
-        _warn(key, "no PTAL source. London Datastore file paths are hashed, so"
-                   " there is no reliable default URL — set PTAL_SRC to the TfL"
-                   " 'PTAL grid values' CSV (X,Y in EPSG:27700 + PTAL grade),"
-                   " from https://data.london.gov.uk (search: PTAL).")
-        _note(key, "PTAL_SRC not set (no reliable default URL)")
+        _warn(key, f"{how} — set PTAL_SRC to a PTAL grid vector file "
+                   "(GeoJSON/shapefile zip) or an X/Y CSV.")
+        _note(key, how)
         return {}
     # The Datastore offers the grid BOTH as an attribute CSV (needs X/Y
     # columns) and as vector files (shapefile zip / GeoJSON with the PTAL

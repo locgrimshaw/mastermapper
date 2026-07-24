@@ -1,0 +1,52 @@
+name: Load CCOD council-owned property into Supabase
+
+# Builds the `la_property` map layer from HM Land Registry's CCOD dataset
+# (licence-restricted: downloaded via the account API key INSIDE this run
+# only, never committed) geocoded by OS Code-Point Open postcodes, then
+# loads it into public.map_features. Requires secrets:
+#   CCOD_API_KEY           — API key from use-land-property-data.service.gov.uk
+#   SUPABASE_URL / SUPABASE_SERVICE_KEY — as the other loaders.
+# CCOD refreshes monthly; re-run this workflow to pick up the new file.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Build the la_property import CSV (CCOD + Code-Point Open)
+        env:
+          CCOD_API_KEY: ${{ secrets.CCOD_API_KEY }}
+        run: python pipeline/build_ccod.py
+
+      # NOTE: deliberately NO artifact upload — CCOD-derived rows stay inside
+      # the run and the database, respecting the dataset licence.
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: la_property
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          if [ ! -s supabase/datasets_import.csv ]; then
+            echo "::warning::No import CSV produced (CCOD_API_KEY missing or build skipped) — nothing to load."
+            exit 0
+          fi
+          python supabase/loaders/load_datasets.py

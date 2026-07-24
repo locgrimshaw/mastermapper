@@ -1035,6 +1035,7 @@ const MAP_OVERLAYS = [
   { key: "land_naturescot",       group: "land", label: "NatureScot land",                  color: "#20c997", ownership: true, bodies: ["naturescot_scotland"] },
   { key: "land_crown_estate",     group: "land", label: "Crown Estate Scotland",            color: "#845ef7", ownership: true, bodies: ["crown_estate_scotland"] },
   { key: "land_hes",              group: "land", label: "Historic Environment Scotland",    color: "#f59f00", ownership: true, bodies: ["hes_scotland"] },
+  { key: "la_property",           group: "land", label: "Council-owned property (CCOD)",    color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000 },
 
   // ---- map_features datasets (generic ingestion framework; see ----
   // ---- pipeline/build_datasets.py + docs/DATA_LAYERS_ROADMAP.md) ----
@@ -1048,7 +1049,7 @@ const MAP_OVERLAYS = [
   { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5 },
   { key: "uni_campus_site", group: "students", label: "Campus grounds (OSM)",     color: "#9775fa", dataset: "uni_campus_site", minZoom: 8 },
   { key: "uni_building",    group: "students", label: "University buildings (OSM)", color: "#5f3dc4", dataset: "uni_building", minZoom: 11 },
-  { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 10 },
+  { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 11, lim: 8000 },
   // Market & boundaries
   { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
   { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5 },
@@ -1104,7 +1105,7 @@ const LAYER_INFO = {
   uni_campus:          { about: "One dot per registered HE provider (the HQ). Click a dot for the PBSA deep-dive card: student numbers, international share and the term-time accommodation mix (private halls vs HMO vs living at home).", source: "UKRLP locations; HESA DT051 Tables 1 & 57, 2024/25 (CC-BY 4.0)" },
   uni_campus_site:     { about: "University campus grounds — the actual site extents, so multi-campus institutions show every campus, not just the HQ dot.", source: "© OpenStreetMap contributors (ODbL)" },
   uni_building:        { about: "Individual university building footprints. Zoom in close — these are dense.", source: "© OpenStreetMap contributors (ODbL)" },
-  ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, graded 0–6b. Greater London only.", source: "TfL / London Datastore (OGL)" },
+  ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only; zoom to city scale.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
   la_rents:            { about: "Average monthly private rents by local authority, including per-bedroom breakdowns where published.", source: "ONS Price Index of Private Rents (OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
   power_line:          { about: "High-voltage lines, weight-scaled by voltage. Wide zooms show the 275/400 kV backbone; zoom in for 132 kV and below. Click a line for its details.", source: "© OpenStreetMap contributors (ODbL)" },
@@ -1113,6 +1114,7 @@ const LAYER_INFO = {
   tec_register:        { about: "The transmission connection queue: projects holding capacity agreements, with MW and status. Shows where the grid is contested.", source: "NESO TEC Register (open licence)" },
   ukpn_sites:          { about: "UK Power Networks grid & primary substations with the DNO's own headroom attributes — real connection-capacity data for London, the South East and East. Click a site for full details.", source: "UK Power Networks Open Data (opendatasoft)" },
   alc:                 { about: "Agricultural Land Classification grades 1–5. Grades 1–3a are 'best and most versatile' — policy steers development away.", source: "Natural England (OGL v3)" },
+  la_property:         { about: "Property titles owned by local authorities, aggregated to postcode points with a title count. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — a proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
 };
 
@@ -1288,8 +1290,14 @@ function renderOverlay(key, def, fc) {
                "line-opacity": Math.min(1, opacity * 2.5) } }, before);
     if (def.dataset === "power_line") wireOverlayTooltip(key, lineId);
   } else {
+    const fillColor = def.dataset === "ptal"
+      ? ["match", ["to-string", ["get", "ptal"]],
+         "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
+         "3", "#fee391", "4", "#fe9929", "5", "#ec7014",
+         "6a", "#cc4c02", "6b", "#8c2d04", def.color]
+      : def.color;
     map.addLayer({ id: fillId, type: "fill", source: srcId,
-      paint: { "fill-color": def.color, "fill-opacity": opacity } }, before);
+      paint: { "fill-color": fillColor, "fill-opacity": opacity } }, before);
     map.addLayer({ id: lineId, type: "line", source: srcId,
       paint: { "line-color": def.color, "line-width": 1,
                "line-opacity": Math.min(0.9, opacity * 2.2) } }, before);
@@ -1307,6 +1315,7 @@ function wireOverlayTooltip(key, layerId) {
     power_substation: p => [p.name || "Substation", p.kv ? `${p.kv} kV` : (p.voltage || "")].filter(Boolean).join(" · "),
     power_line: p => ["Power line", p.kv ? `${p.kv} kV` : (p.voltage || ""), p.operator].filter(Boolean).join(" · "),
     tec_register: p => [p.name || p.site, p.mw ? `${p.mw} MW` : "", p.status].filter(Boolean).join(" · "),
+    la_property: p => [p.name, p.titles ? `${p.titles} title${p.titles > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · "),
     ukpn_sites: p => {
       const hk = Object.keys(p).find(k => k.includes("headroom") && !isNaN(Number(p[k])));
       return [p.name || "UKPN site", hk ? `${Number(p[hk]).toLocaleString()} headroom` : ""].filter(Boolean).join(" · ");

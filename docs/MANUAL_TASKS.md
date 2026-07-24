@@ -42,7 +42,9 @@ The Feb 2026 "GSP regions" zip release is now the pipeline's built-in default
 NESO publishes a NEWER release: copy its zip link from
 <https://www.neso.energy/data-portal> and set repo variable `GSP_SRC` to it.
 
-## 4. TfL PTAL grid → London transport accessibility
+## 4. TfL PTAL grid — ✅ DONE (stable ArcGIS Hub URL wired as default)
+
+## 4b. (superseded) original PTAL steps
 
 1. Go to <https://data.london.gov.uk/dataset/public-transport-accessibility-levels-24rz6/>
    (or search "PTAL" on data.london.gov.uk).
@@ -85,7 +87,11 @@ refresh: hand the new PIPR download to Claude (any format).
    is generated, right-click the download button → **Copy link address**.
 3. **Repo variable** `ALC_SRC` = that link.
 
-## 8. HM Land Registry account → council-owned land (v2 layer)
+## 8. HM Land Registry — ✅ account + CCOD_API_KEY secret done; the
+load-ccod.yml workflow builds the council-owned property layer (re-run it
+monthly when HMLR refresh; INSPIRE parcel outlines are the next phase).
+
+## 8b. (superseded) original HMLR steps
 
 1. Go to <https://use-land-property-data.service.gov.uk/> → **Create account**
    (free).
