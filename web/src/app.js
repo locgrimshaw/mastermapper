@@ -1210,11 +1210,39 @@ function refreshMapOverlays() {
   MAP_OVERLAYS.forEach(o => { if (overlayState[o.key] && overlayState[o.key].on) fetchMapOverlay(o.key); });
 }
 
-async function fetchMapOverlay(key) {
+// Overlay fetch scheduler. With a dozen layers on, every pan used to fire a
+// dozen simultaneous geometry queries — a stampede that starves the database
+// connection pool and turns into a wall of 'err'. Cap what runs at once
+// (queued layers follow as slots free), drop stale responses (newest request
+// per layer wins), and retry a failed fetch once before showing an error.
+const _ovQueue = [];
+let _ovInFlight = 0;
+const OV_MAX_CONCURRENT = 4;
+
+function fetchMapOverlay(key) {
+  const st = overlayState[key] || (overlayState[key] = { opacity: OVERLAY_DEFAULT_OPACITY });
+  st.reqSeq = (st.reqSeq || 0) + 1;
+  if (!_ovQueue.includes(key)) _ovQueue.push(key);
+  _ovPump();
+}
+
+function _ovPump() {
+  while (_ovInFlight < OV_MAX_CONCURRENT && _ovQueue.length) {
+    const key = _ovQueue.shift();
+    _ovInFlight++;
+    _fetchMapOverlayNow(key)
+      .catch(() => {})
+      .finally(() => { _ovInFlight--; _ovPump(); });
+  }
+}
+
+async function _fetchMapOverlayNow(key, attempt = 0) {
   const def = overlayDef(key);
   const stat = document.getElementById(`ov-stat-${key}`);
   if (!def || typeof map === "undefined") return;
   const st = overlayState[key] || (overlayState[key] = { opacity: OVERLAY_DEFAULT_OPACITY });
+  const mySeq = st.reqSeq;
+  if (!st.on) return;                    // toggled off while queued
   const zoom = map.getZoom();
   if (zoom < overlayMinZoom(key)) {
     st.fetched = null;
@@ -1256,6 +1284,9 @@ async function fetchMapOverlay(key) {
           p_num_key: nf ? nf.key : null, p_num_min: nfMin, p_num_max: nfMax })
       : await sb.rpc("constraints_in_bbox", { p_kinds: def.kinds, w, s, e, n, p_zoom });
     if (error) throw error;
+    // A newer request for this layer started while we were in flight (fast
+    // panning) — its result supersedes this one; don't paint stale data.
+    if (st.reqSeq !== mySeq || !st.on) return;
     const fc = data || { type: "FeatureCollection", features: [] };
     if (!Array.isArray(fc.features)) fc.features = [];
     st.fetched = { w, s, e, n, z: zsnap, nfMin, nfMax };
@@ -1265,6 +1296,15 @@ async function fetchMapOverlay(key) {
     if (stat) stat.textContent = fc.features.length >= cap
       ? `${fc.features.length.toLocaleString()}+` : `${fc.features.length.toLocaleString()}`;
   } catch (err) {
+    if (st.reqSeq !== mySeq || !st.on) return;   // superseded — stay quiet
+    if (attempt === 0) {
+      // One retry after a beat: most failures here are a momentarily busy
+      // database, and the map keeps whatever it already has meanwhile.
+      if (stat) stat.textContent = "retrying…";
+      await new Promise(r => setTimeout(r, 1200 + Math.random() * 800));
+      if (st.reqSeq === mySeq && st.on) return _fetchMapOverlayNow(key, 1);
+      return;
+    }
     console.error("overlay fetch failed", key, err);
     if (stat) stat.textContent = "err";
   }
@@ -1414,10 +1454,14 @@ function renderOverlay(key, def, fc) {
          "Non Agricultural", "#b8bfc6", "Urban", "#8d959e",
          "Exclusion", "#d0d4d9", def.color]
       : def.dataset === "water_availability"
+      // EA CAMS Q95 classification arrives as colour words (Green / Yellow /
+      // Red / Grey); keep substring fallbacks for text-valued variants.
       ? ["case",
-         ["in", "not avail", waterStatus], "#e03131",
-         ["in", "restrict", waterStatus], "#f59f00",
-         ["in", "avail", waterStatus], "#2f9e44",
+         ["in", "green", waterStatus], "#2f9e44",
+         ["any", ["in", "yellow", waterStatus], ["in", "amber", waterStatus],
+                 ["in", "restrict", waterStatus]], "#f59f00",
+         ["any", ["in", "red", waterStatus], ["in", "not avail", waterStatus]], "#e03131",
+         ["any", ["in", "grey", waterStatus], ["in", "gray", waterStatus]], "#adb5bd",
          def.color]
       : def.color;
     map.addLayer({ id: fillId, type: "fill", source: srcId,
@@ -2557,7 +2601,12 @@ function hoverContentForOverlay(def, p) {
   } else if (d === "water_availability") {
     title = p.name || "Water body / catchment";
     kind = "Water resource availability";
-    rows = [row(p.status, "availability")];
+    const WATER_STATUS_TEXT = {
+      green: "Green — water available", yellow: "Yellow — restricted",
+      red: "Red — not available", grey: "Grey — not assessed",
+    };
+    const ws = String(p.status || "").toLowerCase();
+    rows = [row(WATER_STATUS_TEXT[ws] || p.status, "Q95 availability")];
   } else if (d === "ptal") {
     title = `PTAL ${p.ptal ?? ""}`.trim();
     kind = "Public transport access";
