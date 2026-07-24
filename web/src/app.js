@@ -844,6 +844,9 @@ function updateDataSourceNote() {
     if (greenbeltAttributionShown) {
       el.textContent += " " + GREENBELT_ATTRIBUTION;
     }
+    if (_osmPowerAttributionShown) {
+      el.textContent += " Power network © OpenStreetMap contributors (ODbL).";
+    }
   }
 }
 
@@ -976,14 +979,27 @@ function wireImdToggle() {
 // pipeline/build_constraints.py). Re-run it with CLIP_MODE=none to load
 // national coverage — no frontend change needed.
 
-// Sub-groups of the "Planning & environment" section of the Data layers tree.
-const OVERLAY_GROUPS = [
-  { key: "planning",    title: "Planning designations" },
-  { key: "environment", title: "Environmental designations" },
-  { key: "heritage",    title: "Heritage" },
-  { key: "flood",       title: "Flood risk" },
-  { key: "land",        title: "Land ownership & infrastructure" },
+// Top-level overlay-driven groups of the Data layers tree, each with its
+// sub-groups. Overlay rows reference a sub-group via their `group` key.
+const OVERLAY_TREE = [
+  { key: "planning-env", title: "Planning &amp; environment", subs: [
+    { key: "planning",    title: "Planning designations" },
+    { key: "policy",      title: "Plans & policy areas" },
+    { key: "environment", title: "Environmental designations" },
+    { key: "heritage",    title: "Heritage" },
+    { key: "flood",       title: "Flood risk" },
+    { key: "land",        title: "Land ownership & infrastructure" },
+  ]},
+  { key: "student", title: "Student housing &amp; demand", subs: [
+    { key: "students", title: "Universities & students" },
+    { key: "market",   title: "Market & boundaries" },
+  ]},
+  { key: "energy", title: "Energy &amp; utilities", subs: [
+    { key: "grid",        title: "Power grid" },
+    { key: "sitefactors", title: "Site factors" },
+  ]},
 ];
+const OVERLAY_GROUPS = OVERLAY_TREE.flatMap(t => t.subs);
 
 // One entry per layer — every statutory designation is its own row now (the
 // old combined "Environmental" / "Heritage" / "Flood" bundles are split) so
@@ -1017,11 +1033,54 @@ const MAP_OVERLAYS = [
   { key: "land_naturescot",       group: "land", label: "NatureScot land",                  color: "#20c997", ownership: true, bodies: ["naturescot_scotland"] },
   { key: "land_crown_estate",     group: "land", label: "Crown Estate Scotland",            color: "#845ef7", ownership: true, bodies: ["crown_estate_scotland"] },
   { key: "land_hes",              group: "land", label: "Historic Environment Scotland",    color: "#f59f00", ownership: true, bodies: ["hes_scotland"] },
+
+  // ---- map_features datasets (generic ingestion framework; see ----
+  // ---- pipeline/build_datasets.py + docs/DATA_LAYERS_ROADMAP.md) ----
+  // Plans & policy areas (planning.data.gov.uk sweep)
+  { key: "lpa_boundary",        group: "policy", label: "Planning authority boundaries", color: "#495057", dataset: "lpa_boundary",        render: "line",  minZoom: 5 },
+  { key: "local_plan_boundary", group: "policy", label: "Local plan boundaries",         color: "#5f3dc4", dataset: "local_plan_boundary", render: "line",  minZoom: 6 },
+  { key: "article4",            group: "policy", label: "Article 4 direction areas",     color: "#c2255c", dataset: "article4",            minZoom: 8 },
+  { key: "tpo_zone",            group: "policy", label: "Tree preservation zones",       color: "#2b8a3e", dataset: "tpo_zone",            minZoom: 9 },
+  { key: "design_code_area",    group: "policy", label: "Design code areas",             color: "#e8590c", dataset: "design_code_area",    minZoom: 8 },
+  // Universities & students
+  { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5 },
+  { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 10 },
+  // Market & boundaries
+  { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
+  { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5 },
+  // Power grid
+  { key: "power_line",       group: "grid", label: "Transmission & HV lines (OSM)", color: "#e8590c", dataset: "power_line",       render: "line",  minZoom: 5 },
+  { key: "power_substation", group: "grid", label: "Substations (OSM)",             color: "#d9480f", dataset: "power_substation", render: "point", minZoom: 6 },
+  { key: "gsp_boundary",     group: "grid", label: "Grid Supply Point boundaries",  color: "#845ef7", dataset: "gsp_boundary",     render: "line",  minZoom: 4 },
+  { key: "tec_register",     group: "grid", label: "Connection queue (TEC register)", color: "#f59f00", dataset: "tec_register",   render: "point", minZoom: 5 },
+  // Site factors
+  { key: "alc",                group: "sitefactors", label: "Agricultural land grades (ALC)", color: "#94d82d", dataset: "alc",                minZoom: 7 },
+  { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
 ];
-const OVERLAY_MIN_ZOOM = 10.5;        // below this, the bbox is too big to fetch
+// Layers persist when zooming OUT now: the bbox RPCs take a p_zoom argument
+// and simplify geometry to ~1 screen pixel server-side (dropping sub-pixel
+// features), so a region-wide fetch stays small. Each layer still has a floor
+// via its registry minZoom (dense point-ish layers need one); the default
+// floor is low enough that layers survive to a regional view.
+const OVERLAY_MIN_ZOOM = 7;           // default floor; per-layer minZoom overrides
 const OVERLAY_DEFAULT_OPACITY = 0.32; // fill opacity a fresh overlay starts at
 const OVERLAY_FETCH_MARGIN = 0.3;     // pad each fetch 30% beyond the viewport
-const overlayState = {};              // key -> { on, opacity, fetched:{w,s,e,n} }
+const overlayState = {};              // key -> { on, opacity, fetched:{w,s,e,n,z} }
+
+// Per-layer zoom floors (small/dense features need closer zooms; big statutory
+// designations can show from the national view thanks to simplification).
+const OVERLAY_MIN_ZOOMS = {
+  green_space: 9, conservation_area: 8, aonb: 5, brownfield: 9,
+  sssi: 5, sac: 5, spa: 5, ramsar: 5, ancient_woodland: 8,
+  scheduled_monument: 9, listed_building: 11, park_garden: 8,
+  flood_zone_2: 8, flood_zone_3: 8, transport: 10,
+  land_forestry_england: 5, land_forestry_scotland: 5, land_naturescot: 5,
+  land_crown_estate: 5, land_hes: 8,
+};
+function overlayMinZoom(key) {
+  const def = overlayDef(key);
+  return (def && def.minZoom) ?? OVERLAY_MIN_ZOOMS[key] ?? OVERLAY_MIN_ZOOM;
+}
 let _overlayMoveWired = false;
 let _overlayMoveTimer = null;
 
@@ -1054,10 +1113,17 @@ function toggleMapOverlay(key, on) {
 function setOverlayOpacity(key, v) {
   const st = overlayState[key] || (overlayState[key] = {});
   st.opacity = v;
+  const def = overlayDef(key);
   if (map.getLayer(`ov-${key}-fill`))
     map.setPaintProperty(`ov-${key}-fill`, "fill-opacity", v);
-  if (map.getLayer(`ov-${key}-line`))
-    map.setPaintProperty(`ov-${key}-line`, "line-opacity", Math.min(0.9, v * 2.2));
+  if (map.getLayer(`ov-${key}-line`)) {
+    const lineAlpha = def && def.render === "line" ? Math.min(1, v * 2.5) : Math.min(0.9, v * 2.2);
+    map.setPaintProperty(`ov-${key}-line`, "line-opacity", lineAlpha);
+  }
+  if (map.getLayer(`ov-${key}-pt`)) {
+    map.setPaintProperty(`ov-${key}-pt`, "circle-opacity", Math.min(1, v * 2.5));
+    map.setPaintProperty(`ov-${key}-pt`, "circle-stroke-opacity", Math.min(1, v * 2.5));
+  }
 }
 
 function refreshMapOverlays() {
@@ -1069,7 +1135,8 @@ async function fetchMapOverlay(key) {
   const stat = document.getElementById(`ov-stat-${key}`);
   if (!def || typeof map === "undefined") return;
   const st = overlayState[key] || (overlayState[key] = { opacity: OVERLAY_DEFAULT_OPACITY });
-  if (map.getZoom() < OVERLAY_MIN_ZOOM) {
+  const zoom = map.getZoom();
+  if (zoom < overlayMinZoom(key)) {
     st.fetched = null;
     removeOverlayLayers(key);
     if (stat) stat.textContent = "zoom in";
@@ -1079,25 +1146,35 @@ async function fetchMapOverlay(key) {
   if (!sb) { if (stat) stat.textContent = "n/a"; return; }
   const b = map.getBounds();
   const vw = b.getWest(), vs = b.getSouth(), ve = b.getEast(), vn = b.getNorth();
-  // Fetch cache: if the view is still inside the last padded fetch bbox, the
-  // data on the map already covers it — no request needed. (Zooming in never
-  // refetches; pans only refetch once they leave the padded area.)
+  // Fetch cache: if the view is still inside the last padded fetch bbox AND we
+  // haven't zoomed in far past the detail level it was fetched at, the data on
+  // the map already covers it — no request. (Server-side geometry is
+  // simplified to ~1px at the fetch zoom, so zooming IN more than ~1.5 levels
+  // needs a refetch for crisper detail; zooming OUT grows the bbox and
+  // triggers a refetch naturally.)
+  const zsnap = Math.round(zoom * 2) / 2;
   const c = st.fetched;
-  if (c && vw >= c.w && vs >= c.s && ve <= c.e && vn <= c.n) return;
+  if (c && vw >= c.w && vs >= c.s && ve <= c.e && vn <= c.n && zsnap <= c.z + 1.5) return;
   const dw = (ve - vw) * OVERLAY_FETCH_MARGIN, dh = (vn - vs) * OVERLAY_FETCH_MARGIN;
   const w = vw - dw, s = vs - dh, e = ve + dw, n = vn + dh;
   if (stat) stat.textContent = "…";
   try {
+    // p_zoom drives server-side per-pixel simplification. Past z13 geometry is
+    // effectively full-detail anyway, so cap what we ask for.
+    const p_zoom = Math.min(zsnap, 13);
     const { data, error } = def.brownfield
-      ? await sb.rpc("brownfield_in_bbox", { w, s, e, n })
+      ? await sb.rpc("brownfield_in_bbox", { w, s, e, n, p_zoom })
       : def.ownership
-      ? await sb.rpc("land_ownership_in_bbox", { p_bodies: def.bodies || null, w, s, e, n })
-      : await sb.rpc("constraints_in_bbox", { p_kinds: def.kinds, w, s, e, n });
+      ? await sb.rpc("land_ownership_in_bbox", { p_bodies: def.bodies || null, w, s, e, n, p_zoom })
+      : def.dataset
+      ? await sb.rpc("features_in_bbox", { p_dataset: def.dataset, w, s, e, n, p_zoom })
+      : await sb.rpc("constraints_in_bbox", { p_kinds: def.kinds, w, s, e, n, p_zoom });
     if (error) throw error;
     const fc = data || { type: "FeatureCollection", features: [] };
-    st.fetched = { w, s, e, n };
+    if (!Array.isArray(fc.features)) fc.features = [];
+    st.fetched = { w, s, e, n, z: zsnap };
     renderOverlay(key, def, fc);
-    if (stat) stat.textContent = `${(fc.features || []).length}`;
+    if (stat) stat.textContent = `${fc.features.length}`;
   } catch (err) {
     console.error("overlay fetch failed", key, err);
     if (stat) stat.textContent = "err";
@@ -1114,7 +1191,8 @@ function overlayBeforeId() {
 }
 
 function renderOverlay(key, def, fc) {
-  const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`;
+  const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`,
+        ptId = `ov-${key}-pt`;
   if (map.getSource(srcId)) {
     map.getSource(srcId).setData(fc);
     return;
@@ -1122,17 +1200,77 @@ function renderOverlay(key, def, fc) {
   const opacity = overlayState[key]?.opacity ?? OVERLAY_DEFAULT_OPACITY;
   map.addSource(srcId, { type: "geojson", data: fc });
   const before = overlayBeforeId();
-  map.addLayer({ id: fillId, type: "fill", source: srcId,
-    paint: { "fill-color": def.color, "fill-opacity": opacity } }, before);
-  map.addLayer({ id: lineId, type: "line", source: srcId,
-    paint: { "line-color": def.color, "line-width": 1,
-             "line-opacity": Math.min(0.9, opacity * 2.2) } }, before);
+  if (def.render === "point") {
+    // Point dataset (campuses, substations, connection queue): circles that
+    // scale slightly with zoom; opacity slider drives circle+stroke alpha.
+    map.addLayer({ id: ptId, type: "circle", source: srcId,
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 2.5, 10, 4.5, 14, 7],
+        "circle-color": def.color,
+        "circle-opacity": Math.min(1, opacity * 2.5),
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 1,
+        "circle-stroke-opacity": Math.min(1, opacity * 2.5),
+      } }, before);
+    wireOverlayTooltip(key, ptId);
+  } else if (def.render === "line") {
+    // Line dataset (power lines, boundaries): no fill. Power lines scale
+    // width by voltage (props.kv) so 400 kV reads heavier than 33 kV.
+    const width = def.dataset === "power_line"
+      ? ["interpolate", ["linear"], ["coalesce", ["get", "kv"], 100],
+         33, 0.8, 132, 1.4, 275, 2.2, 400, 3]
+      : ["interpolate", ["linear"], ["zoom"], 5, 0.8, 10, 1.4, 14, 2.2];
+    map.addLayer({ id: lineId, type: "line", source: srcId,
+      layout: { "line-join": "round", "line-cap": "round" },
+      paint: { "line-color": def.color, "line-width": width,
+               "line-opacity": Math.min(1, opacity * 2.5) } }, before);
+    if (def.dataset === "power_line") wireOverlayTooltip(key, lineId);
+  } else {
+    map.addLayer({ id: fillId, type: "fill", source: srcId,
+      paint: { "fill-color": def.color, "fill-opacity": opacity } }, before);
+    map.addLayer({ id: lineId, type: "line", source: srcId,
+      paint: { "line-color": def.color, "line-width": 1,
+               "line-opacity": Math.min(0.9, opacity * 2.2) } }, before);
+  }
+  updateOverlayAttribution();
 }
 
+// Hover tooltip for dataset point/line overlays (name + the interesting props).
+// Desktop-only nicety — tap-to-inspect stays with the central dispatcher.
+function wireOverlayTooltip(key, layerId) {
+  const tipProps = {
+    uni_campus: p => [p.name, p.groups].filter(Boolean).join(" · "),
+    power_substation: p => [p.name || "Substation", p.kv ? `${p.kv} kV` : (p.voltage || "")].filter(Boolean).join(" · "),
+    power_line: p => ["Power line", p.kv ? `${p.kv} kV` : (p.voltage || ""), p.operator].filter(Boolean).join(" · "),
+    tec_register: p => [p.name || p.site, p.mw ? `${p.mw} MW` : "", p.status].filter(Boolean).join(" · "),
+  };
+  const fmt = tipProps[key] || (p => p.name || key);
+  const pop = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
+  map.on("mouseenter", layerId, (e) => {
+    map.getCanvas().style.cursor = "pointer";
+    pop.setLngLat(e.lngLat).setHTML(`<strong>${fmt(e.features[0].properties)}</strong>`).addTo(map);
+  });
+  map.on("mousemove", layerId, (e) => pop.setLngLat(e.lngLat));
+  map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; pop.remove(); });
+}
+
+// ODbL requires visible attribution while OSM-derived power layers are shown.
+function updateOverlayAttribution() {
+  const powerOn = ["power_line", "power_substation"]
+    .some(k => overlayState[k] && overlayState[k].on);
+  if (powerOn !== _osmPowerAttributionShown) {
+    _osmPowerAttributionShown = powerOn;
+    updateDataSourceNote();
+  }
+}
+let _osmPowerAttributionShown = false;
+
 function removeOverlayLayers(key) {
-  for (const id of [`ov-${key}-fill`, `ov-${key}-line`]) if (map.getLayer(id)) map.removeLayer(id);
+  for (const id of [`ov-${key}-fill`, `ov-${key}-line`, `ov-${key}-pt`])
+    if (map.getLayer(id)) map.removeLayer(id);
   const srcId = `ov-${key}-src`;
   if (map.getSource(srcId)) map.removeSource(srcId);
+  updateOverlayAttribution();
 }
 
 // ---- Data layers panel (left box 1) ---------------------------------------
@@ -1225,39 +1363,44 @@ function buildLayersPanel() {
       </div>
     </div>`;
 
-  // --- Planning & environment: sub-grouped granular overlays ---------------
-  const subHTML = OVERLAY_GROUPS.map(g => {
-    let rows = "";
-    // Green Belt (a national static file, not a bbox overlay) leads Planning.
-    if (g.key === "planning") {
-      rows += ltRowHTML({ rowId: "greenbelt-row", cbId: "greenbelt-show", hidden: true,
-                          label: "Green Belt", color: GREENBELT_COLOR, statId: "greenbelt-count",
-                          checked: false, opacity: state.greenbeltOpacity, opacityKey: "greenbelt" });
-    }
-    rows += MAP_OVERLAYS.filter(o => o.group === g.key).map(o =>
-      ltRowHTML({ dataKey: o.key, label: o.label, color: o.color, statId: `ov-stat-${o.key}`,
-                  checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}` })).join("");
+  // --- Overlay-driven groups (Planning & environment · Student housing ·
+  // --- Energy & utilities), each with sub-groups from OVERLAY_TREE ---------
+  const overlayGroupsHTML = OVERLAY_TREE.map(top => {
+    const subHTML = top.subs.map(g => {
+      let rows = "";
+      // Green Belt (a national static file, not a bbox overlay) leads Planning.
+      if (g.key === "planning") {
+        rows += ltRowHTML({ rowId: "greenbelt-row", cbId: "greenbelt-show", hidden: true,
+                            label: "Green Belt", color: GREENBELT_COLOR, statId: "greenbelt-count",
+                            checked: false, opacity: state.greenbeltOpacity, opacityKey: "greenbelt" });
+      }
+      rows += MAP_OVERLAYS.filter(o => o.group === g.key).map(o =>
+        ltRowHTML({ dataKey: o.key, label: o.label, color: o.color, statId: `ov-stat-${o.key}`,
+                    checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}` })).join("");
+      return `
+        <div class="lt-sub">
+          <button type="button" class="lt-head lt-sub-head" aria-expanded="true">
+            <span class="lt-title">${g.title}</span>
+            <span class="box-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="lt-body">${rows}</div>
+        </div>`;
+    }).join("");
+    const hint = top.key === "planning-env"
+      ? `<p class="hint" style="margin:4px 0 6px">Layers load nationwide for the current view — big designations show from a regional zoom; small/dense ones appear as you zoom in.</p>`
+      : "";
     return `
-      <div class="lt-sub">
-        <button type="button" class="lt-head lt-sub-head" aria-expanded="true">
-          <span class="lt-title">${g.title}</span>
+      <div class="lt-group" data-group="${top.key}">
+        <button type="button" class="lt-head" aria-expanded="true">
+          <span class="lt-title">${top.title}</span>
           <span class="box-caret" aria-hidden="true">▾</span>
         </button>
-        <div class="lt-body">${rows}</div>
+        <div class="lt-body">
+          ${subHTML}
+          ${hint}
+        </div>
       </div>`;
   }).join("");
-
-  const planningGroup = `
-    <div class="lt-group" data-group="planning-env">
-      <button type="button" class="lt-head" aria-expanded="true">
-        <span class="lt-title">Planning &amp; environment</span>
-        <span class="box-caret" aria-hidden="true">▾</span>
-      </button>
-      <div class="lt-body">
-        ${subHTML}
-        <p class="hint" style="margin:4px 0 6px">Polygon layers load for the current view (zoom in past ~city scale) and are cached as you pan.</p>
-      </div>
-    </div>`;
 
   // --- Transport & rail ----------------------------------------------------
   const transportGroup = `
@@ -1282,7 +1425,7 @@ function buildLayersPanel() {
       </div>
     </div>`;
 
-  host.innerHTML = deprivationGroup + priceGroup + planningGroup + transportGroup;
+  host.innerHTML = deprivationGroup + priceGroup + overlayGroupsHTML + transportGroup;
 
   // Collapse/expand for groups and sub-groups.
   host.querySelectorAll(".lt-head").forEach(head => {

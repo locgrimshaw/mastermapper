@@ -30,6 +30,15 @@ on:
         description: "Which constraint kinds to build (comma-separated, blank = all)"
         type: string
         default: ""
+      clip_mode:
+        description: "stations = clip to 1 km station buffers (small DB); none = full national coverage"
+        type: choice
+        options: [none, stations]
+        default: none
+      simplify_m:
+        description: "Geometry simplify tolerance in metres (national builds want 5-20)"
+        type: string
+        default: "10"
 
 permissions:
   contents: read
@@ -162,8 +171,10 @@ jobs:
       - name: Build the constraints import CSV
         env:
           CONSTRAINT_KINDS: ${{ inputs.kinds }}
+          CLIP_MODE: ${{ inputs.clip_mode || 'none' }}
+          SIMPLIFY_M: ${{ inputs.simplify_m || '10' }}
         run: |
-          echo "Building supabase/constraints_import.csv (clipped to station catchments)"
+          echo "Building supabase/constraints_import.csv (CLIP_MODE=$CLIP_MODE, SIMPLIFY_M=$SIMPLIFY_M)"
           python pipeline/build_constraints.py
 
       - name: Upload import CSV as a downloadable artifact
