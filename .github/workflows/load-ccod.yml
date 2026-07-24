@@ -41,6 +41,10 @@ jobs:
           CCOD_API_KEY: ${{ secrets.CCOD_API_KEY }}
           CCOD_FILE: ${{ inputs.ccod_file || vars.CCOD_FILE }}
           CCOD_URL: ${{ inputs.ccod_url || vars.CCOD_URL }}
+          # For the private 'restricted' storage bucket route (the manual
+          # upload that sidesteps HMLR's Cloudflare bot protection).
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python pipeline/build_ccod.py
 
       # NOTE: deliberately NO artifact upload — CCOD-derived rows stay inside

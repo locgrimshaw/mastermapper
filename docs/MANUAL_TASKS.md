@@ -87,9 +87,24 @@ refresh: hand the new PIPR download to Claude (any format).
    is generated, right-click the download button → **Copy link address**.
 3. **Repo variable** `ALC_SRC` = that link.
 
-## 8. HM Land Registry — ✅ account + CCOD_API_KEY secret done; the
-load-ccod.yml workflow builds the council-owned property layer (re-run it
-monthly when HMLR refresh; INSPIRE parcel outlines are the next phase).
+## 8. HM Land Registry CCOD — monthly manual upload (Cloudflare blocks CI)
+
+HMLR's site sits behind Cloudflare bot protection that refuses requests from
+GitHub's runners (Error 1010), so the API key route can't run headlessly.
+The working route — repeat monthly when HMLR refresh the file:
+
+1. Signed in at <https://use-land-property-data.service.gov.uk/>, download the
+   latest full file (e.g. `CCOD_FULL_2026_07.zip`, ~400 MB).
+2. Open the Supabase dashboard → your project → **Storage** → bucket
+   **`restricted`** (private — the licence-restricted file never goes in the
+   public repo) → **Upload file** → pick the zip, keep its original
+   `CCOD_FULL_…` name.
+3. Run the **"Load CCOD council-owned property into Supabase"** workflow from
+   the Actions tab (no inputs needed — it finds the newest CCOD_FULL zip in
+   the bucket automatically).
+4. Optionally delete the zip from the bucket afterwards to save storage.
+
+(INSPIRE parcel outlines are the next phase.)
 
 ## 8b. (superseded) original HMLR steps
 

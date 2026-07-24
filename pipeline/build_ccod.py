@@ -34,6 +34,7 @@ import re
 import shutil
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -120,6 +121,47 @@ def discover_ccod(key):
     return fname, file_link(fname, key)
 
 
+def fetch_from_storage():
+    """The manual route around HMLR's Cloudflare bot protection: the user
+    downloads the CCOD zip in their browser and uploads it to the PRIVATE
+    Supabase storage bucket 'restricted' (service-role access only, so the
+    licence-restricted file is never public). Returns the local path of the
+    newest CCOD_FULL*.zip found there, or None."""
+    base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    skey = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not (base and skey):
+        return None
+    hdrs = {"Authorization": f"Bearer {skey}", "apikey": skey,
+            "Content-Type": "application/json", "User-Agent": _UA}
+    body = json.dumps({"prefix": "", "limit": 100,
+                       "sortBy": {"column": "name", "order": "desc"}}).encode()
+    req = urllib.request.Request(f"{base}/storage/v1/object/list/restricted",
+                                 data=body, headers=hdrs, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            items = json.loads(r.read().decode("utf-8"))
+    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        print(f"[ccod] storage list unavailable ({exc}) — trying the API route")
+        return None
+    names = sorted(x.get("name", "") for x in (items or [])
+                   if re.match(r"CCOD_FULL.*\.zip$", str(x.get("name", ""))))
+    if not names:
+        return None
+    fname = names[-1]
+    dest = RAW / "ccod_full.zip"
+    print(f"[ccod] downloading {fname} from the private storage bucket ...")
+    req = urllib.request.Request(
+        f"{base}/storage/v1/object/restricted/{urllib.parse.quote(fname)}",
+        headers={"Authorization": f"Bearer {skey}", "apikey": skey,
+                 "User-Agent": _UA})
+    with urllib.request.urlopen(req, timeout=900) as r, dest.open("wb") as out:
+        shutil.copyfileobj(r, out, 1 << 20)
+    if not zipfile.is_zipfile(dest):
+        print("  storage object isn't a zip — ignoring it")
+        return None
+    return dest
+
+
 def download_zip(url, dest, key=None):
     """Download to dest, trying with the API key header first (harmless for
     presigned URLs, required if the direct route honours it), then without.
@@ -173,33 +215,38 @@ def load_postcodes():
 
 def main():
     key = os.environ.get("CCOD_API_KEY", "").strip()
-    if not key:
-        print("::warning::CCOD_API_KEY not set — skipping the CCOD build. Add "
-              "it as a repository secret (an API key from "
-              "use-land-property-data.service.gov.uk).")
-        return 0
-
     RAW.mkdir(parents=True, exist_ok=True)
-    # Two overrides for when the dataset-listing API route is refusing the
-    # key but the per-file route (or a direct link) still works:
-    #   CCOD_FILE — a file name like CCOD_FULL_2026_07.zip: skip discovery,
-    #               resolve its signed link via the per-file API route.
-    #   CCOD_URL  — a full download URL: fetch it directly (tried with the
-    #               key header, then anonymously; must yield a real zip).
+
+    # Source order:
+    #   1. CCOD_URL   — a full direct download URL (workflow input / repo var).
+    #   2. the private Supabase storage bucket 'restricted' — the manual
+    #      route: upload the browser-downloaded CCOD_FULL_*.zip there.
+    #   3. the HMLR API — CCOD_FILE skips discovery; needs CCOD_API_KEY and
+    #      Cloudflare letting the runner through.
     direct = os.environ.get("CCOD_URL", "").strip()
     fname = os.environ.get("CCOD_FILE", "").strip()
+    ccod_zip = RAW / "ccod_full.zip"
     if direct:
         fname = fname or direct.rstrip("/").rsplit("/", 1)[-1] or "CCOD_FULL.zip"
         print(f"[ccod] using direct CCOD_URL override ({fname})")
-        url = direct
-    elif fname:
-        print(f"[ccod] CCOD_FILE={fname} — skipping dataset discovery")
-        url = file_link(fname, key)
+        download_zip(direct, ccod_zip, key or None)
     else:
-        fname, url = discover_ccod(key)
-    ccod_zip = RAW / "ccod_full.zip"
-    print(f"[ccod] downloading {fname} (~400 MB) ...")
-    download_zip(url, ccod_zip, key)
+        got = fetch_from_storage()
+        if got is not None:
+            ccod_zip = got
+        elif not key:
+            print("::warning::No CCOD source available — upload the CCOD zip "
+                  "to the private 'restricted' storage bucket, or set the "
+                  "CCOD_API_KEY secret. Skipping the CCOD build.")
+            return 0
+        else:
+            if fname:
+                print(f"[ccod] CCOD_FILE={fname} — skipping dataset discovery")
+                url = file_link(fname, key)
+            else:
+                fname, url = discover_ccod(key)
+            print(f"[ccod] downloading {fname} (~400 MB) ...")
+            download_zip(url, ccod_zip, key)
 
     pcs = load_postcodes()
     try:
