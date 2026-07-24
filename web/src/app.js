@@ -1127,17 +1127,13 @@ const overlayState = {};              // key -> { on, opacity, fetched:{w,s,e,n,
 
 // Per-layer zoom floors (small/dense features need closer zooms; big statutory
 // designations can show from the national view thanks to simplification).
-// NOTE: floors tightened 2026-07-24 after the first national-load incident —
-// wide-viewport fetches over the big tables (flood 741k rows, green space
-// 166k) were stacking multi-second queries. Migration 0025's precomputed
-// size columns make those queries cheap again; these floors can then relax.
 const OVERLAY_MIN_ZOOMS = {
-  green_space: 10, conservation_area: 9, aonb: 5, brownfield: 9,
-  sssi: 6, sac: 6, spa: 6, ramsar: 6, ancient_woodland: 9,
-  scheduled_monument: 9, listed_building: 11, park_garden: 9,
-  flood_zone_2: 9.5, flood_zone_3: 9.5,
-  land_forestry_england: 6, land_forestry_scotland: 6, land_naturescot: 6,
-  land_crown_estate: 6, land_hes: 8,
+  green_space: 9, conservation_area: 8, aonb: 5, brownfield: 9,
+  sssi: 5, sac: 5, spa: 5, ramsar: 5, ancient_woodland: 8,
+  scheduled_monument: 9, listed_building: 11, park_garden: 8,
+  flood_zone_2: 8, flood_zone_3: 8,
+  land_forestry_england: 5, land_forestry_scotland: 5, land_naturescot: 5,
+  land_crown_estate: 5, land_hes: 8,
 };
 function overlayMinZoom(key) {
   const def = overlayDef(key);
