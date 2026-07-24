@@ -361,8 +361,20 @@ const map = new maplibregl.Map({
         tileSize: 256,
         attribution: "© OpenStreetMap, © CARTO",
       },
+      // CARTO's matching label-only tiles: minimal place names (cities,
+      // towns, key roads) that ride ABOVE every data layer so you can keep
+      // your bearings with any overlay on. The keeper below pins them top.
+      "carto-labels": {
+        type: "raster",
+        tiles: ["https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}@2x.png"],
+        tileSize: 256,
+      },
     },
-    layers: [{ id: "base", type: "raster", source: "carto" }],
+    layers: [
+      { id: "base", type: "raster", source: "carto" },
+      { id: "base-labels", type: "raster", source: "carto-labels",
+        paint: { "raster-opacity": 0.85 } },
+    ],
   },
   center: [-0.11, 51.51],
   zoom: 10.5,
@@ -372,6 +384,23 @@ const map = new maplibregl.Map({
   clickTolerance: 8,
 });
 window.map = map;   // dev: expose for console debugging
+
+// Every addLayer lands above base-labels; re-pin the labels to the very top
+// whenever the style changes (rAF-debounced; guard avoids a moveLayer ->
+// styledata feedback loop by only acting when they're not already last).
+let _lblRaf = 0;
+map.on("styledata", () => {
+  if (_lblRaf) return;
+  _lblRaf = requestAnimationFrame(() => {
+    _lblRaf = 0;
+    try {
+      const layers = map.getStyle().layers;
+      if (layers && layers.length && layers[layers.length - 1].id !== "base-labels"
+          && map.getLayer("base-labels"))
+        map.moveLayer("base-labels");
+    } catch (_) {}
+  });
+});
 
 // --- Touch fix for mapbox-gl-draw on MapLibre --------------------------------
 // @mapbox/mapbox-gl-draw registers some listeners with a { passive: true }
@@ -4007,6 +4036,10 @@ function setTheme(theme) {
     ? "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"
     : "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png";
   if (map.getSource("carto")) map.getSource("carto").setTiles([url]);
+  const lblUrl = theme === "light"
+    ? "https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}@2x.png"
+    : "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png";
+  if (map.getSource("carto-labels")) map.getSource("carto-labels").setTiles([lblUrl]);
   // Boundary + selection lines are tuned per theme so areas stay cohesive.
   for (const id of ["lsoa-line", "simd-line"])
     if (map.getLayer(id)) map.setPaintProperty(id, "line-color", LINE_COLOR());
