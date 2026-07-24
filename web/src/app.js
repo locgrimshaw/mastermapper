@@ -7521,10 +7521,12 @@ function combinedScoreFromDomains(domains, weights) {
 // reached, we AUTOMATICALLY fall back to a straight-line circular catchment so
 // the analysis always proceeds — the returned feature is tagged
 // properties._approx = true so the UI can flag it as approximate.
-async function fetchIsochrone(lng, lat, mode, minutes) {
+async function fetchIsochrone(lng, lat, mode, minutes, opts = {}) {
   // Circle method selected (the default): skip the network entirely and return
   // an instant straight-line catchment. Tagged _circle so the UI can label it.
-  if (state.catchmentMethod === "circle") {
+  // opts.forceNetwork bypasses that station-tool preference — used by the PBSA
+  // catchment's own precise toggle, which decides independently.
+  if (!opts.forceNetwork && state.catchmentMethod === "circle") {
     const circ = circularCatchment(lng, lat, minutes);
     if (circ) { circ.properties = circ.properties || {}; circ.properties._circle = true; return circ; }
     // If turf somehow isn't available, fall through to the network path.
@@ -7674,6 +7676,8 @@ const pbsa = {
   catchMode: "rail",   // walk | cycle | rail
   catchMins: 30,
   catchOn: false,
+  catchPrecise: false, // true = street-network isochrones instead of rings
+  catchSeq: 0,         // build token: a newer build supersedes in-flight fetches
 };
 
 const PBSA_BANDS = [
@@ -7794,6 +7798,11 @@ function wirePbsaBox() {
       clearTimeout(catchDebounce);
       catchDebounce = setTimeout(() => pbsaBuildCatchment(false), 350);
     }
+  });
+  const precise = document.getElementById("catch-precise");
+  if (precise) precise.addEventListener("change", () => {
+    pbsa.catchPrecise = precise.checked;
+    if (pbsa.catchOn) pbsaBuildCatchment(false);
   });
   const buildBtn = document.getElementById("catch-build");
   if (buildBtn) buildBtn.addEventListener("click", () => pbsaBuildCatchment(true));
@@ -7974,7 +7983,7 @@ const CATCH_CYCLE_MPM = 185;  // effective straight-line metres/min at ~15 km/h
 const CATCH_INTERCHANGE_MIN = 5;
 const CATCH_COLORS = { walk: "#2f9e44", cycle: "#0ca678", rail: "#7048e8" };
 
-function pbsaBuildCatchment(fit) {
+async function pbsaBuildCatchment(fit) {
   const d = pbsa.data;
   const note = document.getElementById("catch-note");
   if (!d || !d.university) return;
@@ -7982,30 +7991,32 @@ function pbsaBuildCatchment(fit) {
     if (note) note.textContent = "Catchment maths needs the Turf library, which didn't load — check the network and refresh.";
     return;
   }
+  const seq = ++pbsa.catchSeq;          // newer build supersedes this one
   const uni = d.university;
   const T = pbsa.catchMins;
   const mode = pbsa.catchMode;
   const circle = (lng, lat, meters) =>
     turf.circle([lng, lat], Math.max(meters, 150) / 1000, { steps: 40, units: "kilometers" });
 
-  const discs = [];
+  // Every catchment is a union of travel "sites": each has coordinates, the
+  // minutes of onward travel from it, and the ring radius those minutes buy.
+  // The precise toggle swaps rings for real street-network isochrones.
+  const sites = [];
   let noteText = "";
+  let reached = 0;
   if (mode === "walk" || mode === "cycle") {
     const speed = mode === "walk" ? CATCH_WALK_MPM : CATCH_CYCLE_MPM;
-    discs.push(circle(uni.lng, uni.lat, T * speed));
-    noteText = `${T} min ${mode === "walk" ? "walking (4.8 km/h)" : "cycling (~15 km/h)"} — a straight-line ring adjusted for street detours, not full routing.`;
+    sites.push({ lng: uni.lng, lat: uni.lat, mins: T, radiusM: T * speed });
+    noteText = `${T} min ${mode === "walk" ? "walking (4.8 km/h)" : "cycling (~15 km/h)"}`;
   } else {
-    // Rail + walk: walk ring from campus, plus a ring per reachable station
-    // sized by the time left after walking + train + interchange.
-    discs.push(circle(uni.lng, uni.lat, T * CATCH_WALK_MPM));
+    sites.push({ lng: uni.lng, lat: uni.lat, mins: T, radiusM: T * CATCH_WALK_MPM });
     const gwWalkMin = {};
     for (const g of d.gateways || []) {
       const w = (g.walk_m ?? 1200) / CATCH_WALK_MPM;
       gwWalkMin[g.crs] = w;
       const r = T - w;
-      if (r > 3) discs.push(circle(g.lng, g.lat, r * CATCH_WALK_MPM));
+      if (r > 3) sites.push({ lng: g.lng, lat: g.lat, mins: r, radiusM: r * CATCH_WALK_MPM });
     }
-    let reached = 0;
     const feeders = (d.feeders || [])
       .filter(f => f.minutes != null && (f.trains_day ?? 0) >= pbsa.minTrains)
       .map(f => {
@@ -8015,14 +8026,59 @@ function pbsaBuildCatchment(fit) {
       .filter(f => f.remaining > 3)
       .sort((a, b) => b.remaining - a.remaining)
       .slice(0, 200);
-    for (const f of feeders) { discs.push(circle(f.lng, f.lat, f.remaining * CATCH_WALK_MPM)); reached++; }
+    for (const f of feeders) {
+      sites.push({ lng: f.lng, lat: f.lat, mins: f.remaining, radiusM: f.remaining * CATCH_WALK_MPM });
+      reached++;
+    }
     noteText = d.links_loaded
-      ? `${reached} station${reached === 1 ? "" : "s"} reachable door-to-campus in ≤ ${T} min (timetable train times + walking at 4.8 km/h + ${CATCH_INTERCHANGE_MIN} min interchange). Each ring is sized by the minutes left after the journey. Respects the min trains/day criterion above.`
+      ? `${reached} station${reached === 1 ? "" : "s"} reachable door-to-campus in ≤ ${T} min (timetable train times + walking legs + ${CATCH_INTERCHANGE_MIN} min interchange). Respects the min trains/day criterion above.`
       : `Rail journey links aren't loaded yet, so this shows the walking zone only — run the rail-links workflow to light up the full rail catchment.`;
   }
 
-  // Dissolve the rings into one zone. Turf v7 unions a FeatureCollection;
-  // fall back to the v6 pairwise signature if that's what loaded.
+  const discs = [];
+  if (pbsa.catchPrecise) {
+    // Street-network isochrones via the free OSM Valhalla service. Calls are
+    // sequential and capped to be kind to it; the biggest zones (most map
+    // area) get the precise treatment, the tail keeps rings; any failed call
+    // quietly falls back to that site's ring.
+    const MAX_ISO = 18;
+    const isoMode = mode === "cycle" ? "bicycle" : "pedestrian";
+    const ordered = sites.slice().sort((a, b) => b.mins - a.mins);
+    const isoSites = ordered.slice(0, MAX_ISO);
+    const restSites = ordered.slice(MAX_ISO);
+    let isoReal = 0, isoApprox = 0;
+    for (let i = 0; i < isoSites.length; i++) {
+      if (pbsa.catchSeq !== seq) return;          // superseded mid-fetch
+      if (note) note.textContent = `Fetching street isochrones… ${i + 1}/${isoSites.length}`;
+      const s2 = isoSites[i];
+      let poly = null;
+      try {
+        poly = await fetchIsochrone(s2.lng, s2.lat, isoMode,
+          Math.max(2, Math.round(s2.mins)), { forceNetwork: true });
+      } catch (_) {}
+      if (pbsa.catchSeq !== seq) return;
+      if (poly && !(poly.properties && (poly.properties._approx || poly.properties._circle))) {
+        discs.push(poly); isoReal++;
+      } else {
+        discs.push(poly || circle(s2.lng, s2.lat, s2.radiusM)); isoApprox++;
+      }
+    }
+    for (const s2 of restSites) discs.push(circle(s2.lng, s2.lat, s2.radiusM));
+    noteText += isoReal
+      ? ` Street-network isochrones for the ${isoReal} biggest zone${isoReal === 1 ? "" : "s"}` +
+        (isoApprox || restSites.length ? ` (${isoApprox + restSites.length} smaller ones stay as rings)` : "") +
+        ` — routing © OpenStreetMap/Valhalla.`
+      : ` The routing service wasn't reachable — showing detour-adjusted rings instead.`;
+  } else {
+    for (const s2 of sites) discs.push(circle(s2.lng, s2.lat, s2.radiusM));
+    if (mode === "walk" || mode === "cycle")
+      noteText += " — a straight-line ring adjusted for street detours; tick the precise option for true street-network isochrones.";
+    else if (d.links_loaded)
+      noteText += " Rings are detour-adjusted straight-line zones; tick the precise option for street-network isochrones.";
+  }
+
+  // Dissolve into one zone. Turf v7 unions a FeatureCollection; fall back to
+  // the v6 pairwise signature if that's what loaded.
   let zone = discs[0];
   for (let i = 1; i < discs.length; i++) {
     let merged = null;
@@ -8030,6 +8086,7 @@ function pbsaBuildCatchment(fit) {
     if (!merged) { try { merged = turf.union(zone, discs[i]); } catch (_) {} }
     if (merged) zone = merged;
   }
+  if (!zone || pbsa.catchSeq !== seq) return;
 
   pbsaCatchDraw(zone, CATCH_COLORS[mode]);
   pbsa.catchOn = true;

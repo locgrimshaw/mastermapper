@@ -2351,3 +2351,16 @@ footer {
   cursor: pointer;
 }
 #catch-build:hover { background: #5f3dc4; }
+
+/* Precise-isochrone toggle in the PBSA catchment block */
+.catch-precise {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 2px 0 6px;
+  font-size: 11.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.catch-precise input { margin-top: 2px; }
+.catch-precise .cp-dim { color: var(--text-dim); }
