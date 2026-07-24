@@ -1,0 +1,123 @@
+# Manual tasks — step-by-step guide
+
+Every layer below is already fully wired into the app. The ONLY missing piece
+for each one is a file or URL that needs a human (login walls, hashed download
+links, licence acceptances). Do a task, then run the loader (last section) —
+the layer lights up on the map.
+
+**The two mechanisms** (each task says which to use):
+
+- **Drop-in file** — upload the file straight into the repo through the GitHub
+  website: open <https://github.com/locgrimshaw/mastermapper/upload/main/data/raw>,
+  drag the file in, **rename it to the exact filename given** (click the
+  filename box), press **Commit changes**. Works for files up to ~25 MB.
+- **Repo variable** — for big files that stay hosted at their source: open
+  <https://github.com/locgrimshaw/mastermapper/settings/variables/actions>,
+  press **New repository variable**, enter the **Name** given and paste the
+  URL as the **Value**, save.
+
+---
+
+## 1. HESA student numbers → powers the university deep-dive card
+
+1. Go to <https://www.hesa.ac.uk/data-and-analysis/students/where-study>.
+2. Find the table of **HE student enrolments by HE provider** (latest year)
+   and download the CSV.
+3. Open it in Excel. Make a simple sheet with ONE ROW PER PROVIDER and these
+   columns (exact names don't matter — the pipeline detects them):
+   - `UKPRN` (required)
+   - `Total students`
+   - `Full-time` (full-time student count)
+   - `International` (non-UK domiciled count)
+   - `Postgraduate` (optional)
+   Delete any metadata/preamble rows above the header row.
+4. Save as CSV → **drop-in file** named **`hesa_students.csv`**.
+
+## 2. NESO TEC register → the grid connection queue (MW per site)
+
+1. Go to <https://www.neso.energy/data-portal/transmission-entry-capacity-tec-register>.
+2. Find the latest **TEC Register** resource and right-click its CSV download
+   button → **Copy link address**.
+3. **Repo variable** `TEC_SRC` = that link. (If the link looks unstable,
+   download the CSV instead → drop-in file named **`tec-register.csv`**.)
+
+## 3. NESO Grid Supply Point boundaries
+
+1. Go to <https://www.neso.energy/data-portal/gis-boundaries-gb-grid-supply-points>.
+2. Copy the download link of the **GeoJSON** version (there's usually GeoJSON
+   alongside the shapefile).
+3. **Repo variable** `GSP_SRC` = that link (or drop-in file named
+   **`gsp-boundaries.geojson`**).
+
+## 4. TfL PTAL grid → London transport accessibility
+
+1. Go to <https://data.london.gov.uk/dataset/public-transport-accessibility-levels-24rz6/>
+   (or search "PTAL" on data.london.gov.uk).
+2. Download the **PTAL grid values CSV** (the file with X, Y coordinates and a
+   PTAL grade per 100 m grid point — pick the most recent base year).
+3. **Drop-in file** named **`ptal_grid.csv`**.
+
+## 5. ONS private rents → LA rents choropleth
+
+1. Go to <https://www.ons.gov.uk/economy/inflationandpriceindices/bulletins/privaterentandhousepricesuk/latest>
+   and open the **Price Index of Private Rents** data downloads (or the
+   companion dataset
+   <https://www.ons.gov.uk/peoplepopulationandcommunity/housing/datasets/privaterentalmarketsummarystatisticsinengland>).
+2. Download the **local-authority level** table (average monthly rents,
+   ideally with bedroom-count breakdowns). If it's XLSX, open it and save the
+   LA-level sheet as CSV (delete preamble rows above the header).
+3. **Drop-in file** named **`ons-la-rents.csv`**.
+
+## 6. EA water availability → data-centre water feasibility
+
+1. Go to <https://environment.data.gov.uk/dataset/62514eb5-e9d5-4d96-8b73-a40c5b702d43>
+   (Water Resource Availability and Abstraction Reliability — CAMS).
+2. Download the **GeoJSON** version if offered.
+3. If < 25 MB: **drop-in file** named **`water-availability.geojson`**.
+   If larger: **repo variable** `WATER_SRC` = the download link.
+
+## 7. Agricultural Land Classification (fix the failed default)
+
+1. Go to <https://naturalengland-defra.opendata.arcgis.com/> and search
+   **"Provisional Agricultural Land Classification (ALC)"**.
+2. On the dataset page press **Download** → choose **GeoJSON** → when the file
+   is generated, right-click the download button → **Copy link address**.
+3. **Repo variable** `ALC_SRC` = that link.
+
+## 8. HM Land Registry account → council-owned land (v2 layer)
+
+1. Go to <https://use-land-property-data.service.gov.uk/> → **Create account**
+   (free).
+2. Once signed in, request access to **"UK companies that own property in
+   England and Wales" (CCOD)** — free, but you must accept its licence.
+3. Don't upload anything anywhere (the file is ~400 MB and licence-restricted
+   — it must NOT go in the public repo). Just tell Claude when the account is
+   ready and we'll wire a private storage route.
+   (The INSPIRE parcel polygons at
+   <https://use-land-property-data.service.gov.uk/datasets/inspire> need no
+   account — that side is already automatable.)
+
+## 9. DNO registrations → real grid capacity/headroom (v2 layers)
+
+1. **UKPN** (London/South East — the important one): go to
+   <https://ukpowernetworks.opendatasoft.com/> → Sign up (free). Then find the
+   **Grid and Primary sites** dataset (has demand headroom per substation),
+   open its **Export** tab, copy the **GeoJSON** link, and send it to Claude.
+2. **NGED** (Midlands/South West/South Wales): go to
+   <https://connecteddata.nationalgrid.co.uk/> → Register (free). Same idea:
+   find the network-capacity / substation dataset and copy its export link.
+
+---
+
+## Finally: run the loader (after any of tasks 1–7)
+
+1. Go to <https://github.com/locgrimshaw/mastermapper/actions/workflows/load-datasets.yml>.
+2. Press **Run workflow** (grey button, right side).
+3. In the *datasets* box either leave it **blank** (rebuild everything) or
+   type just the ones you've supplied, e.g. `tec_register,gsp_boundary` or
+   `la_rents,ptal,alc,water_availability,uni_campus`.
+4. Press the green **Run workflow** button. Give it 10–40 minutes (longer if
+   power/university datasets are included — those re-download OpenStreetMap).
+5. When the run shows a green tick, hard-refresh the map (Ctrl/Cmd-Shift-R)
+   and the layers will populate. Any dataset that still failed shows a
+   ⚠ warning in the run's logs saying exactly what it needs.

@@ -95,3 +95,11 @@ node_modules/
 !data/raw/ttwa_top60.csv
 !data/raw/ttwa_2011.geojson
 !data/raw/ttwa_gva.xlsx
+# Operator-supplied dataset sources (docs/MANUAL_TASKS.md) — drop-in files the
+# datasets pipeline picks up by exact name, uploadable via the GitHub web UI.
+!data/raw/hesa_students.csv
+!data/raw/ptal_grid.csv
+!data/raw/tec-register.csv
+!data/raw/gsp-boundaries.geojson
+!data/raw/ons-la-rents.csv
+!data/raw/water-availability.geojson
