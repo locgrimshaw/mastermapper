@@ -1342,11 +1342,37 @@ def build_water_availability():
         return {}
     print(f"  [{key}] reading {path.name} ({how}) ...")
     gdf = gpd.read_file(path)
-    status_col = _find_col(gdf, ["colour", "color", "status", "availab",
-                                 "class"], contains=True)
-    rows = _emit(gdf, key, name_col=None, want="polygon",
+    # The last run matched NO status column and every polygon loaded with
+    # empty props (flat colour, nothing to say on hover). Log the real column
+    # names, try harder for the availability class (Q95 = the low-flow screen
+    # that matters), and carry EVERY short scalar attribute so a miss never
+    # silently degrades to "no data" again.
+    print(f"  [{key}] columns: {list(gdf.columns)[:14]}")
+    status_col = _find_col(gdf, ["q95", "colour", "color", "status", "availab",
+                                 "class", "restrict"], contains=True)
+    name_col = _find_col(gdf, ["cams", "water_body", "waterbody", "wb_name",
+                               "name"], contains=True)
+    geom_col = gdf.geometry.name
+
+    def _props(feat):
+        p = {}
+        for c in feat.index:
+            if c == geom_col or len(p) >= 10:
+                continue
+            v = feat[c]
+            if v is None:
+                continue
+            s = str(v).strip()
+            if not s or s.lower() == "nan" or len(s) > 90:
+                continue
+            p[str(c).strip().lower()[:40]] = v if isinstance(v, (int, float)) else s
+        if status_col is not None:
+            p["status"] = _cell(feat, status_col)
+        return p
+
+    rows = _emit(gdf, key, name_col=name_col, want="polygon",
                  assume_epsg=27700,  # EA shapefiles are BNG when CRS missing
-                 props_fn=lambda f: {"status": _cell(f, status_col)})
+                 props_fn=_props)
     _note(key, how, len(rows))
     return {key: rows}
 

@@ -1070,8 +1070,17 @@ const MAP_OVERLAYS = [
     numFilter: () => ({ key: "kv", max: 50 }) },
   { key: "gsp_boundary",     group: "grid", label: "Grid Supply Point boundaries",  color: "#845ef7", dataset: "gsp_boundary",     render: "line",  minZoom: 4 },
   { key: "tec_register",     group: "grid", label: "Connection queue (TEC register)", color: "#1971c2", dataset: "tec_register",   render: "point", minZoom: 5, icon: "plug" },
-  { key: "ukpn_sites",       group: "grid", label: "UKPN substation headroom",        color: "#0ca678", dataset: "ukpn_sites",     render: "point", minZoom: 5, icon: "bolt" },
-  { key: "nged_sites",       group: "grid", label: "NGED substation headroom",        color: "#5c940d", dataset: "nged_sites",     render: "point", minZoom: 5, lim: 8000, icon: "bolt" },
+  // DNO headroom sites paint by their capacity signal, not a flat layer
+  // colour: UKPN classifies sites HOT (constrained) / COLD (headroom); NGED
+  // publishes a green/amber/red RAG plus the headroom MW itself — which also
+  // scales the dot and is written next to it at close zooms.
+  { key: "ukpn_sites",       group: "grid", label: "UKPN substation headroom",        color: "#0ca678", dataset: "ukpn_sites",     render: "point", minZoom: 5,
+    cap: { color: ["match", ["to-string", ["get", "siteclassification"]],
+                   "COLD", "#2f9e44", "HOT", "#e03131", "#868e96"] } },
+  { key: "nged_sites",       group: "grid", label: "NGED substation headroom",        color: "#5c940d", dataset: "nged_sites",     render: "point", minZoom: 5, lim: 8000,
+    cap: { color: ["match", ["downcase", ["to-string", ["coalesce", ["get", "demandconnectedrag"], ""]]],
+                   "green", "#2f9e44", "amber", "#f59f00", "red", "#e03131", "#868e96"],
+           mwKey: "demandconnectedheadroommw" } },
   // Site factors
   { key: "alc",                group: "sitefactors", label: "Agricultural land grades (ALC)", color: "#94d82d", dataset: "alc",                minZoom: 7 },
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
@@ -1122,11 +1131,11 @@ const LAYER_INFO = {
   power_sub_local:     { about: "Local distribution substations below 50 kV (and sites with no tagged voltage) — the street-level network. Dense: zoom right in.", source: "© OpenStreetMap contributors (ODbL)" },
   gsp_boundary:        { about: "Grid Supply Point boundaries — where the national transmission grid hands over to regional distribution networks.", source: "NESO Data Portal (open licence)" },
   tec_register:        { about: "The transmission connection queue: projects holding capacity agreements, with MW and status. Shows where the grid is contested.", source: "NESO TEC Register (open licence)" },
-  ukpn_sites:          { about: "UK Power Networks grid & primary substations with the DNO's own headroom attributes — real connection-capacity data for London, the South East and East. Click a site for full details.", source: "UK Power Networks Open Data (opendatasoft)" },
-  nged_sites:          { about: "National Grid Electricity Distribution primary & bulk supply substations with demand/generation headroom (MW) and RAG status — the Midlands, South West and South Wales capacity view. Click a site for full details.", source: "NGED Connected Data portal" },
-  alc:                 { about: "Agricultural Land Classification grades 1–5. Grades 1–3a are 'best and most versatile' — policy steers development away.", source: "Natural England (OGL v3)" },
+  ukpn_sites:          { about: "UK Power Networks grid & primary substations, coloured by the DNO's demand classification — green COLD sites have headroom, red HOT sites are constrained. London, the South East and East. Click a site for full details.", source: "UK Power Networks Open Data (opendatasoft)" },
+  nged_sites:          { about: "National Grid Electricity Distribution primary & bulk supply substations, coloured by their demand RAG (green/amber/red) and sized by connected headroom — the MW figure appears beside each site as you zoom in. Midlands, South West and South Wales. Click a site for full details.", source: "NGED Connected Data portal" },
+  alc:                 { about: "Agricultural Land Classification, coloured by grade — deep green Grade 1 (best and most versatile, policy steers development away) through amber Grade 4 and brown Grade 5; greys are urban/non-agricultural.", source: "Natural England (OGL v3)" },
   la_property:         { about: "Property titles owned by local authorities, aggregated to postcode points with a title count. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
-  water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — a proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
+  water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — green available, amber restricted, red not available. A proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
 };
 
 const OVERLAY_MIN_ZOOM = 7;           // default floor; per-layer minZoom overrides
@@ -1309,18 +1318,28 @@ function renderOverlay(key, def, fc) {
     // Substation tiers pass their own radius curve so bigger sites = bigger dots.
     const iconId = `ovicon-${key}`;
     const hasIcon = def.icon && map.hasImage && map.hasImage(iconId);
+    // Capacity-scaled radius (DNO headroom sites): dot area tracks the MW of
+    // headroom, multiplied by a zoom factor (the ["zoom"] interpolate must be
+    // the outer expression — same pattern as the station-usage dots).
+    let radius = def.radius || ["interpolate", ["linear"], ["zoom"], 5, 2.5, 10, 4.5, 14, 7];
+    if (def.cap && def.cap.mwKey) {
+      const mwCurve = ["interpolate", ["linear"],
+        ["coalesce", ["to-number", ["get", def.cap.mwKey]], 0],
+        0, 3, 5, 4.2, 20, 5.5, 60, 7, 150, 9];
+      radius = ["interpolate", ["linear"], ["zoom"],
+        5, ["*", mwCurve, 0.7], 10, ["*", mwCurve, 1.1], 14, ["*", mwCurve, 1.5]];
+    }
     map.addLayer({ id: ptId, type: "circle", source: srcId,
       // With an icon variant the plain dot only carries the far zooms.
       ...(hasIcon ? { maxzoom: 9 } : {}),
       paint: {
-        "circle-radius": def.radius || ["interpolate", ["linear"], ["zoom"], 5, 2.5, 10, 4.5, 14, 7],
-        "circle-color": def.color,
+        "circle-radius": radius,
+        "circle-color": (def.cap && def.cap.color) || def.color,
         "circle-opacity": Math.min(1, opacity * 2.5),
         "circle-stroke-color": "#ffffff",
         "circle-stroke-width": 1,
         "circle-stroke-opacity": Math.min(1, opacity * 2.5),
       } }, before);
-    wireOverlayTooltip(key, ptId);
     if (hasIcon) {
       map.addLayer({ id: `ov-${key}-icon`, type: "symbol", source: srcId, minzoom: 9,
         layout: {
@@ -1328,7 +1347,22 @@ function renderOverlay(key, def, fc) {
           "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.55, 12, 0.8, 15, 1],
         },
         paint: { "icon-opacity": Math.min(1, opacity * 2.5) } }, before);
-      wireOverlayTooltip(key, `ov-${key}-icon`);
+    }
+    // Headroom figure written next to the dot at close zooms.
+    if (def.cap && def.cap.mwKey) {
+      map.addLayer({ id: `ov-${key}-lbl`, type: "symbol", source: srcId, minzoom: 10.5,
+        filter: ["has", def.cap.mwKey],
+        layout: {
+          "text-field": ["concat", ["to-string",
+            ["/", ["round", ["*", ["to-number", ["get", def.cap.mwKey]], 10]], 10]], " MW"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 10,
+          "text-anchor": "top", "text-offset": [0, 0.9],
+          "text-optional": true,
+        },
+        paint: { "text-color": "#1c2533", "text-halo-color": "#ffffff",
+                 "text-halo-width": 1.3,
+                 "text-opacity": Math.min(1, opacity * 2.5) } }, before);
     }
     // Substations wear their voltage as a tiny number on the dot once the
     // dots are big enough to carry it.
@@ -1364,13 +1398,27 @@ function renderOverlay(key, def, fc) {
       layout: { "line-join": "round", "line-cap": "round" },
       paint: { "line-color": color, "line-width": width,
                "line-opacity": Math.min(1, opacity * 2.5) } }, before);
-    if (def.dataset === "power_line") wireOverlayTooltip(key, lineId);
   } else {
+    // Attribute-driven fills where the data carries a classification —
+    // painting these one flat colour throws the information away.
+    const waterStatus = ["downcase", ["to-string", ["coalesce", ["get", "status"], ""]]];
     const fillColor = def.dataset === "ptal"
       ? ["match", ["to-string", ["get", "ptal"]],
          "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
          "3", "#fee391", "4", "#fe9929", "5", "#ec7014",
          "6a", "#cc4c02", "6b", "#8c2d04", def.color]
+      : def.dataset === "alc"
+      ? ["match", ["to-string", ["get", "alc_grade"]],
+         "Grade 1", "#1f7a3a", "Grade 2", "#57a639", "Grade 3", "#a3c644",
+         "Grade 4", "#e0b64b", "Grade 5", "#a97e56",
+         "Non Agricultural", "#b8bfc6", "Urban", "#8d959e",
+         "Exclusion", "#d0d4d9", def.color]
+      : def.dataset === "water_availability"
+      ? ["case",
+         ["in", "not avail", waterStatus], "#e03131",
+         ["in", "restrict", waterStatus], "#f59f00",
+         ["in", "avail", waterStatus], "#2f9e44",
+         def.color]
       : def.color;
     map.addLayer({ id: fillId, type: "fill", source: srcId,
       paint: { "fill-color": fillColor, "fill-opacity": opacity } }, before);
@@ -1381,28 +1429,25 @@ function renderOverlay(key, def, fc) {
   updateOverlayAttribution();
 }
 
-// Click-to-inspect for dataset point/line overlays. (Hover is handled by the
-// central hover-card system — initHoverSystem — not per layer.)
-function wireOverlayTooltip(key, layerId) {
-  // Click pins a card with EVERY attribute the feature carries (voltage,
-  // operator, substation class, queued MW, ...). Same pattern as brownfield.
-  map.on("click", layerId, (e) => {
-    const p = e.features[0].properties || {};
-    hoverCardHide();
-    if (key === "uni_campus") {
-      openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, e.lngLat,
-        uniProviderCardHTML(p));
-      return;
-    }
-    const skip = new Set(["dataset"]);
-    const rows = Object.entries(p)
-      .filter(([k, v]) => !skip.has(k) && v != null && v !== "" && v !== "null")
-      .map(([k, v]) => `<tr><td class="ovp-k">${k}</td><td class="ovp-v">${v}</td></tr>`)
-      .join("");
-    openClickPopup({ closeButton: true, maxWidth: "320px", offset: 10 }, e.lngLat,
-      `<div class="ovp"><div class="ovp-title">${p.name || overlayDef(key)?.label || key}</div>` +
-      `<table class="ovp-table">${rows}</table></div>`);
-  });
+// Click-to-inspect card for any data-layer overlay feature. Invoked from the
+// central handleMapTap dispatcher (NOT per-layer click handlers, which would
+// double-fire alongside the LSOA panel). Pins a card with EVERY attribute the
+// feature carries (voltage, operator, headroom, queued MW, ...).
+function openOverlayCard(key, p, lngLat) {
+  hoverCardHide();
+  if (key === "uni_campus") {
+    openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, lngLat,
+      uniProviderCardHTML(p));
+    return;
+  }
+  const skip = new Set(["dataset"]);
+  const rows = Object.entries(p)
+    .filter(([k, v]) => !skip.has(k) && v != null && v !== "" && v !== "null")
+    .map(([k, v]) => `<tr><td class="ovp-k">${_esc(k)}</td><td class="ovp-v">${_esc(v)}</td></tr>`)
+    .join("");
+  openClickPopup({ closeButton: true, maxWidth: "320px", offset: 10 }, lngLat,
+    `<div class="ovp"><div class="ovp-title">${_esc(p.name || overlayDef(key)?.label || key)}</div>` +
+    `<table class="ovp-table">${rows}</table></div>`);
 }
 
 // The PBSA-lens card for a university provider dot: headline student numbers
@@ -2487,9 +2532,12 @@ function hoverContentForOverlay(def, p) {
     rows = [row(p.mw != null ? `${Number(p.mw).toLocaleString()} MW` : null, "queued"),
             row(p.status, "status"), row(p.plant, "plant")];
   } else if (d === "ukpn_sites") {
-    const hk = Object.keys(p).find(k => k.includes("headroom") && !isNaN(Number(p[k])));
-    title = p.name || "UKPN site";
-    rows = [row(hk ? `${Number(p[hk]).toLocaleString()} MW` : null, "headroom")];
+    title = p.sitename || p.name || "UKPN site";
+    const cls = (p.siteclassification || "").toUpperCase();
+    rows = [row(cls === "COLD" ? "COLD — headroom available"
+                : cls === "HOT" ? "HOT — constrained" : (cls || null), "demand class"),
+            row(p.sitevoltage ? `${p.sitevoltage} kV` : null, "voltage"),
+            row(p.towncity, "location")];
   } else if (d === "nged_sites") {
     const hr = p.demandconnectedheadroommw ?? p.demand_connected_headroom_mw;
     title = p.name || "NGED site";
@@ -2505,6 +2553,11 @@ function hoverContentForOverlay(def, p) {
     rows = [row(p.titles ? `${p.titles} title${p.titles > 1 ? "s" : ""}` : null, "registered")];
   } else if (d === "alc") {
     title = p.alc_grade || p.name || "Agricultural land";
+    kind = "Agricultural land classification";
+  } else if (d === "water_availability") {
+    title = p.name || "Water body / catchment";
+    kind = "Water resource availability";
+    rows = [row(p.status, "availability")];
   } else if (d === "ptal") {
     title = `PTAL ${p.ptal ?? ""}`.trim();
     kind = "Public transport access";
@@ -3034,7 +3087,35 @@ function wireInteractions() {
       }
     }
 
-    // 3. LSOA zone — unless a deep dive is open (you're working inside one).
+    // 3. Data-layer overlay features — points/lines first (small targets beat
+    // big fills), then polygon fills. Handled here so a click opens ONE card
+    // instead of an overlay popup and the LSOA panel fighting each other.
+    const ovIds = [];
+    for (const o of MAP_OVERLAYS)
+      for (const sfx of ["icon", "pt", "line"])
+        if (map.getLayer(`ov-${o.key}-${sfx}`)) ovIds.push(`ov-${o.key}-${sfx}`);
+    for (const o of MAP_OVERLAYS)
+      if (map.getLayer(`ov-${o.key}-fill`)) ovIds.push(`ov-${o.key}-fill`);
+    if (ovIds.length) {
+      let hits = null;
+      try { hits = map.queryRenderedFeatures(box, { layers: ovIds }); } catch (_) {}
+      if (hits && hits.length) {
+        for (const id of ovIds) {
+          const f = hits.find(h => h.layer && h.layer.id === id);
+          if (!f) continue;
+          const m = id.match(/^ov-(.+)-(icon|pt|line|fill)$/);
+          const ll = f.geometry && f.geometry.type === "Point"
+            ? { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
+            : map.unproject([point.x, point.y]);
+          dbg("tap → overlay", id);
+          openOverlayCard(m[1], f.properties || {}, ll);
+          setDrawer(false);
+          return true;
+        }
+      }
+    }
+
+    // 4. LSOA zone — unless a deep dive is open (you're working inside one).
     if (!deep.active && map.getLayer("lsoa-fill")) {
       let hits = null;
       try { hits = map.queryRenderedFeatures(box, { layers: ["lsoa-fill"] }); } catch (_) {}
