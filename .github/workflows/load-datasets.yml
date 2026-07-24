@@ -57,32 +57,34 @@ jobs:
       # when a power/tec dataset is requested — a BLANK datasets input means
       # "all", which counts as requested. Best-effort throughout: any failure
       # emits a ::warning and the builder simply skips the power datasets.
-      - name: Extract OSM power features (osmium)
-        if: ${{ inputs.datasets == '' || contains(inputs.datasets, 'power') || contains(inputs.datasets, 'tec') }}
+      - name: Extract OSM power + university features (osmium)
+        if: ${{ inputs.datasets == '' || contains(inputs.datasets, 'power') || contains(inputs.datasets, 'tec') || contains(inputs.datasets, 'uni') }}
         env:
           OSM_PBF_SRC: ${{ vars.OSM_PBF_SRC }}
+          DATASETS_INPUT: ${{ inputs.datasets }}
         run: |
           set -u
           mkdir -p data/raw
+          # Which extracts does this run actually need? (blank input = all)
+          WANT_POWER=0; WANT_UNI=0
+          if [ -z "$DATASETS_INPUT" ] || echo "$DATASETS_INPUT" | grep -qE 'power|tec'; then WANT_POWER=1; fi
+          if [ -z "$DATASETS_INPUT" ] || echo "$DATASETS_INPUT" | grep -q 'uni'; then WANT_UNI=1; fi
           if ! sudo apt-get update -qq || ! sudo apt-get install -y -qq osmium-tool gdal-bin; then
-            echo "::warning::apt install of osmium-tool/gdal-bin failed — power datasets will be skipped"
+            echo "::warning::apt install of osmium-tool/gdal-bin failed — OSM datasets will be skipped"
             exit 0
           fi
           PBF_URL="${OSM_PBF_SRC:-https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf}"
           echo "Downloading OSM PBF (~1.8 GB): $PBF_URL"
           if ! curl -fL --retry 3 --retry-delay 15 -o data/raw/uk.osm.pbf "$PBF_URL"; then
-            echo "::warning::OSM PBF download failed — power datasets will be skipped"
+            echo "::warning::OSM PBF download failed — OSM datasets will be skipped"
             exit 0
           fi
-          echo "Filtering power=line ways and power=substation features ..."
-          if ! osmium tags-filter data/raw/uk.osm.pbf w/power=line nwr/power=substation \
-               -o data/raw/power.osm.pbf --overwrite; then
-            echo "::warning::osmium tags-filter failed — power datasets will be skipped"
-            exit 0
-          fi
-          # Export config: keep only the tags the builder reads, and force
-          # closed power=substation ways to POLYGONS and power=line to LINES.
-          cat > data/raw/osm_export_config.json <<'EOF'
+          # Shared export attributes; per-extract tag lists below.
+          if [ "$WANT_POWER" = 1 ]; then
+            echo "Filtering power=line ways and power=substation features ..."
+            if osmium tags-filter data/raw/uk.osm.pbf w/power=line nwr/power=substation \
+                 -o data/raw/power.osm.pbf --overwrite; then
+              cat > data/raw/osm_export_config.json <<'EOF'
           {
             "attributes": { "type": false, "id": true, "version": false,
                             "changeset": false, "timestamp": false,
@@ -93,30 +95,55 @@ jobs:
             "area_tags": ["power=substation"]
           }
           EOF
-          # osmium export (assembles ways/areas itself and keeps tags as plain
-          # GeoJSON properties) is more robust here than ogr2ogr, whose OSM
-          # driver buries tags in an `other_tags` hstore by default.
-          if ! osmium export data/raw/power.osm.pbf \
-               -c data/raw/osm_export_config.json \
-               -o data/raw/osm_power.geojson -f geojson --overwrite; then
-            echo "::warning::osmium export failed — trying ogr2ogr fallback"
-            rm -f data/raw/osm_power.geojson
-            ok=1
-            for layer in lines multipolygons points; do
-              if [ ! -f data/raw/osm_power.geojson ]; then
-                ogr2ogr -f GeoJSON data/raw/osm_power.geojson \
-                  data/raw/power.osm.pbf "$layer" -t_srs EPSG:4326 || ok=0
-              else
-                ogr2ogr -f GeoJSON -append data/raw/osm_power.geojson \
-                  data/raw/power.osm.pbf "$layer" -t_srs EPSG:4326 || ok=0
+              if ! osmium export data/raw/power.osm.pbf \
+                   -c data/raw/osm_export_config.json \
+                   -o data/raw/osm_power.geojson -f geojson --overwrite; then
+                echo "::warning::osmium export failed — trying ogr2ogr fallback"
+                rm -f data/raw/osm_power.geojson
+                ok=1
+                for layer in lines multipolygons points; do
+                  if [ ! -f data/raw/osm_power.geojson ]; then
+                    ogr2ogr -f GeoJSON data/raw/osm_power.geojson \
+                      data/raw/power.osm.pbf "$layer" -t_srs EPSG:4326 || ok=0
+                  else
+                    ogr2ogr -f GeoJSON -append data/raw/osm_power.geojson \
+                      data/raw/power.osm.pbf "$layer" -t_srs EPSG:4326 || ok=0
+                  fi
+                done
+                if [ "$ok" -eq 0 ] || [ ! -s data/raw/osm_power.geojson ]; then
+                  echo "::warning::OSM power export failed entirely — power datasets will be skipped"
+                fi
               fi
-            done
-            if [ "$ok" -eq 0 ] || [ ! -s data/raw/osm_power.geojson ]; then
-              echo "::warning::OSM export failed entirely — power datasets will be skipped"
+            else
+              echo "::warning::osmium power tags-filter failed — power datasets will be skipped"
+            fi
+          fi
+          if [ "$WANT_UNI" = 1 ]; then
+            echo "Filtering amenity=university and building=university features ..."
+            if osmium tags-filter data/raw/uk.osm.pbf nwr/amenity=university \
+                 w/building=university r/building=university \
+                 -o data/raw/university.osm.pbf --overwrite; then
+              cat > data/raw/osm_uni_export_config.json <<'EOF'
+          {
+            "attributes": { "type": false, "id": true, "version": false,
+                            "changeset": false, "timestamp": false,
+                            "uid": false, "user": false, "way_nodes": false },
+            "include_tags": ["amenity", "building", "name", "operator",
+                             "website", "wikipedia"],
+            "area_tags": ["amenity=university", "building=university"]
+          }
+          EOF
+              if ! osmium export data/raw/university.osm.pbf \
+                   -c data/raw/osm_uni_export_config.json \
+                   -o data/raw/osm_university.geojson -f geojson --overwrite; then
+                echo "::warning::osmium university export failed — campus/building datasets will be skipped"
+              fi
+            else
+              echo "::warning::osmium university tags-filter failed — campus/building datasets will be skipped"
             fi
           fi
           # Free the big PBFs before the build step (runner disk is finite).
-          rm -f data/raw/uk.osm.pbf data/raw/power.osm.pbf
+          rm -f data/raw/uk.osm.pbf data/raw/power.osm.pbf data/raw/university.osm.pbf
           ls -lh data/raw || true
 
       - name: Build the datasets import CSV
@@ -133,6 +160,7 @@ jobs:
           LAD_BOUNDARIES_SRC: ${{ vars.LAD_BOUNDARIES_SRC }}
           ALC_SRC: ${{ vars.ALC_SRC }}
           WATER_SRC: ${{ vars.WATER_SRC }}
+          HESA_STUDENTS_SRC: ${{ vars.HESA_STUDENTS_SRC }}
         run: |
           echo "Building supabase/datasets_import.csv (DATASETS='${DATASETS}')"
           python pipeline/build_datasets.py

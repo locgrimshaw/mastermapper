@@ -845,7 +845,7 @@ function updateDataSourceNote() {
       el.textContent += " " + GREENBELT_ATTRIBUTION;
     }
     if (_osmPowerAttributionShown) {
-      el.textContent += " Power network © OpenStreetMap contributors (ODbL).";
+      el.textContent += " Power network & university footprints © OpenStreetMap contributors (ODbL).";
     }
   }
 }
@@ -1046,6 +1046,8 @@ const MAP_OVERLAYS = [
   { key: "design_code_area",    group: "policy", label: "Design code areas",             color: "#e8590c", dataset: "design_code_area",    minZoom: 8 },
   // Universities & students
   { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5 },
+  { key: "uni_campus_site", group: "students", label: "Campus grounds (OSM)",     color: "#9775fa", dataset: "uni_campus_site", minZoom: 8 },
+  { key: "uni_building",    group: "students", label: "University buildings (OSM)", color: "#5f3dc4", dataset: "uni_building", minZoom: 11 },
   { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 10 },
   // Market & boundaries
   { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
@@ -1098,7 +1100,9 @@ const LAYER_INFO = {
   article4:            { about: "Article 4 directions removing permitted development rights — often HMO conversion, so a strong student-housing pressure signal.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   tpo_zone:            { about: "Tree preservation order zones.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   design_code_area:    { about: "Areas covered by an adopted design code.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
-  uni_campus:          { about: "University and higher-education provider locations (one point per registered provider).", source: "UK Learning Providers / UKRLP (open data)" },
+  uni_campus:          { about: "One dot per registered HE provider (the HQ). Click a dot for the PBSA deep-dive card: student numbers, international share and more once HESA stats are loaded.", source: "UK Learning Providers / UKRLP (open data); stats: HESA (CC-BY)" },
+  uni_campus_site:     { about: "University campus grounds — the actual site extents, so multi-campus institutions show every campus, not just the HQ dot.", source: "© OpenStreetMap contributors (ODbL)" },
+  uni_building:        { about: "Individual university building footprints. Zoom in close — these are dense.", source: "© OpenStreetMap contributors (ODbL)" },
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, graded 0–6b. Greater London only.", source: "TfL / London Datastore (OGL)" },
   la_rents:            { about: "Average monthly private rents by local authority, including per-bedroom breakdowns where published.", source: "ONS Price Index of Private Rents (OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
@@ -1295,7 +1299,9 @@ function renderOverlay(key, def, fc) {
 // Desktop-only nicety — tap-to-inspect stays with the central dispatcher.
 function wireOverlayTooltip(key, layerId) {
   const tipProps = {
-    uni_campus: p => [p.name, p.groups].filter(Boolean).join(" · "),
+    uni_campus: p => [p.name, p.students_total ? Number(p.students_total).toLocaleString() + " students" : p.groups].filter(Boolean).join(" · "),
+    uni_campus_site: p => (p.name || p.operator || "University campus") + " · campus",
+    uni_building: p => (p.name || p.operator || "University building"),
     power_substation: p => [p.name || "Substation", p.kv ? `${p.kv} kV` : (p.voltage || "")].filter(Boolean).join(" · "),
     power_line: p => ["Power line", p.kv ? `${p.kv} kV` : (p.voltage || ""), p.operator].filter(Boolean).join(" · "),
     tec_register: p => [p.name || p.site, p.mw ? `${p.mw} MW` : "", p.status].filter(Boolean).join(" · "),
@@ -1312,24 +1318,60 @@ function wireOverlayTooltip(key, layerId) {
   // operator, substation class, queued MW, ...). Same pattern as brownfield.
   map.on("click", layerId, (e) => {
     const p = e.features[0].properties || {};
+    pop.remove();
+    if (key === "uni_campus") {
+      openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, e.lngLat,
+        uniProviderCardHTML(p));
+      return;
+    }
     const skip = new Set(["dataset"]);
     const rows = Object.entries(p)
       .filter(([k, v]) => !skip.has(k) && v != null && v !== "" && v !== "null")
       .map(([k, v]) => `<tr><td class="ovp-k">${k}</td><td class="ovp-v">${v}</td></tr>`)
       .join("");
-    pop.remove();
     openClickPopup({ closeButton: true, maxWidth: "320px", offset: 10 }, e.lngLat,
       `<div class="ovp"><div class="ovp-title">${p.name || overlayDef(key)?.label || key}</div>` +
       `<table class="ovp-table">${rows}</table></div>`);
   });
 }
 
+// The PBSA-lens card for a university provider dot: headline student numbers
+// (HESA join, when loaded), international share — the demand signals a
+// student-housing developer reads first — plus provider identity, with a
+// pointer to the campus/building layers for the physical footprint.
+function uniProviderCardHTML(p) {
+  const num = v => (v == null || v === "" || isNaN(Number(v))) ? null : Number(v);
+  const total = num(p.students_total), intl = num(p.students_intl),
+        ft = num(p.students_fulltime), pg = num(p.students_pg),
+        intlPct = num(p.intl_pct);
+  const statRow = (label, v, extra) => v == null ? "" :
+    `<tr><td class="ovp-k">${label}</td><td class="ovp-v"><strong>${v.toLocaleString()}</strong>${extra || ""}</td></tr>`;
+  let stats = "";
+  stats += statRow("Students", total);
+  stats += statRow("Full-time", ft, total ? ` <span class="ovp-dim">(${Math.round(100 * ft / total)}%)</span>` : "");
+  stats += statRow("International", intl, intlPct != null ? ` <span class="ovp-dim">(${intlPct}%)</span>` : "");
+  stats += statRow("Postgraduate", pg, total && pg != null ? ` <span class="ovp-dim">(${Math.round(100 * pg / total)}%)</span>` : "");
+  const statsBlock = stats
+    ? `<table class="ovp-table">${stats}</table>`
+    : `<p class="ovp-note">Student stats not loaded yet — supply the HESA per-provider CSV (HESA_STUDENTS_SRC) and re-run the datasets workflow.</p>`;
+  const meta = [
+    p.groups ? `<tr><td class="ovp-k">type</td><td class="ovp-v">${p.groups}</td></tr>` : "",
+    p.ukprn ? `<tr><td class="ovp-k">UKPRN</td><td class="ovp-v">${p.ukprn}</td></tr>` : "",
+  ].join("");
+  return `<div class="ovp">
+    <div class="ovp-title">${p.name || "HE provider"}</div>
+    ${statsBlock}
+    <table class="ovp-table">${meta}</table>
+    <p class="ovp-note">Physical footprint: turn on <em>Campus grounds</em> and <em>University buildings</em> in Student housing &amp; demand.</p>
+  </div>`;
+}
+
 // ODbL requires visible attribution while OSM-derived power layers are shown.
 function updateOverlayAttribution() {
-  const powerOn = ["power_line", "power_substation"]
+  const osmOn = ["power_line", "power_substation", "uni_campus_site", "uni_building"]
     .some(k => overlayState[k] && overlayState[k].on);
-  if (powerOn !== _osmPowerAttributionShown) {
-    _osmPowerAttributionShown = powerOn;
+  if (osmOn !== _osmPowerAttributionShown) {
+    _osmPowerAttributionShown = osmOn;
     updateDataSourceNote();
   }
 }

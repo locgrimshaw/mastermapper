@@ -33,7 +33,15 @@ REGISTRY (dataset -> default source; all downloads land in data/raw/):
 
   Student housing:
     uni_campus   learning-provider.data.ac.uk learning-providers-plus.csv.
-                 Points; name = provider name; props: ukprn, groups.
+                 Points; name = provider name; props: ukprn, groups — plus
+                 per-provider student stats (students_total / _fulltime /
+                 _intl / _pg + intl_pct) joined by UKPRN from an optional
+                 HESA_STUDENTS_SRC CSV (see _load_hesa_stats).
+    uni_campus_site / uni_building
+                 OSM amenity=university grounds + building=university
+                 footprints from data/raw/osm_university.geojson (env
+                 OSM_UNIVERSITY_GEOJSON), extracted by the workflow from the
+                 same Geofabrik UK PBF as the power layers.
     ptal         NO default URL (London Datastore file paths are hashed) —
                  set PTAL_SRC to the TfL PTAL grid CSV (X,Y in EPSG:27700 +
                  PTAL grade / AI). Each grid point becomes a 100 m square.
@@ -132,7 +140,7 @@ ALC_DEFAULT_URL = ("https://services.arcgis.com/JJzESW51TqeY9uat/arcgis/rest/"
 ALL_DATASETS = [
     "lpa_boundary", "local_plan_boundary", "article4", "tpo_zone",
     "design_code_area",
-    "uni_campus", "ptal",
+    "uni_campus", "uni_campus_site", "uni_building", "ptal",
     "power_line", "power_substation", "gsp_boundary", "tec_register",
     "lad_boundary", "la_rents", "alc", "water_availability",
 ]
@@ -495,6 +503,69 @@ def build_planning_dataset(key):
     return {key: rows}
 
 
+def _load_hesa_stats():
+    """Optional per-provider student stats keyed by UKPRN, merged onto the
+    uni_campus points for the PBSA deep-dive card. Source: HESA_STUDENTS_SRC —
+    a CSV with a UKPRN column plus any of (detected case-insensitively,
+    'contains' matching): total students, full-time, international/non-UK,
+    postgraduate. Wide format, one row per provider; trim HESA's metadata
+    preamble lines if the raw download has them. Missing source = quiet skip
+    (the layer still builds, the card just has no stats)."""
+    path, how = _resolve_source("uni_campus_stats", ["HESA_STUDENTS_SRC"],
+                                None, "hesa_students.csv")
+    if path is None:
+        print("  [uni_campus] no HESA_STUDENTS_SRC — points build without "
+              "student stats (set it to a per-provider CSV keyed by UKPRN)")
+        return {}
+    try:
+        df = _read_csv(path)
+    except Exception as exc:
+        _warn("uni_campus", f"HESA stats CSV unreadable ({exc}) — continuing "
+                            "without stats")
+        return {}
+    ukprn_col = _find_col(df, ["ukprn"], contains=True)
+    if ukprn_col is None:
+        _warn("uni_campus", "HESA stats CSV has no UKPRN column — continuing "
+                            f"without stats (columns: {list(df.columns)[:10]})")
+        return {}
+    fields = {
+        "students_total": _find_col(df, ["total students", "students_total",
+                                         "total", "all students"], contains=True),
+        "students_fulltime": _find_col(df, ["full-time", "fulltime", "full time"],
+                                       contains=True),
+        "students_intl": _find_col(df, ["international", "non-uk", "non uk",
+                                        "overseas"], contains=True),
+        "students_pg": _find_col(df, ["postgraduate", "pg "], contains=True),
+    }
+    found = {k: c for k, c in fields.items() if c is not None}
+    if not found:
+        _warn("uni_campus", "no recognisable student-count columns in the HESA "
+                            "CSV — continuing without stats")
+        return {}
+    stats = {}
+    for _, r in df.iterrows():
+        try:
+            ukprn = str(int(float(r[ukprn_col])))
+        except (TypeError, ValueError):
+            continue
+        row = {}
+        for k, col in found.items():
+            v = pd.to_numeric(pd.Series([r[col]]).astype(str)
+                              .str.replace(",", "", regex=False),
+                              errors="coerce").iloc[0]
+            if pd.notna(v):
+                row[k] = int(v)
+        if row:
+            # Derived share the PBSA card leads with.
+            if "students_total" in row and row["students_total"] > 0 \
+                    and "students_intl" in row:
+                row["intl_pct"] = round(100.0 * row["students_intl"]
+                                        / row["students_total"], 1)
+            stats[ukprn] = row
+    print(f"  [uni_campus] HESA stats joined for {len(stats)} providers ({how})")
+    return stats
+
+
 def build_uni_campus():
     key = "uni_campus"
     path, how = _resolve_source(key, ["UNI_CAMPUS_SRC"], UNI_CAMPUS_URL,
@@ -525,11 +596,71 @@ def build_uni_campus():
         print(f"  [{key}] dropped {before - len(df)} row(s) without coordinates")
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df["_lon"], df["_lat"]),
                            crs=4326)
+    hesa = _load_hesa_stats()
+
+    def _props(f):
+        ukprn_raw = _cell(f, ukprn_col)
+        p = {"ukprn": ukprn_raw, "groups": _cell(f, groups_col)}
+        try:
+            p.update(hesa.get(str(int(float(ukprn_raw))), {}))
+        except (TypeError, ValueError):
+            pass
+        return p
+
     rows = _emit(gdf, key, name_col=name_col, id_col=ukprn_col, want="point",
-                 props_fn=lambda f: {"ukprn": _cell(f, ukprn_col),
-                                     "groups": _cell(f, groups_col)})
-    _note(key, how, len(rows))
+                 props_fn=_props)
+    _note(key, how + (" + HESA stats" if hesa else ""), len(rows))
     return {key: rows}
+
+
+def build_university_group():
+    """uni_campus_site (amenity=university grounds) + uni_building
+    (building=university footprints) from the workflow's osmium university
+    extract — the full physical footprint of each institution, complementing
+    the one-dot-per-provider uni_campus layer."""
+    src = os.environ.get("OSM_UNIVERSITY_GEOJSON", "").strip() \
+        or str(RAW / "osm_university.geojson")
+    path = Path(src)
+    if not path.exists():
+        for k in ("uni_campus_site", "uni_building"):
+            _note(k, "osm_university.geojson missing")
+        _warn("uni_campus_site/uni_building",
+              f"{path} not found. The GitHub workflow extracts it from the UK"
+              " OSM PBF alongside the power extract; locally, run the osmium"
+              " steps from .github/workflows/load-datasets.yml or set"
+              " OSM_UNIVERSITY_GEOJSON.")
+        return {}
+    print(f"  [university] reading {path.name} ...")
+    gdf = gpd.read_file(path)
+    amenity_col = _find_col(gdf, ["amenity"])
+    building_col = _find_col(gdf, ["building"])
+    name_col = _find_col(gdf, ["name"])
+    op_col = _find_col(gdf, ["operator"])
+    web_col = _find_col(gdf, ["website"])
+    out = {}
+
+    is_poly = gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])
+    if amenity_col is not None:
+        am = gdf[amenity_col].astype(str).str.strip().str.lower()
+        sites = gdf[(am == "university") & is_poly]
+        out["uni_campus_site"] = _emit(
+            sites, "uni_campus_site", name_col=name_col, want="polygon",
+            props_fn=lambda f: {"operator": _cell(f, op_col),
+                                "website": _cell(f, web_col)})
+        _note("uni_campus_site", "osmium extract", len(out["uni_campus_site"]))
+    else:
+        _note("uni_campus_site", "no amenity tag in extract")
+
+    if building_col is not None:
+        bl = gdf[building_col].astype(str).str.strip().str.lower()
+        builds = gdf[(bl == "university") & is_poly]
+        out["uni_building"] = _emit(
+            builds, "uni_building", name_col=name_col, want="polygon",
+            props_fn=lambda f: {"operator": _cell(f, op_col)})
+        _note("uni_building", "osmium extract", len(out["uni_building"]))
+    else:
+        _note("uni_building", "no building tag in extract")
+    return out
 
 
 def build_ptal():
@@ -962,6 +1093,7 @@ GROUPS = (
      for k in PLANNING_DATASETS]
     + [
         (["uni_campus"], build_uni_campus, []),
+        (["uni_campus_site", "uni_building"], build_university_group, []),
         (["ptal"], build_ptal, []),
         (["power_line", "power_substation"], build_power_group,
          ["tec_register"]),

@@ -2166,3 +2166,7 @@ footer {
 .ovp-table td { padding: 2px 6px 2px 0; vertical-align: top; }
 .ovp-k { color: #5d6b80; font-family: var(--font-data); font-size: 10.5px; white-space: nowrap; }
 .ovp-v { word-break: break-word; }
+
+/* University provider card extras */
+.ovp-dim { color: #5d6b80; font-size: 11px; }
+.ovp-note { margin: 6px 0 0; font-size: 11px; color: #5d6b80; line-height: 1.45; }
