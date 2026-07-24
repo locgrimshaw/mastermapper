@@ -17,4 +17,9 @@
 window.MASTERMAPPER_CONFIG = {
   SUPABASE_URL: "https://vwljbgyrsnnubrbjaxbc.supabase.co",       // e.g. "https://abcdefgh.supabase.co"
   SUPABASE_ANON_KEY: "sb_publishable_j55jzkpiaVPeAYii1RoCxA_RX1bt956",  // e.g. "eyJhbGciOi..."
+  // Optional: absolute origin+path to load the data/ assets (tiles, stations,
+  // green belt, breaks) from, e.g. "https://locgrimshaw.github.io/mastermapper/".
+  // Leave empty for normal same-origin loading. Used by preview deployments of
+  // the frontend so they don't need to ship ~130 MB of data files.
+  DATA_BASE: "",
 };

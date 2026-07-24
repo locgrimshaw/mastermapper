@@ -438,6 +438,17 @@ map.addControl(new maplibregl.NavigationControl(), "top-right");
 
 const SOURCE_LAYER = "lsoa";   // must match the tippecanoe -l layer name
 
+// Runtime data assets (tiles, breaks, stations, green belt) normally live
+// alongside the site under data/. Setting DATA_BASE in config.js points them
+// at another origin instead — e.g. a preview deployment of just the frontend
+// reading the live site's data — so previews don't ship ~130 MB of data.
+// Unset/empty = same-origin relative paths, exactly as before.
+function dataUrl(rel) {
+  const base = ((typeof window !== "undefined" && window.MASTERMAPPER_CONFIG) || {}).DATA_BASE;
+  if (!base) return rel;
+  return new URL(rel, base.endsWith("/") ? base : base + "/").href;
+}
+
 async function loadData() {
   // Register the PMTiles protocol so MapLibre can read our single tile file
   // via HTTP range requests (only the visible tiles are fetched).
@@ -449,7 +460,7 @@ async function loadData() {
   // no-store so the build_id we read here is always the latest (otherwise a
   // cached breaks.json would hand us a stale build_id and defeat the buster).
   try {
-    const br = await fetch("data/breaks.json", { cache: "no-store" });
+    const br = await fetch(dataUrl("data/breaks.json"), { cache: "no-store" });
     if (br.ok) state.breaksData = await br.json();
   } catch { state.breaksData = null; }
 
@@ -472,7 +483,7 @@ async function loadData() {
   // tiles), loaded like crime/amenities. Optional: absent file → no station
   // mode, everything else works.
   try {
-    const sr = await fetch("data/stations.geojson", { cache: "no-store" });
+    const sr = await fetch(dataUrl("data/stations.geojson"), { cache: "no-store" });
     if (sr.ok) {
       state.stationsData = await sr.json();
       state.hasStations = (state.stationsData.features || []).length > 0;
@@ -492,7 +503,7 @@ async function loadData() {
   // uses HTTP range requests; the query string makes each build a new URL.
   const buildId = state.breaksData?.meta?.build_id || "";
   const tilesPath = "data/lsoa.pmtiles" + (buildId ? `?v=${buildId}` : "");
-  const tilesUrl = "pmtiles://" + new URL(tilesPath, location.href).href;
+  const tilesUrl = "pmtiles://" + new URL(dataUrl(tilesPath), location.href).href;
 
   map.addSource("lsoa", {
     type: "vector",
@@ -843,7 +854,7 @@ function updateDataSourceNote() {
 // absent (not built yet) the rest of the map is unaffected.
 async function loadGreenbelt() {
   try {
-    const r = await fetch("data/greenbelt.geojson", { cache: "no-store" });
+    const r = await fetch(dataUrl("data/greenbelt.geojson"), { cache: "no-store" });
     if (!r.ok) return;
     const gj = await r.json();
     const n = (gj.features || []).length;
