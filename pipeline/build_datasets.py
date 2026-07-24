@@ -1729,7 +1729,17 @@ def build_bus_route():
     name_col = "name" if "name" in gdf.columns else None
     has_ref = "ref" in gdf.columns
     has_op = "operator" in gdf.columns
-    rows = _emit(gdf, key, name_col=name_col, want="line",
+    # Routes are enormous multilinestrings (a 40 km route carries thousands
+    # of vertices) and the display path simplifies per query — pre-simplify
+    # to 25 m here so urban bbox fetches stay ~1 s instead of ~18 s.
+    try:
+        g27 = gdf.to_crs(27700)
+        g27["geometry"] = g27.geometry.simplify(25, preserve_topology=False)
+        gdf = g27.to_crs(4326)
+        gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
+    except Exception as exc:
+        print(f"  [{key}] pre-simplify skipped ({exc})")
+    rows = _emit(gdf, key, name_col=name_col, want="line", simplify=False,
                  props_fn=lambda f: {k: v for k, v in (
                      ("ref", _cell(f, "ref") if has_ref else None),
                      ("operator", _cell(f, "operator") if has_op else None))
