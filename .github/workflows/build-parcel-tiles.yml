@@ -48,17 +48,18 @@ jobs:
 
       - name: Discover the local-authority download list
         run: |
+          # curl with a cookie jar: the site sets a session cookie and then
+          # redirects; cookie-less clients (urllib) loop on the 302 forever.
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+          curl -fsSL -A "$UA" -c /tmp/ck -b /tmp/ck --max-redirs 10 \
+            -o inspire.html "https://use-land-property-data.service.gov.uk/datasets/inspire"
           python3 - <<'EOF'
-          import re, urllib.request
-          UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-          req = urllib.request.Request(
-              "https://use-land-property-data.service.gov.uk/datasets/inspire",
-              headers={"User-Agent": UA})
-          html = urllib.request.urlopen(req, timeout=120).read().decode("utf-8", "replace")
+          import re
+          html = open("inspire.html", encoding="utf-8", errors="replace").read()
           slugs = sorted(set(re.findall(r"/datasets/inspire/download/([^\"'/]+)\.zip", html)))
           if not slugs:
-              raise SystemExit("no download links found on the INSPIRE page — layout changed?")
+              raise SystemExit("no download links found on the INSPIRE page — layout changed? "
+                               "First 300 chars: " + html[:300])
           with open("las.txt", "w") as fh:
               fh.write("\n".join(slugs) + "\n")
           print(f"{len(slugs)} local authorities discovered")
@@ -75,7 +76,7 @@ jobs:
             n=$((n+1))
             if [ -n "$MAX_LAS" ] && [ "$n" -gt "$MAX_LAS" ]; then break; fi
             echo "($n) $slug"
-            if ! curl -fsSL -A "$UA" -o la.zip "https://use-land-property-data.service.gov.uk/datasets/inspire/download/${slug}.zip"; then
+            if ! curl -fsSL -A "$UA" -c /tmp/ck -b /tmp/ck -o la.zip "https://use-land-property-data.service.gov.uk/datasets/inspire/download/${slug}.zip"; then
               echo "::warning::download failed for $slug"; bad=$((bad+1)); continue
             fi
             gml=$(python3 -c "import zipfile,sys; print(next((m for m in zipfile.ZipFile('la.zip').namelist() if m.lower().endswith('.gml')),''))")
