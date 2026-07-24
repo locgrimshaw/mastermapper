@@ -1072,22 +1072,20 @@ const MAP_OVERLAYS = [
   // (~35 km -> ~550 m cells); the numFilter picks the resolution for the
   // zoom, so the same toggle reads cleanly from a national view down to
   // street blocks. Borderless fills — the colour IS the story.
-  { key: "price_heat", group: "market", label: "Sold prices (3-yr heatmap)", color: "#c2255c", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
+  { key: "price_heat", group: "market", label: "Sold prices (3-yr heatmap)", color: "#d73027", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
     datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
                   : z < 11  ? "price_grid_m" : "price_grid_f",
-    // YlOrRd ramp: pale = cheap, deep red = expensive. Median sold price.
-    heatColor: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "med"]], 0],
-      80000, "#ffffcc", 150000, "#ffeda0", 220000, "#fed976",
-      300000, "#feb24c", 420000, "#fd8d3c", 600000, "#fc4e2a",
-      850000, "#e31a1c", 1200000, "#bd0026", 2000000, "#800026"] },
-  { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr heatmap)", color: "#5f3dc4", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
+    // Kernel weight: median price -> 0..1 (blue ~£80k ... red £1.5M+).
+    heatWeight: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "med"]], 0],
+      60000, 0.06, 130000, 0.2, 200000, 0.34, 300000, 0.48,
+      450000, 0.62, 700000, 0.76, 1100000, 0.88, 1800000, 1] },
+  { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr heatmap)", color: "#7048e8", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
     datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
                   : z < 11  ? "price_grid_m" : "price_grid_f",
-    // PuRd ramp for £/m² (EPC-measured where matched, else type-mix est.).
-    heatColor: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "ppm2"]], 0],
-      1200, "#f1eef6", 2000, "#d4b9da", 2800, "#c994c7",
-      3600, "#df65b0", 4500, "#e7298a", 6000, "#ce1256",
-      8000, "#980043", 12000, "#67001f"] },
+    // Kernel weight: £/m² -> 0..1 (blue ~£1k ... red £10k+/m²).
+    heatWeight: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "ppm2"]], 0],
+      800, 0.06, 1500, 0.2, 2200, 0.34, 3000, 0.48,
+      4200, 0.62, 5800, 0.76, 8000, 0.88, 12000, 1] },
   // Individual transactions stay for comparables work — close zooms only.
   { key: "ppd_sales",    group: "market", label: "Individual sales (comparables)",  color: "#d64550", dataset: "ppd_sales", render: "point", minZoom: 14, lim: 6000,
     radius: ["interpolate", ["linear"], ["zoom"], 12, 2.5, 15, 5, 17, 7],
@@ -1168,8 +1166,8 @@ const LAYER_INFO = {
   conservation_area:  { about: "Areas of special architectural or historic interest where extra planning controls apply.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
   aonb:               { about: "Areas of Outstanding Natural Beauty / National Landscapes — nationally protected landscapes.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity. Sites in public ownership are flagged in the tooltip.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
-  price_heat:         { about: "Median sold price over the last 3 years, aggregated into cells that resize with your zoom (~35 km countrywide down to ~550 m street blocks). Pale = cheap, deep red = expensive. Cells with fewer than 3–5 sales are hidden.", source: "HM Land Registry Price Paid Data © Crown copyright (display use, with attribution)" },
-  ppm2_heat:          { about: "£ per m² over the last 3 years. Where sales address-match an EPC certificate, the cell shows the median of REAL price ÷ measured floor area (hover says how many matched sales). Cells without enough matches fall back to a property-type estimate (detached 104 m², semi 93, terrace 82, flat 57) marked with ~. EPC matching needs the free EPC account secrets — MANUAL_TASKS 5c.", source: "HM Land Registry Price Paid Data © Crown copyright; MHCLG EPC register (floor areas)" },
+  price_heat:         { about: "Median sold price over the last 3 years as one continuous value surface — deep blue cheap through green and yellow to red expensive, resolving from ~35 km countrywide down to ~550 m street blocks as you zoom. Hover anywhere for the exact local median and sale count. Areas with under 3–5 sales fade out rather than guess.", source: "HM Land Registry Price Paid Data © Crown copyright (display use, with attribution)" },
+  ppm2_heat:          { about: "£ per m² over the last 3 years as one continuous value surface (blue ~£1k/m² through green/yellow to red £10k+/m²). Where sales address-match an EPC certificate the local value is the median of REAL price ÷ measured floor area (hover says how many matched sales); thin-coverage areas fall back to a property-type estimate marked with ~. EPC matching needs the free account secrets — MANUAL_TASKS 5c.", source: "HM Land Registry Price Paid Data © Crown copyright; MHCLG EPC register (floor areas)" },
   spen_sites:         { about: "SP Energy Networks substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "SP Energy Networks open data portal (CC-BY/OGL-style licence)" },
   npg_sites:          { about: "Northern Powergrid substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "Northern Powergrid open data portal" },
   enwl_sites:         { about: "Electricity North West grid & primary substations with published demand headroom — click a dot for the full record.", source: "Electricity North West open data portal" },
@@ -1277,11 +1275,11 @@ function setOverlayOpacity(key, v) {
     const lineAlpha = def && def.render === "line" ? Math.min(1, v * 2.5) : Math.min(0.9, v * 2.2);
     map.setPaintProperty(`ov-${key}-line`, "line-opacity", lineAlpha);
   }
-  if (map.getLayer(`ov-${key}-pt`)) {
-    const ptAlpha = def && def.heatPoint ? Math.min(0.85, v * 1.9) : Math.min(1, v * 2.5);
-    map.setPaintProperty(`ov-${key}-pt`, "circle-opacity", ptAlpha);
-    if (!(def && def.heatPoint))
-      map.setPaintProperty(`ov-${key}-pt`, "circle-stroke-opacity", Math.min(1, v * 2.5));
+  if (map.getLayer(`ov-${key}-heat`))
+    map.setPaintProperty(`ov-${key}-heat`, "heatmap-opacity", Math.min(1, v * 2.2));
+  if (map.getLayer(`ov-${key}-pt`) && !(def && def.heatPoint)) {
+    map.setPaintProperty(`ov-${key}-pt`, "circle-opacity", Math.min(1, v * 2.5));
+    map.setPaintProperty(`ov-${key}-pt`, "circle-stroke-opacity", Math.min(1, v * 2.5));
   }
   if (map.getLayer(`ov-${key}-icon`))
     map.setPaintProperty(`ov-${key}-icon`, "icon-opacity", Math.min(1, v * 2.5));
@@ -1446,12 +1444,30 @@ function _cellsToPoints(fc) {
   }) };
 }
 
-// Circle radius tracking the price-grid cell size on screen (×~1.5 diameter
-// so neighbours overlap): a sawtooth over zoom — each resolution band starts
-// small and doubles until the next band takes over.
+// Kernel radius tracking the price-grid cell size on screen (×0.75, so the
+// kernels of neighbouring cells overlap into one surface): a sawtooth over
+// zoom — each resolution band starts small and doubles until the next band
+// takes over. Radius/cell-spacing stays a constant ratio, so the kernel
+// overlap factor (and therefore the density calibration) holds at any zoom.
 const HEAT_RADIUS = ["interpolate", ["exponential", 2], ["zoom"],
   4, 5.5, 6.4, 29, 6.5, 7.7, 8.4, 29, 8.5, 7.7, 10.9, 41,
   11, 11, 13, 44, 15, 120];
+
+// One spectral ramp for the value surface: transparent nothing -> blue cold
+// -> green -> yellow -> orange -> red hot, like a classic density heatmap.
+const HEAT_COLOR = ["interpolate", ["linear"], ["heatmap-density"],
+  0, "rgba(0,0,0,0)",
+  0.06, "rgba(49,54,149,0.45)",
+  0.18, "rgba(69,117,180,0.6)",
+  0.3, "rgba(116,173,209,0.68)",
+  0.42, "rgba(171,217,233,0.72)",
+  0.52, "rgba(224,243,248,0.75)",
+  0.6, "#ffffbf",
+  0.7, "#fee090",
+  0.79, "#fdae61",
+  0.87, "#f46d43",
+  0.94, "#d73027",
+  1, "#a50026"];
 
 function renderOverlay(key, def, fc) {
   const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`,
@@ -1465,14 +1481,27 @@ function renderOverlay(key, def, fc) {
   map.addSource(srcId, { type: "geojson", data: fc });
   const before = overlayBeforeId();
   if (def.heatPoint) {
-    map.addLayer({ id: ptId, type: "circle", source: srcId,
+    // True kernel-density surface (native heatmap renderer): each cell
+    // centre contributes a kernel WEIGHTED by its value. The cells sit on a
+    // uniform grid, so the summed density is proportional to the local
+    // value average — a single continuous gradient, not visible dots.
+    // Intensity compensates the constant kernel-overlap factor (~1.8).
+    map.addLayer({ id: `ov-${key}-heat`, type: "heatmap", source: srcId,
       paint: {
-        "circle-radius": HEAT_RADIUS,
-        "circle-color": def.heatColor || def.color,
-        "circle-blur": 0.9,
-        "circle-opacity": Math.min(0.85, opacity * 1.9),
-        "circle-stroke-width": 0,
+        "heatmap-radius": HEAT_RADIUS,
+        "heatmap-weight": def.heatWeight || 1,
+        "heatmap-intensity": 0.55,
+        "heatmap-color": HEAT_COLOR,
+        "heatmap-opacity": Math.min(1, opacity * 2.2),
       } }, before);
+    // Invisible hit-circles on the same source keep hover/click working —
+    // heatmap layers aren't feature-queryable.
+    map.addLayer({ id: ptId, type: "circle", source: srcId,
+      paint: { "circle-radius": ["interpolate", ["exponential", 2], ["zoom"],
+                 4, 3, 6.4, 15, 6.5, 4, 8.4, 15, 8.5, 4, 10.9, 21,
+                 11, 6, 13, 22, 15, 60],
+               "circle-color": "#000000", "circle-opacity": 0,
+               "circle-stroke-width": 0 } }, before);
   } else if (def.render === "point") {
     // Point dataset (campuses, substations, connection queue): circles that
     // scale slightly with zoom; opacity slider drives circle+stroke alpha.
@@ -1705,7 +1734,7 @@ let _osmPowerAttributionShown = false;
 
 function removeOverlayLayers(key) {
   for (const id of [`ov-${key}-fill`, `ov-${key}-line`, `ov-${key}-pt`,
-                    `ov-${key}-icon`, `ov-${key}-lbl`])
+                    `ov-${key}-icon`, `ov-${key}-lbl`, `ov-${key}-heat`])
     if (map.getLayer(id)) map.removeLayer(id);
   const srcId = `ov-${key}-src`;
   if (map.getSource(srcId)) map.removeSource(srcId);
