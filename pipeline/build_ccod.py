@@ -52,10 +52,18 @@ LA_NAME = re.compile(
     r"\bCOMMON COUNCIL\b|\bGREATER LONDON AUTHORITY\b", re.I)
 
 
+# The service sits behind Cloudflare bot protection which rejects Python's
+# default urllib signature outright (Error 1010) before the API key is even
+# looked at — a plain browser User-Agent lets legitimate keyed requests through.
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+
 def _api(path, key):
     req = urllib.request.Request(API_BASE + path,
                                  headers={"Authorization": key,
-                                          "Accept": "application/json"})
+                                          "Accept": "application/json",
+                                          "User-Agent": _UA})
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
             return json.loads(r.read().decode("utf-8"))
@@ -117,7 +125,8 @@ def download_zip(url, dest, key=None):
     presigned URLs, required if the direct route honours it), then without.
     Verifies the result is actually a zip — the website's own /download route
     answers a logged-out client with an HTML sign-in page, not the file."""
-    attempts = ([{"Authorization": key}] if key else []) + [{}]
+    attempts = ([{"Authorization": key, "User-Agent": _UA}] if key else []) \
+        + [{"User-Agent": _UA}]
     for hdrs in attempts:
         req = urllib.request.Request(url, headers=hdrs)
         try:
