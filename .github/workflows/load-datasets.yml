@@ -195,6 +195,9 @@ jobs:
         env:
           DATASETS: ${{ inputs.datasets }}
           SIMPLIFY_M: "10"
+          # Stream builder prints live — without this a long build shows
+          # nothing until the process exits (stdout buffers off-TTY).
+          PYTHONUNBUFFERED: "1"
           # Operator-supplied sources with no stable public default URL.
           # Configure these as repository Variables; blanks are ignored and
           # the builder skips that dataset with a warning.
