@@ -103,3 +103,5 @@ node_modules/
 !data/raw/gsp-boundaries.geojson
 !data/raw/ons-la-rents.csv
 !data/raw/water-availability.geojson
+!data/raw/nged-sites.csv
+!data/raw/ukpn-sites.geojson

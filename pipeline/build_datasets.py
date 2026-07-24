@@ -743,7 +743,15 @@ def build_ptal():
     if vec is None:
         _note(key, "zip source held no vector file")
         return {}
-    if vec != path or vec.suffix.lower() in (".geojson", ".json", ".gpkg", ".shp"):
+    # Content sniff: the download cache is always named ptal_grid.csv, so a
+    # GeoJSON fetched from the ArcGIS Hub default URL arrives with a .csv
+    # suffix — route by first byte, not extension.
+    try:
+        head = vec.open("rb").read(64).lstrip()
+    except OSError:
+        head = b""
+    is_json = head.startswith(b"{")
+    if is_json or vec != path or vec.suffix.lower() in (".geojson", ".json", ".gpkg", ".shp"):
         print(f"  [{key}] reading vector source {vec.name} ({how}) ...")
         gdf = gpd.read_file(vec)
         ptal_col = _find_col(gdf, ["ptal"], contains=True)
