@@ -162,6 +162,28 @@ NGED_SITES_URL = ("https://connecteddata.nationalgrid.co.uk/dataset/"
                   "967404e0-f25c-469b-8857-1a396f3c363f/resource/"
                   "d1895bd3-d9d2-4886-a0a3-b7eadd9ab6c2/download/"
                   "substations.csv?format=csv")
+# The four remaining DNOs, completing national headroom coverage alongside
+# UKPN + NGED. All run opendatasoft portals (except SSEN) whose dataset slugs
+# move around — the defaults below are best guesses; when one 404s the run
+# warns and the *_SITES_SRC repo variable takes an updated export URL
+# (see docs/MANUAL_TASKS.md 9b).
+DNO_SITES = [
+    ("spen_sites", "SPEN_SITES_SRC",
+     "https://spenergynetworks.opendatasoft.com/api/explore/v2.1/catalog/"
+     "datasets/spen-network-headroom/exports/csv?delimiter=%2C",
+     "spen-sites.csv", "SP Energy Networks (Scotland S + Merseyside/N Wales)"),
+    ("npg_sites", "NPG_SITES_SRC",
+     "https://northernpowergrid.opendatasoft.com/api/explore/v2.1/catalog/"
+     "datasets/substation-capacity-headroom/exports/csv?delimiter=%2C",
+     "npg-sites.csv", "Northern Powergrid (North East + Yorkshire)"),
+    ("enwl_sites", "ENWL_SITES_SRC",
+     "https://electricitynorthwest.opendatasoft.com/api/explore/v2.1/catalog/"
+     "datasets/grid-and-primary-headroom/exports/csv?delimiter=%2C",
+     "enwl-sites.csv", "Electricity North West"),
+    ("ssen_sites", "SSEN_SITES_SRC",
+     None,   # SSEN's portal is CKAN-based with hashed links — needs the var.
+     "ssen-sites.csv", "SSEN (north Scotland + central southern England)"),
+]
 LAD_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
                    "services/Local_Authority_Districts_December_2024_Boundaries"
                    "_UK_BGC/FeatureServer/0/query?where=1%3D1&outFields=*"
@@ -184,6 +206,7 @@ ALL_DATASETS = [
     "uni_campus", "uni_campus_site", "uni_building", "ptal",
     "power_line", "power_substation", "gsp_boundary", "tec_register",
     "ukpn_sites", "nged_sites",
+    "spen_sites", "npg_sites", "enwl_sites", "ssen_sites",
     "lad_boundary", "la_rents", "alc", "water_availability", "hdt",
     "planit_rates",
 ]
@@ -1085,6 +1108,89 @@ def build_nged_sites():
     return {key: rows}
 
 
+def _dno_points(df, key):
+    """CSV -> point GeoDataFrame via defensive coordinate sniffing (lat/lon,
+    easting/northing, or a WKT/`lat, lon` combined column). Returns None with
+    a warning when nothing coordinate-like exists."""
+    lat_col = _find_col(df, ["latitude", "lat"], contains=True)
+    lon_col = _find_col(df, ["longitude", "long", "lng"], contains=True)
+    east_col = _find_col(df, ["easting", "x"], contains=True)
+    north_col = _find_col(df, ["northing", "y"], contains=True)
+    geo_col = _find_col(df, ["geo_point", "geopoint", "location", "spatial",
+                             "coordinates"], contains=True)
+    df = df.copy()
+    if lat_col is not None and lon_col is not None:
+        df["_lat"] = pd.to_numeric(df[lat_col], errors="coerce")
+        df["_lon"] = pd.to_numeric(df[lon_col], errors="coerce")
+    elif east_col is not None and north_col is not None:
+        df["_e"] = pd.to_numeric(df[east_col], errors="coerce")
+        df["_n"] = pd.to_numeric(df[north_col], errors="coerce")
+        df = df[df["_e"].notna() & df["_n"].notna()]
+        return gpd.GeoDataFrame(
+            df, geometry=gpd.points_from_xy(df["_e"], df["_n"]),
+            crs=27700).to_crs(4326)
+    elif geo_col is not None:
+        # opendatasoft "geo_point_2d" style: "lat, lon" in one cell.
+        parts = df[geo_col].astype(str).str.extract(
+            r"(-?\d+\.?\d*)[,;\s]+(-?\d+\.?\d*)")
+        df["_lat"] = pd.to_numeric(parts[0], errors="coerce")
+        df["_lon"] = pd.to_numeric(parts[1], errors="coerce")
+    else:
+        _warn(key, f"no coordinate columns detected "
+                   f"(columns: {list(df.columns)[:12]}...)")
+        return None
+    df = df[df["_lat"].notna() & df["_lon"].notna()]
+    # Sanity: swapped lat/lon (portals disagree) — UK lat is 49..61.
+    if len(df) and not df["_lat"].between(49, 61.5).mean() > 0.5:
+        df[["_lat", "_lon"]] = df[["_lon", "_lat"]]
+        df = df[df["_lat"].between(49, 61.5)]
+    return gpd.GeoDataFrame(
+        df, geometry=gpd.points_from_xy(df["_lon"], df["_lat"]), crs=4326)
+
+
+def build_dno_group():
+    """The four remaining DNOs (SPEN / NPG / ENWL / SSEN) as *_sites point
+    datasets, mirroring ukpn_sites/nged_sites: every source column kept as a
+    prop so the click card shows the operator's own headroom vocabulary."""
+    out = {}
+    for key, env, default_url, drop_name, label in DNO_SITES:
+        path, how = _resolve_source(key, [env], default_url, drop_name)
+        if path is None:
+            _warn(key, f"{how} — set {env} to a CSV export from the {label} "
+                       "open data portal (docs/MANUAL_TASKS.md 9b)")
+            _note(key, how)
+            continue
+        print(f"  [{key}] reading {path.name} ({how}) ...")
+        try:
+            df = _read_csv(path)
+        except Exception as e:
+            _warn(key, f"unreadable CSV ({e}) — check {env}")
+            _note(key, "unreadable CSV")
+            continue
+        gdf = _dno_points(df, key)
+        if gdf is None or not len(gdf):
+            _note(key, "no mappable rows")
+            continue
+        name_col = _find_col(gdf, ["substation name", "site name", "sitename",
+                                   "site", "name"], contains=True)
+        cols = [c for c in gdf.columns
+                if c not in ("geometry", "_lat", "_lon", "_e", "_n")][:40]
+
+        def props_fn(f, _cols=cols):
+            out_p = {}
+            for c in _cols:
+                v = _jsonable(f[c])
+                if v not in (None, ""):
+                    out_p[_slug_key(c)] = v
+            return out_p
+
+        rows = _emit(gdf, key, name_col=name_col, want="point",
+                     props_fn=props_fn)
+        _note(key, how, len(rows))
+        out[key] = rows
+    return out
+
+
 def _norm_site(s):
     """Normalise a substation/connection-site name for fuzzy matching."""
     s = str(s or "").lower()
@@ -1583,6 +1689,8 @@ GROUPS = (
         (["ptal"], build_ptal, []),
         (["ukpn_sites"], build_ukpn_sites, []),
         (["nged_sites"], build_nged_sites, []),
+        (["spen_sites", "npg_sites", "enwl_sites", "ssen_sites"],
+         build_dno_group, []),
         (["power_line", "power_substation"], build_power_group,
          ["tec_register"]),
         (["gsp_boundary"], build_gsp_boundary, []),

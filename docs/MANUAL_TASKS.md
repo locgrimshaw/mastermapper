@@ -168,6 +168,24 @@ into Supabase" workflow. To light up frequencies + route numbers per stop:
 2. **NGED** — ✅ DONE: the substations capacity CSV is wired in as the
    `nged_sites` dataset (stable CKAN resource URL).
 
+## 9b. The other four DNOs → national substation headroom coverage
+
+UKPN and NGED are wired in; SPEN / Northern Powergrid / Electricity North
+West run opendatasoft portals whose dataset slugs move around, and SSEN uses
+hashed CKAN links. The pipeline ships best-guess default URLs — run the
+datasets loader with `spen_sites,npg_sites,enwl_sites,ssen_sites` and check
+the log. For any that warn:
+
+1. Open the operator's portal and search "headroom" or "network capacity":
+   - SPEN: <https://spenergynetworks.opendatasoft.com/>
+   - Northern Powergrid: <https://northernpowergrid.opendatasoft.com/>
+   - Electricity North West: <https://electricitynorthwest.opendatasoft.com/>
+   - SSEN: <https://data.ssen.co.uk/> (or ssen-distribution portal)
+2. On the substation/primary headroom dataset, open **Export** → copy the
+   **CSV** link (needs coordinates or easting/northing columns).
+3. **Repo variable** `SPEN_SITES_SRC` / `NPG_SITES_SRC` / `ENWL_SITES_SRC` /
+   `SSEN_SITES_SRC` = that link, and re-run the loader for that dataset.
+
 ## 10. National Rail Open Data account → the PBSA rail sift's journey data
 
 The new "PBSA sift" box ranks feeder stations by DIRECT train time into a

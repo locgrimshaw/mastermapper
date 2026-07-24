@@ -1121,6 +1121,13 @@ const MAP_OVERLAYS = [
     cap: { color: ["match", ["downcase", ["to-string", ["coalesce", ["get", "demandconnectedrag"], ""]]],
                    "green", "#2f9e44", "amber", "#f59f00", "red", "#e03131", "#868e96"],
            mwKey: "demandconnectedheadroommw" } },
+  // The other four DNOs, same idea as UKPN/NGED: dots carry the operator's
+  // own headroom columns straight into the click card. Flat colours until
+  // each portal's vocabulary gets a proper RAG mapping.
+  { key: "spen_sites", group: "grid", label: "SPEN substation headroom",       color: "#c2255c", dataset: "spen_sites", render: "point", minZoom: 5, lim: 8000 },
+  { key: "npg_sites",  group: "grid", label: "Northern Powergrid headroom",    color: "#7048e8", dataset: "npg_sites",  render: "point", minZoom: 5, lim: 8000 },
+  { key: "enwl_sites", group: "grid", label: "Electricity North West headroom", color: "#0b7285", dataset: "enwl_sites", render: "point", minZoom: 5, lim: 8000 },
+  { key: "ssen_sites", group: "grid", label: "SSEN substation headroom",       color: "#846358", dataset: "ssen_sites", render: "point", minZoom: 5, lim: 8000 },
   // Site factors
   { key: "alc",                group: "sitefactors", label: "Agricultural land grades (ALC)", color: "#94d82d", dataset: "alc",                minZoom: 7 },
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
@@ -1139,6 +1146,10 @@ const LAYER_INFO = {
   conservation_area:  { about: "Areas of special architectural or historic interest where extra planning controls apply.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
   aonb:               { about: "Areas of Outstanding Natural Beauty / National Landscapes — nationally protected landscapes.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity. Sites in public ownership are flagged in the tooltip.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
+  spen_sites:         { about: "SP Energy Networks substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "SP Energy Networks open data portal (CC-BY/OGL-style licence)" },
+  npg_sites:          { about: "Northern Powergrid substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "Northern Powergrid open data portal" },
+  enwl_sites:         { about: "Electricity North West grid & primary substations with published demand headroom — click a dot for the full record.", source: "Electricity North West open data portal" },
+  ssen_sites:         { about: "SSEN substations with published network capacity/headroom — click a dot for the full record.", source: "SSEN distribution open data" },
   planit_rates:       { about: "Share of planning applications APPROVED over the last 3 years per authority (approved ÷ (approved + refused); withdrawn excluded). Local decision culture in one number — pair with the Housing Delivery Test for the full NPPF picture.", source: "PlanIt (planit.org.uk) aggregation of council planning registers" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
   grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },

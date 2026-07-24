@@ -166,6 +166,12 @@ jobs:
           # authority cap for smoke tests.
           PLANIT_SLEEP: ${{ vars.PLANIT_SLEEP }}
           PLANIT_MAX_AUTH: ${{ vars.PLANIT_MAX_AUTH }}
+          # Remaining-DNO export URLs (defaults are best guesses; set these
+          # when a portal's dataset slug moves — MANUAL_TASKS 9b).
+          SPEN_SITES_SRC: ${{ vars.SPEN_SITES_SRC }}
+          NPG_SITES_SRC: ${{ vars.NPG_SITES_SRC }}
+          ENWL_SITES_SRC: ${{ vars.ENWL_SITES_SRC }}
+          SSEN_SITES_SRC: ${{ vars.SSEN_SITES_SRC }}
         run: |
           echo "Building supabase/datasets_import.csv (DATASETS='${DATASETS}')"
           python pipeline/build_datasets.py
