@@ -2007,7 +2007,7 @@ footer {
   border: 1px solid var(--ink-line);
   border-radius: 12px;
   background: var(--ink-2);
-  overflow: hidden;
+  /* NOT overflow:hidden — the layer-row ⓘ tooltips must escape the box. */
   flex-shrink: 0;
 }
 
@@ -2152,3 +2152,9 @@ footer {
 /* Group master toggle (Transport & rail all-on/off). */
 .lt-master { padding: 6px 0 2px; font-weight: 600; }
 .lt-master .lt-label { font-size: 12.5px; }
+
+/* Layer-row info tooltips: anchor to the RIGHT of the ⓘ so the 220px tip
+   grows leftwards into the panel instead of overflowing its right edge. */
+#layers-tree .info { margin-left: 2px; }
+#layers-tree .info .tip { left: auto; right: -8px; }
+#layers-tree .info .tip::after { left: auto; right: 10px; transform: none; }

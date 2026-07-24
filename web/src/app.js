@@ -1027,7 +1027,9 @@ const MAP_OVERLAYS = [
   // open, so each landowning public body is its own layer. (Network Rail /
   // MoD / councils still need HM Land Registry's licensed National Polygon
   // Service to map owner->parcel.)
-  { key: "transport",             group: "land", label: "Transport corridors (road + rail)", color: "#868e96", kinds: ["transport"] },
+  // NOTE: the 'transport' constraint kind (road/rail buffer corridors) is
+  // deliberately NOT a display layer — it's an internal erase mask for the
+  // developable-land analysis and reads as noise on the map.
   { key: "land_forestry_england", group: "land", label: "Forestry England estate",          color: "#2b8a3e", ownership: true, bodies: ["forestry_england"] },
   { key: "land_forestry_scotland",group: "land", label: "Forestry & Land Scotland",         color: "#37b24d", ownership: true, bodies: ["forestry_scotland"] },
   { key: "land_naturescot",       group: "land", label: "NatureScot land",                  color: "#20c997", ownership: true, bodies: ["naturescot_scotland"] },
@@ -1062,6 +1064,47 @@ const MAP_OVERLAYS = [
 // features), so a region-wide fetch stays small. Each layer still has a floor
 // via its registry minZoom (dense point-ish layers need one); the default
 // floor is low enough that layers survive to a regional view.
+// What each layer IS and where it comes from — rendered as a hoverable ⓘ
+// tooltip on every Data layers row. Keyed by overlay key; special non-overlay
+// rows (deprivation, prices, green belt, stations, transit) are passed
+// explicitly in buildLayersPanel.
+const LAYER_INFO = {
+  green_space:        { about: "Publicly accessible green space — parks, playing fields, allotments, cemeteries.", source: "OS Open Greenspace (OGL v3)" },
+  conservation_area:  { about: "Areas of special architectural or historic interest where extra planning controls apply.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
+  aonb:               { about: "Areas of Outstanding Natural Beauty / National Landscapes — nationally protected landscapes.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
+  brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
+  sssi:               { about: "Sites of Special Scientific Interest — statutory wildlife and geology designation; a hard constraint on development.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
+  sac:                { about: "Special Areas of Conservation — habitat protection under the Habitats Regulations.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
+  spa:                { about: "Special Protection Areas — statutory protection for bird habitats.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
+  ramsar:             { about: "Wetlands of international importance under the Ramsar Convention.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
+  ancient_woodland:   { about: "Woodland continuously present since 1600 — effectively undevelopable.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
+  scheduled_monument: { about: "Nationally important archaeological sites with statutory protection.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
+  listed_building:    { about: "Listed building outlines (Grades I, II* and II). Dense — zoom in to see them.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
+  park_garden:        { about: "Registered historic parks and gardens.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
+  flood_zone_2:       { about: "Medium flood probability: land with between 0.1% and 1% annual river flood risk (0.5% sea).", source: "Environment Agency Flood Map for Planning (OGL v3)" },
+  flood_zone_3:       { about: "High flood probability: 1%+ annual river flood risk (0.5%+ sea). NPPF steers development away.", source: "Environment Agency Flood Map for Planning (OGL v3)" },
+  land_forestry_england:  { about: "Land managed by Forestry England (the public forest estate).", source: "Forestry England open data (OGL v3)" },
+  land_forestry_scotland: { about: "Scotland's national forests and land, managed by Forestry & Land Scotland.", source: "Forestry & Land Scotland open data (OGL v3)" },
+  land_naturescot:        { about: "Land owned or managed by NatureScot (national nature reserves etc.).", source: "NatureScot open data (OGL v3)" },
+  land_crown_estate:      { about: "Crown Estate Scotland's rural, coastal and built estate.", source: "Crown Estate Scotland open data (OGL v3)" },
+  land_hes:               { about: "Properties in the care of Historic Environment Scotland.", source: "Historic Environment Scotland open data (OGL v3)" },
+  lpa_boundary:        { about: "Local planning authority boundaries — who decides planning applications where. Complete for England.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  local_plan_boundary: { about: "Adopted and emerging local plan areas. Coverage is still partial — only LPAs that have published to the platform.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  article4:            { about: "Article 4 directions removing permitted development rights — often HMO conversion, so a strong student-housing pressure signal.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  tpo_zone:            { about: "Tree preservation order zones.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  design_code_area:    { about: "Areas covered by an adopted design code.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  uni_campus:          { about: "University and higher-education provider locations (one point per registered provider).", source: "UK Learning Providers / UKRLP (open data)" },
+  ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, graded 0–6b. Greater London only.", source: "TfL / London Datastore (OGL)" },
+  la_rents:            { about: "Average monthly private rents by local authority, including per-bedroom breakdowns where published.", source: "ONS Price Index of Private Rents (OGL v3)" },
+  lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
+  power_line:          { about: "High-voltage transmission and distribution lines; line weight scales with voltage (33–400 kV).", source: "© OpenStreetMap contributors (ODbL)" },
+  power_substation:    { about: "Grid and primary substations — where new large connections plug in.", source: "© OpenStreetMap contributors (ODbL)" },
+  gsp_boundary:        { about: "Grid Supply Point boundaries — where the national transmission grid hands over to regional distribution networks.", source: "NESO Data Portal (open licence)" },
+  tec_register:        { about: "The transmission connection queue: projects holding capacity agreements, with MW and status. Shows where the grid is contested.", source: "NESO TEC Register (open licence)" },
+  alc:                 { about: "Agricultural Land Classification grades 1–5. Grades 1–3a are 'best and most versatile' — policy steers development away.", source: "Natural England (OGL v3)" },
+  water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — a proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
+};
+
 const OVERLAY_MIN_ZOOM = 7;           // default floor; per-layer minZoom overrides
 const OVERLAY_DEFAULT_OPACITY = 0.32; // fill opacity a fresh overlay starts at
 const OVERLAY_FETCH_MARGIN = 0.3;     // pad each fetch 30% beyond the viewport
@@ -1073,7 +1116,7 @@ const OVERLAY_MIN_ZOOMS = {
   green_space: 9, conservation_area: 8, aonb: 5, brownfield: 9,
   sssi: 5, sac: 5, spa: 5, ramsar: 5, ancient_woodland: 8,
   scheduled_monument: 9, listed_building: 11, park_garden: 8,
-  flood_zone_2: 8, flood_zone_3: 8, transport: 10,
+  flood_zone_2: 8, flood_zone_3: 8,
   land_forestry_england: 5, land_forestry_scotland: 5, land_naturescot: 5,
   land_crown_estate: 5, land_hes: 8,
 };
@@ -1283,12 +1326,15 @@ function removeOverlayLayers(key) {
 // transparency slider that shows while the layer is on.
 function ltRowHTML(o) {
   const swatch = o.swatch || (o.color ? `<span class="ov-swatch" style="background:${o.color}"></span>` : "");
+  const info = o.info
+    ? `<button class="info" type="button" aria-label="About this layer" tabindex="0">i<span class="tip" role="tooltip">${o.info.about}<span class="tip-source">Source: ${o.info.source}</span></span></button>`
+    : "";
   return `
     <div class="lt-row${o.hidden ? "" : ""}" ${o.rowId ? `id="${o.rowId}"` : ""} ${o.hidden ? "hidden" : ""}>
       <label class="lt-main">
         <input type="checkbox" ${o.cbId ? `id="${o.cbId}"` : ""} ${o.dataKey ? `data-ov="${o.dataKey}"` : ""} ${o.checked ? "checked" : ""} />
         ${swatch}
-        <span class="lt-label">${o.label}</span>
+        <span class="lt-label">${o.label}</span>${info}
         <span class="lt-stat" ${o.statId ? `id="${o.statId}"` : ""}></span>
       </label>
       <div class="lt-fade">
@@ -1322,7 +1368,9 @@ function buildLayersPanel() {
       <div class="lt-body">
         ${ltRowHTML({ cbId: "imd-show", label: "Deprivation choropleth",
                       swatch: `<span class="lt-ramp">${imdRamp}</span>`,
-                      checked: state.imdOn, opacity: state.fillOpacity, opacityKey: "imd" })}
+                      checked: state.imdOn, opacity: state.fillOpacity, opacityKey: "imd",
+                      info: { about: "Combined deprivation score across seven weighted domains (income, employment, education, health, crime, housing barriers, living environment). Darker = more deprived. England LSOAs + Scotland Data Zones.",
+                              source: "English Indices of Deprivation (MHCLG) & Scottish IMD (Scottish Government), OGL v3" } })}
         <div class="lt-sub">
           <button type="button" class="lt-head lt-sub-head" aria-expanded="false">
             <span class="lt-title">Layer view — combined or a single domain</span>
@@ -1358,7 +1406,9 @@ function buildLayersPanel() {
       <div class="lt-body">
         ${ltRowHTML({ cbId: "price-show", label: "House price choropleth (£/m²)",
                       swatch: `<span class="lt-ramp">${priceRamp}</span>`,
-                      checked: state.priceOn, opacity: state.priceOpacity, opacityKey: "price" })}
+                      checked: state.priceOn, opacity: state.priceOpacity, opacityKey: "price",
+                      info: { about: "Typical £ per square metre from actual sale prices, per LSOA. Independent of the deprivation layer — show both and blend with the fade sliders.",
+                              source: "HM Land Registry Price Paid Data (OGL v3)" } })}
         <p class="hint" style="margin:2px 0 6px">HM Land Registry price paid, per LSOA. Independent of the deprivation layer — show both together and blend with the fade sliders.</p>
       </div>
     </div>`;
@@ -1372,11 +1422,14 @@ function buildLayersPanel() {
       if (g.key === "planning") {
         rows += ltRowHTML({ rowId: "greenbelt-row", cbId: "greenbelt-show", hidden: true,
                             label: "Green Belt", color: GREENBELT_COLOR, statId: "greenbelt-count",
-                            checked: false, opacity: state.greenbeltOpacity, opacityKey: "greenbelt" });
+                            checked: false, opacity: state.greenbeltOpacity, opacityKey: "greenbelt",
+                            info: { about: "Green Belt land, where national policy restrains most new development. Shown nationwide from a static extract.",
+                                    source: "MHCLG via planning.data.gov.uk (OGL v3)" } });
       }
       rows += MAP_OVERLAYS.filter(o => o.group === g.key).map(o =>
         ltRowHTML({ dataKey: o.key, label: o.label, color: o.color, statId: `ov-stat-${o.key}`,
-                    checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}` })).join("");
+                    checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}`,
+                    info: LAYER_INFO[o.key] })).join("");
       return `
         <div class="lt-sub">
           <button type="button" class="lt-head lt-sub-head" aria-expanded="true">
@@ -1412,12 +1465,14 @@ function buildLayersPanel() {
       <div class="lt-body">
         <label class="lt-main lt-master">
           <input type="checkbox" id="transport-all" checked />
-          <span class="lt-label">All transport &amp; rail</span>
+          <span class="lt-label">All transport &amp; rail</span><button class="info" type="button" aria-label="About these layers" tabindex="0">i<span class="tip" role="tooltip">Rail, metro, light-rail and tram lines and stops, plus the heavy-rail station layer. This toggle flips everything in the group at once.<span class="tip-source">Source: © OpenStreetMap contributors &amp; Trainline (ODbL); ORR station usage (OGL v3)</span></span></button>
         </label>
         ${ltRowHTML({ rowId: "station-row", cbId: "station-show", hidden: true,
                       label: "Stations (heavy rail, usage-scaled)", color: STATION_COLOR,
                       statId: "station-count-stat", checked: true,
-                      opacity: state.stationOpacity, opacityKey: "stations" })}
+                      opacity: state.stationOpacity, opacityKey: "stations",
+                      info: { about: "Every GB heavy-rail station, sized by annual entries + exits — the analysis objects the station tools profile.",
+                              source: "Office of Rail and Road station usage estimates (OGL v3)" } })}
         <div id="rail-group" hidden>
           <div id="rail-toggle" class="rail-toggle"></div>
           <div class="lt-fade lt-fade-solo">
@@ -1440,6 +1495,11 @@ function buildLayersPanel() {
       head.setAttribute("aria-expanded", String(!collapsed));
     });
   });
+
+  // Info buttons sit inside the row <label>; without this a click on ⓘ would
+  // also toggle the layer checkbox.
+  host.querySelectorAll(".lt-main .info").forEach(b =>
+    b.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); }));
 
   // Overlay checkboxes (granular planning/environment/heritage/flood/land).
   host.querySelectorAll("input[data-ov]").forEach(cb =>
