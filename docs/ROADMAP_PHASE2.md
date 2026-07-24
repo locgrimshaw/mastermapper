@@ -139,6 +139,14 @@ toggleable layer + a portfolio-score input, clearly labelled as a model.
   HDT, PlanIt sync) with a data-freshness panel in the UI.
 - **Census 2021 pack** — population, age, tenure, car ownership at LSOA:
   cheap to add to the existing tile build, feeds all three tools.
+- **Granular bus network** (owner request, build in full) — DfT **Bus Open
+  Data Service** (BODS) routes + full timetables (TransXChange/GTFS, OGL) and
+  **NaPTAN** national stop database. Unlocks: real bus catchments (the
+  greyed-out bus chip in the PBSA tool), frequency-weighted connectivity
+  scoring (buses/hour at nearby stops, PTAL-style but national), and
+  route/stop display layers. Plan: nightly GTFS pull → per-stop departure
+  frequencies into map_features (`bus_stop` with freq props) → route
+  polylines (`bus_route`) → a graph-hop bus catchment in the PBSA sift.
 
 ## Suggested build order
 

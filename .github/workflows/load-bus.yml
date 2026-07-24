@@ -1,0 +1,45 @@
+name: Load bus network into Supabase
+
+# National bus stops (NaPTAN, no key needed) plus — when a BODS GTFS
+# timetable is available — weekday daytime frequencies and route numbers per
+# stop. Set repo variable BUS_GTFS_SRC to the BODS "all regions" GTFS
+# download URL (with ?api_key=...), or commit data/raw/bus-gtfs.zip, to light
+# up frequencies. Re-run monthly-ish; the loader fully replaces the dataset.
+# Data: NaPTAN and Bus Open Data Service © DfT, OGL v3.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Build the bus_stop import CSV
+        env:
+          BUS_GTFS_SRC: ${{ vars.BUS_GTFS_SRC }}
+        run: python pipeline/build_bus.py
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: bus_stop
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          python supabase/loaders/load_datasets.py

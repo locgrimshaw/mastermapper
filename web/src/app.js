@@ -994,6 +994,9 @@ const OVERLAY_TREE = [
     { key: "grid",        title: "Power grid" },
     { key: "sitefactors", title: "Site factors" },
   ]},
+  { key: "connectivity", title: "Transport &amp; connectivity", subs: [
+    { key: "bus", title: "Bus network" },
+  ]},
 ];
 const OVERLAY_GROUPS = OVERLAY_TREE.flatMap(t => t.subs);
 
@@ -1006,6 +1009,10 @@ const MAP_OVERLAYS = [
   { key: "conservation_area", group: "planning", label: "Conservation areas",         color: "#9c36b5", kinds: ["conservation_area"] },
   { key: "aonb",              group: "planning", label: "AONB / National Landscapes", color: "#5c940d", kinds: ["aonb"] },
   { key: "brownfield",        group: "planning", label: "Brownfield sites",           color: "#e8590c", brownfield: true },
+  // Derived MODEL layer (rebuild_grey_belt_candidates in the DB): Green Belt
+  // land that is already previously-developed in character. Indigo = built-up
+  // area basis, orange = registered-brownfield basis.
+  { key: "grey_belt_candidate", group: "planning", label: "Grey-belt candidates (model)", color: "#5c7cfa", dataset: "grey_belt_candidate", minZoom: 7 },
   // Environmental designations
   { key: "sssi",              group: "environment", label: "SSSI",                         color: "#0c8599", kinds: ["sssi"] },
   { key: "sac",               group: "environment", label: "Special Areas of Conservation", color: "#12b886", kinds: ["sac"] },
@@ -1031,7 +1038,15 @@ const MAP_OVERLAYS = [
   { key: "land_naturescot",       group: "land", label: "NatureScot land",                  color: "#20c997", ownership: true, bodies: ["naturescot_scotland"] },
   { key: "land_crown_estate",     group: "land", label: "Crown Estate Scotland",            color: "#845ef7", ownership: true, bodies: ["crown_estate_scotland"] },
   { key: "land_hes",              group: "land", label: "Historic Environment Scotland",    color: "#f59f00", ownership: true, bodies: ["hes_scotland"] },
-  { key: "la_property",           group: "land", label: "Council-owned property (CCOD)",    color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000, icon: "town" },
+  // CCOD sweep now keeps EVERY public body (owner_class prop from the
+  // pipeline); dots colour by class at wide zooms, the town glyph takes over
+  // close in.
+  { key: "la_property",           group: "land", label: "Public-authority property (CCOD)", color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000, icon: "town",
+    cap: { color: ["match", ["to-string", ["get", "owner_class"]],
+           "local_authority", "#c92a2a", "parish", "#f08c00",
+           "combined_authority", "#d6336c", "nhs", "#1971c2",
+           "university", "#7048e8", "police_fire", "#0ca678",
+           "government", "#5f3dc4", "#c92a2a"] } },
 
   // ---- map_features datasets (generic ingestion framework; see ----
   // ---- pipeline/build_datasets.py + docs/DATA_LAYERS_ROADMAP.md) ----
@@ -1059,6 +1074,16 @@ const MAP_OVERLAYS = [
            100000, "#f7b267", 300000, "#ef8354", 500000, "#d64550",
            800000, "#a4243b", 1500000, "#6d1a36"] } },
   { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5 },
+  // Bus network (NaPTAN + BODS GTFS). ~400k stops nationally: the numeric
+  // prop filter thins wide zooms to frequent-service stops, so the row cap
+  // bites frequency-first rather than arbitrarily. Until the GTFS timetable
+  // is loaded stops carry no buses_hr, so they only appear from z14.
+  { key: "bus_stop", group: "bus", label: "Bus stops (frequency-coloured)", color: "#1098ad", dataset: "bus_stop", render: "point", minZoom: 10, lim: 8000,
+    radius: ["interpolate", ["linear"], ["zoom"], 10, 2, 13, 3.5, 16, 6],
+    numFilter: z => z < 12 ? { key: "buses_hr", min: 8 } : z < 14 ? { key: "buses_hr", min: 2 } : null,
+    cap: { color: ["case", ["!", ["has", "buses_hr"]], "#868e96",
+           ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "buses_hr"]], 0],
+            0, "#ced4da", 1, "#96f2d7", 4, "#38d9a9", 8, "#0ca678", 16, "#087f5b"]] } },
   // Power grid
   // Power layers thin by VOLTAGE at wide zooms (via the RPC's numeric prop
   // filter) — a national view shows the 275/400 kV backbone, zooming in adds
@@ -1111,7 +1136,9 @@ const LAYER_INFO = {
   green_space:        { about: "Publicly accessible green space — parks, playing fields, allotments, cemeteries.", source: "OS Open Greenspace (OGL v3)" },
   conservation_area:  { about: "Areas of special architectural or historic interest where extra planning controls apply.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
   aonb:               { about: "Areas of Outstanding Natural Beauty / National Landscapes — nationally protected landscapes.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
-  brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
+  brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity. Sites in public ownership are flagged in the tooltip.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
+  bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
+  grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },
   sssi:               { about: "Sites of Special Scientific Interest — statutory wildlife and geology designation; a hard constraint on development.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   sac:                { about: "Special Areas of Conservation — habitat protection under the Habitats Regulations.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   spa:                { about: "Special Protection Areas — statutory protection for bird habitats.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
@@ -1147,7 +1174,7 @@ const LAYER_INFO = {
   ukpn_sites:          { about: "UK Power Networks grid & primary substations, coloured by the DNO's demand classification — green COLD sites have headroom, red HOT sites are constrained. London, the South East and East. Click a site for full details.", source: "UK Power Networks Open Data (opendatasoft)" },
   nged_sites:          { about: "National Grid Electricity Distribution primary & bulk supply substations, coloured by their demand RAG (green/amber/red) and sized by connected headroom — the MW figure appears beside each site as you zoom in. Midlands, South West and South Wales. Click a site for full details.", source: "NGED Connected Data portal" },
   alc:                 { about: "Agricultural Land Classification, coloured by grade — deep green Grade 1 (best and most versatile, policy steers development away) through amber Grade 4 and brown Grade 5; greys are urban/non-agricultural.", source: "Natural England (OGL v3)" },
-  la_property:         { about: "Property titles owned by local authorities, aggregated to postcode points with a title count. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
+  la_property:         { about: "Property titles owned by public bodies — councils, parishes, combined authorities, NHS, universities, police/fire and central government — aggregated to postcode points with a title count, coloured by owner type. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — green available, amber restricted, red not available. A proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
   ppd_sales:           { about: "Every registered property sale in the last 12 months as a dot, colour-ramped from amber (~£100k) to deep red (£1.5m+). Street-level price truth beneath the LSOA averages. Positions are postcode-centroid based. Zoom right in — it's dense.", source: "HM Land Registry Price Paid Data © Crown copyright (PPD licence); OS Code-Point Open" },
   hdt:                 { about: "The Housing Delivery Test: each authority's housing delivery vs target. Red (<75%) triggers the NPPF presumption in favour of sustainable development — the strongest single approval signal; orange = 20% buffer; amber = action plan; green = passing.", source: "MHCLG Housing Delivery Test measurement (OGL v3)" },
@@ -1479,6 +1506,11 @@ function renderOverlay(key, def, fc) {
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "rent_mean"]], 0],
           500, "#d5eef0", 800, "#a3d8dc", 1100, "#6dbcc5", 1500, "#3c96a6",
           2000, "#20707f", 3000, "#0d4a5c"]]
+      : def.dataset === "grey_belt_candidate"
+      // Basis split: indigo = built-up area inside the Green Belt, orange =
+      // registered brownfield inside it (the stronger signal).
+      ? ["match", ["to-string", ["get", "source"]],
+         "brownfield", "#e8590c", "#5c7cfa"]
       : def.dataset === "water_availability"
       // EA CAMS Q95 classification arrives as colour words (Green / Yellow /
       // Red / Grey); keep substring fallbacks for text-valued variants.
@@ -2689,8 +2721,14 @@ function hoverContentForOverlay(def, p) {
   } else if (d === "uni_campus_site" || d === "uni_building") {
     title = p.name || p.operator || def.label;
   } else if (d === "la_property") {
-    title = p.name || "Council property";
-    rows = [row(p.titles ? `${p.titles} title${p.titles > 1 ? "s" : ""}` : null, "registered")];
+    const OWNER_CLASS_LABELS = {
+      local_authority: "Local authority", parish: "Parish / town council",
+      combined_authority: "Combined authority", nhs: "NHS",
+      university: "University", police_fire: "Police / fire",
+      government: "Central government & agencies" };
+    title = p.name || "Public-authority property";
+    rows = [row(OWNER_CLASS_LABELS[p.owner_class] || p.category || null, "owner type"),
+            row(p.titles ? `${p.titles} title${p.titles > 1 ? "s" : ""}` : null, "registered")];
   } else if (d === "alc") {
     title = p.alc_grade || p.name || "Agricultural land";
     kind = "Agricultural land classification";
@@ -2723,6 +2761,25 @@ function hoverContentForOverlay(def, p) {
     title = p.name || "Local authority";
     rows = [row(p.rent_mean != null ? `£${Number(p.rent_mean).toLocaleString()}/mo` : null, "avg rent"),
             row(p.annual_rent_change_pct != null ? `${p.annual_rent_change_pct > 0 ? "+" : ""}${p.annual_rent_change_pct}%` : null, "year on year")];
+  } else if (d === "bus_stop") {
+    title = p.name || "Bus stop";
+    kind = p.locality ? `Bus stop — ${p.locality}` : "Bus stop";
+    rows = [row(p.buses_hr != null ? `${p.buses_hr}/hr` : null, "weekday daytime"),
+            row(p.routes, "routes")];
+  } else if (d === "grey_belt_candidate") {
+    title = p.name || "Grey-belt candidate";
+    kind = "Grey-belt candidate — model, not a designation";
+    rows = [row(p.area_ha != null ? `${Number(p.area_ha).toLocaleString()} ha` : null, "area"),
+            row(p.source === "brownfield" ? "registered brownfield in Green Belt"
+                : "built-up area in Green Belt", "basis")];
+  } else if (def.brownfield) {
+    title = p.name || "Brownfield site";
+    kind = "Brownfield register site";
+    const pub = p.is_public === true || p.is_public === "true";
+    rows = [row(pub ? "Public authority" : (p.ownership_status || null), "ownership"),
+            row(p.dwellings_max ? `up to ${Number(p.dwellings_max).toLocaleString()} homes` : null, "capacity"),
+            row(p.hectares ? `${Number(p.hectares).toLocaleString()} ha` : null, "size"),
+            row(p.permission_status, "permission")];
   } else if (def.kinds || def.ownership) {
     title = p.name || def.label;
   }
@@ -3052,6 +3109,9 @@ async function showSpotSummary(lngLat, point) {
   }
   let planSec = chips.length ? `<div class="sp-chips">${chips.join("")}</div>` : "";
   if (!chips.length && ps) planSec = `<div class="sp-row"><span class="sp-dim">No designations at this exact spot.</span></div>`;
+  if (areas.grey_belt_candidate)
+    planSec += line("grey-belt potential", strong(areas.grey_belt_candidate.name || "candidate area") +
+      ` <span class="sp-dim">model${areas.grey_belt_candidate.area_ha != null ? ` · ${_esc(String(areas.grey_belt_candidate.area_ha))} ha` : ""}</span>`);
   if (areas.alc) planSec += line("agricultural land", strong(areas.alc.alc_grade || areas.alc.name || ""));
   if (areas.water_availability && (areas.water_availability.name || Object.keys(areas.water_availability).length > 1))
     planSec += line("water availability", strong(areas.water_availability.name || "assessed catchment"));
@@ -8380,6 +8440,10 @@ function pfScore(s) {
   const hdt = Number(s.summary?.areas?.hdt?.hdt_pct);
   if (!isNaN(hdt)) policy += hdt < 75 ? 15 : hdt < 85 ? 8 : hdt < 95 ? 4 : 0;
   if ((s.summary?.brownfield_overlap || 0) > 0) policy += 10;
+  // Grey-belt model: green_belt already subtracted above, so a site whose
+  // green-belt land is previously-developed claws most of that penalty back.
+  const gbc = Number(s.summary?.grey_belt_pct);
+  if (!isNaN(gbc) && gbc > 0) policy += Math.min(pct("green_belt") * 0.35, gbc * 0.35);
   if (s.summary?.areas?.article4) policy -= 3;
   policy = Math.max(0, Math.min(100, policy));
   let access = 50;
@@ -8445,6 +8509,7 @@ function pfRender() {
       <span class="pbsa-row-meta">${[
         s.area_ha != null ? `${s.area_ha} ha` : null,
         gb ? `GB ${gb.pct}%` : null,
+        s.grey_belt_pct ? `grey-belt ${s.grey_belt_pct}%` : null,
         topC && topC.kind !== "green_belt" ? `${topC.kind.replace(/_/g, " ")} ${topC.pct}%` : null,
         s.brownfield_overlap ? "brownfield" : null,
         r.stationM != null ? `stn ${_fmtDist(r.stationM)}` : null,

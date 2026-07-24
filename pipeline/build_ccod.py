@@ -1,9 +1,11 @@
 """
 build_ccod.py
 -------------
-Council-owned property from HM Land Registry's CCOD dataset ("UK companies
-that own property in England and Wales"), for the map_features dataset
-`la_property`.
+Public-authority-owned property from HM Land Registry's CCOD dataset ("UK
+companies that own property in England and Wales"), for the map_features
+dataset `la_property` (name kept for compatibility — it now carries EVERY
+public body: councils, parishes, combined authorities, NHS, universities,
+police/fire and central government, each tagged with an `owner_class`).
 
 REQUIRES the CCOD_API_KEY env var (a GitHub Actions secret): an API key from
 a registered account at https://use-land-property-data.service.gov.uk/ with
@@ -11,10 +13,10 @@ the CCOD licence accepted. The raw file is licence-restricted — it is only
 ever downloaded inside the workflow run, never committed.
 
 Phase 1 (this script): download the latest CCOD full file via the service's
-API, keep titles whose proprietor is a local authority (proprietorship
-category "Local Authority"/"County Council", or a proprietor name that reads
-as a council), geocode by POSTCODE using OS Code-Point Open (free, no key),
-and aggregate to one point per (postcode, proprietor) with a title count.
+API, keep titles whose proprietor classifies as a public body (see
+OWNER_CLASSES — proprietorship category or name patterns), geocode by
+POSTCODE using OS Code-Point Open (free, no key), and aggregate to one point
+per (postcode, proprietor) with a title count and owner_class.
 Output: supabase/datasets_import.csv (dataset,source_id,name,props,geom_wkt)
 — loaded by supabase/loaders/load_datasets.py with DATASETS=la_property.
 
@@ -51,6 +53,43 @@ LA_CATEGORY = re.compile(r"local authority|county council", re.I)
 LA_NAME = re.compile(
     r"\b(BOROUGH|COUNTY|CITY|DISTRICT|TOWN|PARISH)?\s*COUNCIL\b|"
     r"\bCOMMON COUNCIL\b|\bGREATER LONDON AUTHORITY\b", re.I)
+
+# The portfolio tool wants EVERY public body, not just councils. Ordered
+# name-pattern list — first match wins, so put the most specific classes
+# (NHS trusts named "University Hospitals ...", parish councils that the
+# broad council regex would also catch) before the broader ones.
+OWNER_CLASSES = [
+    ("nhs", re.compile(
+        r"\bNHS\b|NATIONAL HEALTH SERVICE|HEALTH BOARD|FOUNDATION TRUST|"
+        r"PRIMARY CARE TRUST|INTEGRATED CARE BOARD|AMBULANCE SERVICE", re.I)),
+    ("parish", re.compile(r"\b(PARISH|TOWN|COMMUNITY)\s+COUNCIL\b", re.I)),
+    ("combined_authority", re.compile(
+        r"\bCOMBINED AUTHORITY\b|\bGREATER LONDON AUTHORITY\b", re.I)),
+    ("local_authority", re.compile(
+        r"\b(BOROUGH|COUNTY|CITY|DISTRICT)?\s*COUNCIL\b|\bCOMMON COUNCIL\b", re.I)),
+    ("university", re.compile(
+        r"\bUNIVERSITY\b|\bPOLYTECHNIC\b|HIGHER EDUCATION CORPORATION", re.I)),
+    ("police_fire", re.compile(
+        r"\bPOLICE\b|\bCONSTABULARY\b|FIRE (AND RESCUE|AUTHORITY|BRIGADE)", re.I)),
+    ("government", re.compile(
+        r"SECRETARY OF STATE|MINISTR(Y|IES) OF|DEPARTMENT (FOR|OF)|"
+        r"\bHM REVENUE\b|\bCROWN ESTATE\b|DUCHY OF (LANCASTER|CORNWALL)|"
+        r"HOMES ENGLAND|NETWORK RAIL|NATIONAL HIGHWAYS|HIGHWAYS ENGLAND|"
+        r"ENVIRONMENT AGENCY|FORESTRY COMMISSION|NATURAL ENGLAND|"
+        r"TRANSPORT FOR LONDON|BRITISH RAILWAYS BOARD|CANAL & RIVER TRUST|"
+        r"HOMES AND COMMUNITIES AGENCY|LONDON (&|AND) CONTINENTAL RAILWAYS", re.I)),
+]
+
+
+def classify_owner(name, category):
+    """First matching owner class, else local_authority via the proprietorship
+    category, else None (= not a public body we track)."""
+    for cls, rx in OWNER_CLASSES:
+        if rx.search(name):
+            return cls
+    if LA_CATEGORY.search(category):
+        return "local_authority"
+    return None
 
 
 # The service sits behind Cloudflare bot protection which rejects Python's
@@ -282,16 +321,17 @@ def main():
                 seen += 1
                 if len(row) <= i_pc:
                     continue
-                is_la, prop_name, prop_cat = False, None, None
+                owner_cls, prop_name, prop_cat = None, None, None
                 for i_n, i_c in zip(i_names, i_cats + [None] * len(i_names)):
                     nm = row[i_n].strip() if i_n < len(row) else ""
                     ct = row[i_c].strip() if i_c is not None and i_c < len(row) else ""
                     if not nm:
                         continue
-                    if LA_CATEGORY.search(ct) or LA_NAME.search(nm):
-                        is_la, prop_name, prop_cat = True, nm, ct
+                    cls = classify_owner(nm, ct)
+                    if cls:
+                        owner_cls, prop_name, prop_cat = cls, nm, ct
                         break
-                if not is_la:
+                if not owner_cls:
                     continue
                 pc = row[i_pc].replace(" ", "").upper()
                 if pc not in pcs:
@@ -300,12 +340,19 @@ def main():
                 k = (pc, prop_name.upper())
                 a = agg.setdefault(k, {"n": 0, "name": prop_name,
                                        "category": prop_cat, "postcode": row[i_pc],
+                                       "owner_class": owner_cls,
                                        "address": None})
                 a["n"] += 1
                 if a["address"] is None and i_addr is not None and i_addr < len(row):
                     a["address"] = row[i_addr][:160]
-    print(f"[ccod] {seen:,} titles scanned, {kept:,} LA-owned with a mappable "
-          f"postcode, {len(agg):,} aggregated points")
+    print(f"[ccod] {seen:,} titles scanned, {kept:,} public-body-owned with a "
+          f"mappable postcode, {len(agg):,} aggregated points")
+    cls_counts = {}
+    for a in agg.values():
+        cls_counts[a["owner_class"]] = cls_counts.get(a["owner_class"], 0) + 1
+    print("[ccod] owner classes:",
+          ", ".join(f"{k}={v:,}" for k, v in
+                    sorted(cls_counts.items(), key=lambda kv: -kv[1])))
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("w", newline="", encoding="utf-8") as fh:
@@ -317,6 +364,7 @@ def main():
             lon, lat = tr.transform(e, n)
             props = {k: v for k, v in (("titles", a["n"]),
                                        ("category", a["category"]),
+                                       ("owner_class", a["owner_class"]),
                                        ("postcode", a["postcode"]),
                                        ("address", a["address"])) if v}
             w.writerow({

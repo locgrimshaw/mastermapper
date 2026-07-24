@@ -147,6 +147,20 @@ medians/quartiles) from gov.uk and supply it as the rents CSV (drop-in
 hover then carry per-bedroom figures. For London ward-level rents, grab the
 GLA London Rents Map data extract and hand it over.
 
+## 8f. Bus timetable → frequency-coloured bus stops (BODS GTFS)
+
+Bus stops (NaPTAN) load with **no action needed** — run the "Load bus network
+into Supabase" workflow. To light up frequencies + route numbers per stop:
+
+1. Register (free) at <https://data.bus-data.dft.gov.uk/> and find your API
+   key under account settings.
+2. On the *Download all data* → **Timetables — GTFS** page, copy the "All
+   regions" download link and append `?api_key=YOURKEY`.
+3. **Repo variable** `BUS_GTFS_SRC` = that link (or download the zip yourself
+   → drop-in file named **`bus-gtfs.zip`** — but it's ~1 GB, so the variable
+   route is better).
+4. Re-run the "Load bus network into Supabase" workflow.
+
 ## 9. DNO registrations → real grid capacity/headroom (v2 layers)
 
 1. **UKPN** — ✅ DONE: the Grid and Primary sites export is wired in as the
