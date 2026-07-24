@@ -146,10 +146,17 @@ LAD_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
                    "services/Local_Authority_Districts_December_2024_Boundaries"
                    "_UK_BGC/FeatureServer/0/query?where=1%3D1&outFields=*"
                    "&outSR=4326&f=geojson")
-ALC_DEFAULT_URL = ("https://services.arcgis.com/JJzESW51TqeY9uat/arcgis/rest/"
-                   "services/Provisional_Agricultural_Land_Classification_ALC_"
-                   "England/FeatureServer/0/query?where=1%3D1&outFields=*"
-                   "&outSR=4326&f=geojson")
+# Natural England ALC via a signed ArcGIS Hub export link (EXPIRED
+# 2026-07-24T13:01Z — used for the initial load; once dead the builder skips
+# with a warning). To refresh: naturalengland-defra.opendata.arcgis.com →
+# Provisional ALC → Download → GeoJSON → copy the link (from the browser
+# Downloads page, Ctrl+J) and set ALC_SRC, or hand the file to Claude.
+ALC_DEFAULT_URL = ("https://stg-arcgisazurecdataprod.az.arcgis.com/"
+                   "exportfiles-3106-14332/Provisional%20Agricultural%20Land%20"
+                   "Classification%20%28ALC%29%20%28England%29_"
+                   "-752430394565312091.geojson?sv=2025-05-05"
+                   "&st=2026-07-24T11%3A56%3A31Z&se=2026-07-24T13%3A01%3A31Z"
+                   "&sr=b&sp=r&sig=NJ05rKGC58pUkAzzRSm9OiBqUuvrFOr9S4peYGBGFus%3D")
 
 ALL_DATASETS = [
     "lpa_boundary", "local_plan_boundary", "article4", "tpo_zone",
