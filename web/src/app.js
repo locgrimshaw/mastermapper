@@ -693,6 +693,10 @@ async function loadData() {
   // --- National Green Belt display overlay (optional static layer) ---------
   loadGreenbelt();
 
+  // Pre-bake the point-overlay icon badges so they're registered before the
+  // first overlay toggle needs them.
+  ensureOverlayIcons();
+
   updateDataSourceNote();
 }
 
@@ -772,18 +776,7 @@ function addStationLayer() {
     },
   });
 
-  const stationPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10 });
-  map.on("mouseenter", "station-dot", (e) => {
-    const p = e.features[0].properties;
-    map.getCanvas().style.cursor = "pointer";
-    const u = p.usage != null && p.usage !== "" ? `${fmtCount(Number(p.usage))} entries/exits` : "usage n/a";
-    stationPopup.setLngLat(e.lngLat).setHTML(`<strong>${p.name || "Station"}</strong> · ${u}`).addTo(map);
-  });
-  map.on("mousemove", "station-dot", (e) => stationPopup.setLngLat(e.lngLat));
-  map.on("mouseleave", "station-dot", () => {
-    map.getCanvas().style.cursor = "";
-    stationPopup.remove();
-  });
+  // (Station hover is handled by the central hover-card system.)
   // NOTE: the station CLICK is handled centrally in wireInteractions() via a
   // queryRenderedFeatures check, not a layer-specific handler here. On the live
   // site the station dots coincide with tile-based rail stops and sit among
@@ -1035,7 +1028,7 @@ const MAP_OVERLAYS = [
   { key: "land_naturescot",       group: "land", label: "NatureScot land",                  color: "#20c997", ownership: true, bodies: ["naturescot_scotland"] },
   { key: "land_crown_estate",     group: "land", label: "Crown Estate Scotland",            color: "#845ef7", ownership: true, bodies: ["crown_estate_scotland"] },
   { key: "land_hes",              group: "land", label: "Historic Environment Scotland",    color: "#f59f00", ownership: true, bodies: ["hes_scotland"] },
-  { key: "la_property",           group: "land", label: "Council-owned property (CCOD)",    color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000 },
+  { key: "la_property",           group: "land", label: "Council-owned property (CCOD)",    color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000, icon: "town" },
 
   // ---- map_features datasets (generic ingestion framework; see ----
   // ---- pipeline/build_datasets.py + docs/DATA_LAYERS_ROADMAP.md) ----
@@ -1046,7 +1039,7 @@ const MAP_OVERLAYS = [
   { key: "tpo_zone",            group: "policy", label: "Tree preservation zones",       color: "#2b8a3e", dataset: "tpo_zone",            minZoom: 9 },
   { key: "design_code_area",    group: "policy", label: "Design code areas",             color: "#e8590c", dataset: "design_code_area",    minZoom: 8 },
   // Universities & students
-  { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5 },
+  { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5, icon: "uni" },
   { key: "uni_campus_site", group: "students", label: "Campus grounds (OSM)",     color: "#9775fa", dataset: "uni_campus_site", minZoom: 8 },
   { key: "uni_building",    group: "students", label: "University buildings (OSM)", color: "#5f3dc4", dataset: "uni_building", minZoom: 11 },
   { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 11, lim: 8000 },
@@ -1057,14 +1050,28 @@ const MAP_OVERLAYS = [
   // Power layers thin by VOLTAGE at wide zooms (via the RPC's numeric prop
   // filter) — a national view shows the 275/400 kV backbone, zooming in adds
   // 132 kV then everything — so the row cap almost never bites arbitrarily.
-  { key: "power_line",       group: "grid", label: "Transmission & HV lines (OSM)", color: "#e8590c", dataset: "power_line",       render: "line",  minZoom: 5, lim: 8000,
+  // Lines and substations share one ordinal voltage ramp (amber -> deep red,
+  // light = local, dark = transmission) so capacity reads as intensity across
+  // both layers. Substations split into three toggleable voltage tiers; dot
+  // size scales with tier and each dot wears its kV number at closer zooms.
+  { key: "power_line",       group: "grid", label: "Transmission & HV lines (OSM)", color: "#e8590c", dataset: "power_line",       render: "line",  minZoom: 5, lim: 8000, voltColor: true,
     numFilter: z => z < 7 ? { key: "kv", min: 200 } : z < 9.5 ? { key: "kv", min: 90 } : null },
-  { key: "power_substation", group: "grid", label: "Substations (OSM)",             color: "#d9480f", dataset: "power_substation", render: "point", minZoom: 6, lim: 8000,
-    numFilter: z => z < 8 ? { key: "kv", min: 90 } : z < 10.5 ? { key: "kv", min: 20 } : null },
+  { key: "power_sub_tx",    group: "grid", label: "Substations — transmission (≥200 kV)", color: "#a61e0d", dataset: "power_substation", render: "point", minZoom: 4, lim: 2000,
+    kvLabel: true, labelMinZoom: 7,
+    radius: ["interpolate", ["linear"], ["zoom"], 5, 5.5, 10, 8, 14, 11],
+    numFilter: () => ({ key: "kv", min: 200 }) },
+  { key: "power_sub_grid",  group: "grid", label: "Substations — grid (50–200 kV)",       color: "#e8590c", dataset: "power_substation", render: "point", minZoom: 6, lim: 4000,
+    kvLabel: true, labelMinZoom: 8.5,
+    radius: ["interpolate", ["linear"], ["zoom"], 5, 4, 10, 6, 14, 8.5],
+    numFilter: () => ({ key: "kv", min: 50, max: 200 }) },
+  { key: "power_sub_local", group: "grid", label: "Substations — local (<50 kV)",          color: "#f59f00", dataset: "power_substation", render: "point", minZoom: 9, lim: 8000,
+    kvLabel: true, labelMinZoom: 12,
+    radius: ["interpolate", ["linear"], ["zoom"], 8, 2.5, 11, 4, 14, 6],
+    numFilter: () => ({ key: "kv", max: 50 }) },
   { key: "gsp_boundary",     group: "grid", label: "Grid Supply Point boundaries",  color: "#845ef7", dataset: "gsp_boundary",     render: "line",  minZoom: 4 },
-  { key: "tec_register",     group: "grid", label: "Connection queue (TEC register)", color: "#f59f00", dataset: "tec_register",   render: "point", minZoom: 5 },
-  { key: "ukpn_sites",       group: "grid", label: "UKPN substation headroom",        color: "#0ca678", dataset: "ukpn_sites",     render: "point", minZoom: 5 },
-  { key: "nged_sites",       group: "grid", label: "NGED substation headroom",        color: "#5c940d", dataset: "nged_sites",     render: "point", minZoom: 5, lim: 8000 },
+  { key: "tec_register",     group: "grid", label: "Connection queue (TEC register)", color: "#1971c2", dataset: "tec_register",   render: "point", minZoom: 5, icon: "plug" },
+  { key: "ukpn_sites",       group: "grid", label: "UKPN substation headroom",        color: "#0ca678", dataset: "ukpn_sites",     render: "point", minZoom: 5, icon: "bolt" },
+  { key: "nged_sites",       group: "grid", label: "NGED substation headroom",        color: "#5c940d", dataset: "nged_sites",     render: "point", minZoom: 5, lim: 8000, icon: "bolt" },
   // Site factors
   { key: "alc",                group: "sitefactors", label: "Agricultural land grades (ALC)", color: "#94d82d", dataset: "alc",                minZoom: 7 },
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
@@ -1109,8 +1116,10 @@ const LAYER_INFO = {
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only; zoom to city scale.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
   la_rents:            { about: "Average monthly private rents by local authority, including per-bedroom breakdowns where published.", source: "ONS Price Index of Private Rents (OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
-  power_line:          { about: "High-voltage lines, weight-scaled by voltage. Wide zooms show the 275/400 kV backbone; zoom in for 132 kV and below. Click a line for its details.", source: "© OpenStreetMap contributors (ODbL)" },
-  power_substation:    { about: "Grid and primary substations — where new large connections plug in. Wide zooms show transmission-scale sites; zoom in for the rest. Click one for its details.", source: "© OpenStreetMap contributors (ODbL)" },
+  power_line:          { about: "High-voltage lines, coloured and weight-scaled by voltage — deep red is the 275/400 kV transmission backbone, orange 90–200 kV, amber below. Wide zooms show the backbone; zoom in for the rest. Click a line for its details.", source: "© OpenStreetMap contributors (ODbL)" },
+  power_sub_tx:        { about: "Transmission-scale substations (≥200 kV) — where the national grid itself can be tapped. The biggest dots; each shows its kV. Click one for details.", source: "© OpenStreetMap contributors (ODbL)" },
+  power_sub_grid:      { about: "Grid & primary substations (50–200 kV) — the realistic connection points for large developments. Dots show their kV as you zoom. Click one for details.", source: "© OpenStreetMap contributors (ODbL)" },
+  power_sub_local:     { about: "Local distribution substations below 50 kV (and sites with no tagged voltage) — the street-level network. Dense: zoom right in.", source: "© OpenStreetMap contributors (ODbL)" },
   gsp_boundary:        { about: "Grid Supply Point boundaries — where the national transmission grid hands over to regional distribution networks.", source: "NESO Data Portal (open licence)" },
   tec_register:        { about: "The transmission connection queue: projects holding capacity agreements, with MW and status. Shows where the grid is contested.", source: "NESO TEC Register (open licence)" },
   ukpn_sites:          { about: "UK Power Networks grid & primary substations with the DNO's own headroom attributes — real connection-capacity data for London, the South East and East. Click a site for full details.", source: "UK Power Networks Open Data (opendatasoft)" },
@@ -1182,6 +1191,10 @@ function setOverlayOpacity(key, v) {
     map.setPaintProperty(`ov-${key}-pt`, "circle-opacity", Math.min(1, v * 2.5));
     map.setPaintProperty(`ov-${key}-pt`, "circle-stroke-opacity", Math.min(1, v * 2.5));
   }
+  if (map.getLayer(`ov-${key}-icon`))
+    map.setPaintProperty(`ov-${key}-icon`, "icon-opacity", Math.min(1, v * 2.5));
+  if (map.getLayer(`ov-${key}-lbl`))
+    map.setPaintProperty(`ov-${key}-lbl`, "text-opacity", Math.min(1, v * 2.5));
 }
 
 function refreshMapOverlays() {
@@ -1212,10 +1225,11 @@ async function fetchMapOverlay(key) {
   // triggers a refetch naturally.)
   const zsnap = Math.round(zoom * 2) / 2;
   const nf = def.numFilter ? def.numFilter(zoom) : null;
-  const nfMin = nf ? nf.min : null;
+  const nfMin = nf ? (nf.min ?? null) : null;
+  const nfMax = nf ? (nf.max ?? null) : null;
   const c = st.fetched;
   if (c && vw >= c.w && vs >= c.s && ve <= c.e && vn <= c.n && zsnap <= c.z + 1.5
-      && (c.nfMin ?? null) === nfMin) return;
+      && (c.nfMin ?? null) === nfMin && (c.nfMax ?? null) === nfMax) return;
   const dw = (ve - vw) * OVERLAY_FETCH_MARGIN, dh = (vn - vs) * OVERLAY_FETCH_MARGIN;
   const w = vw - dw, s = vs - dh, e = ve + dw, n = vn + dh;
   if (stat) stat.textContent = "…";
@@ -1230,12 +1244,12 @@ async function fetchMapOverlay(key) {
       : def.dataset
       ? await sb.rpc("features_in_bbox", { p_dataset: def.dataset, w, s, e, n, p_zoom,
           lim: def.lim || 4000,
-          p_num_key: nf ? nf.key : null, p_num_min: nfMin })
+          p_num_key: nf ? nf.key : null, p_num_min: nfMin, p_num_max: nfMax })
       : await sb.rpc("constraints_in_bbox", { p_kinds: def.kinds, w, s, e, n, p_zoom });
     if (error) throw error;
     const fc = data || { type: "FeatureCollection", features: [] };
     if (!Array.isArray(fc.features)) fc.features = [];
-    st.fetched = { w, s, e, n, z: zsnap, nfMin };
+    st.fetched = { w, s, e, n, z: zsnap, nfMin, nfMax };
     renderOverlay(key, def, fc);
     // A count AT the row cap almost certainly means truncation — say so.
     const cap = def.lim || (def.dataset ? 4000 : def.ownership ? 3000 : 1500);
@@ -1256,6 +1270,29 @@ function overlayBeforeId() {
   return undefined;
 }
 
+// ---- Overlay point icons ---------------------------------------------------
+// Small colour-badged glyphs so different point layers stay tellable apart when
+// several are on at once. Pure inline SVG -> data URI -> map.addImage; no
+// external assets. One image per overlay key (glyph + that layer's colour).
+const ICON_GLYPHS = {
+  bolt: '<path d="M14.6 3.5 7.4 14.6h4.3l-1.6 8 7.5-11.7h-4.4l1.4-7.4Z" fill="#fff"/>',
+  plug: '<path d="M9.3 4.5v4h2.1v-4H9.3Zm5.3 0v4h2.1v-4h-2.1ZM8 9.8v3.1a5 5 0 0 0 3.9 4.9v3.7h2.2v-3.7a5 5 0 0 0 3.9-4.9V9.8H8Z" fill="#fff"/>',
+  uni:  '<path d="M13 5.4 3.4 10 13 14.6 22.6 10 13 5.4Zm-5.6 7.4v3.5c0 1.6 2.5 2.9 5.6 2.9s5.6-1.3 5.6-2.9v-3.5L13 15.9l-5.6-3.1Z" fill="#fff"/>',
+  town: '<path d="M8.1 5.2h9.8v16h-3.2v-4.2h-3.4v4.2H8.1v-16Zm2.4 2.9v2.1h2v-2.1h-2Zm5 0v2.1h-2v-2.1h2Zm-5 4.2v2.1h2v-2.1h-2Zm5 0v2.1h-2v-2.1h2Z" fill="#fff"/>',
+};
+function ensureOverlayIcons() {
+  MAP_OVERLAYS.filter(o => o.icon && ICON_GLYPHS[o.icon]).forEach(o => {
+    const id = `ovicon-${o.key}`;
+    if (map.hasImage && map.hasImage(id)) return;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 26 26">` +
+      `<circle cx="13" cy="13" r="11.6" fill="${o.color}" stroke="#ffffff" stroke-width="1.7"/>` +
+      ICON_GLYPHS[o.icon] + `</svg>`;
+    const img = new Image(52, 52);
+    img.onload = () => { try { if (!map.hasImage(id)) map.addImage(id, img, { pixelRatio: 2 }); } catch (_) {} };
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  });
+}
+
 function renderOverlay(key, def, fc) {
   const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`,
         ptId = `ov-${key}-pt`;
@@ -1269,9 +1306,14 @@ function renderOverlay(key, def, fc) {
   if (def.render === "point") {
     // Point dataset (campuses, substations, connection queue): circles that
     // scale slightly with zoom; opacity slider drives circle+stroke alpha.
+    // Substation tiers pass their own radius curve so bigger sites = bigger dots.
+    const iconId = `ovicon-${key}`;
+    const hasIcon = def.icon && map.hasImage && map.hasImage(iconId);
     map.addLayer({ id: ptId, type: "circle", source: srcId,
+      // With an icon variant the plain dot only carries the far zooms.
+      ...(hasIcon ? { maxzoom: 9 } : {}),
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 2.5, 10, 4.5, 14, 7],
+        "circle-radius": def.radius || ["interpolate", ["linear"], ["zoom"], 5, 2.5, 10, 4.5, 14, 7],
         "circle-color": def.color,
         "circle-opacity": Math.min(1, opacity * 2.5),
         "circle-stroke-color": "#ffffff",
@@ -1279,16 +1321,48 @@ function renderOverlay(key, def, fc) {
         "circle-stroke-opacity": Math.min(1, opacity * 2.5),
       } }, before);
     wireOverlayTooltip(key, ptId);
+    if (hasIcon) {
+      map.addLayer({ id: `ov-${key}-icon`, type: "symbol", source: srcId, minzoom: 9,
+        layout: {
+          "icon-image": iconId, "icon-allow-overlap": true,
+          "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.55, 12, 0.8, 15, 1],
+        },
+        paint: { "icon-opacity": Math.min(1, opacity * 2.5) } }, before);
+      wireOverlayTooltip(key, `ov-${key}-icon`);
+    }
+    // Substations wear their voltage as a tiny number on the dot once the
+    // dots are big enough to carry it.
+    if (def.kvLabel) {
+      map.addLayer({ id: `ov-${key}-lbl`, type: "symbol", source: srcId,
+        minzoom: def.labelMinZoom || 9,
+        filter: ["has", "kv"],
+        layout: {
+          "text-field": ["to-string", ["get", "kv"]],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 7, 8, 11, 9.5, 14, 11],
+          "text-allow-overlap": true,
+        },
+        paint: {
+          "text-color": "#ffffff",
+          "text-halo-color": def.color,
+          "text-halo-width": 1.1,
+          "text-opacity": Math.min(1, opacity * 2.5),
+        } }, before);
+    }
   } else if (def.render === "line") {
     // Line dataset (power lines, boundaries): no fill. Power lines scale
-    // width by voltage (props.kv) so 400 kV reads heavier than 33 kV.
+    // width AND colour by voltage (props.kv): amber local -> deep red 400 kV.
     const width = def.dataset === "power_line"
       ? ["interpolate", ["linear"], ["coalesce", ["get", "kv"], 100],
-         33, 0.8, 132, 1.4, 275, 2.2, 400, 3]
+         33, 0.9, 132, 1.6, 275, 2.4, 400, 3.2]
       : ["interpolate", ["linear"], ["zoom"], 5, 0.8, 10, 1.4, 14, 2.2];
+    const color = def.voltColor
+      ? ["step", ["coalesce", ["get", "kv"], 0],
+         "#f59f00", 50, "#e8590c", 200, "#a61e0d"]
+      : def.color;
     map.addLayer({ id: lineId, type: "line", source: srcId,
       layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": def.color, "line-width": width,
+      paint: { "line-color": color, "line-width": width,
                "line-opacity": Math.min(1, opacity * 2.5) } }, before);
     if (def.dataset === "power_line") wireOverlayTooltip(key, lineId);
   } else {
@@ -1307,39 +1381,14 @@ function renderOverlay(key, def, fc) {
   updateOverlayAttribution();
 }
 
-// Hover tooltip for dataset point/line overlays (name + the interesting props).
-// Desktop-only nicety — tap-to-inspect stays with the central dispatcher.
+// Click-to-inspect for dataset point/line overlays. (Hover is handled by the
+// central hover-card system — initHoverSystem — not per layer.)
 function wireOverlayTooltip(key, layerId) {
-  const tipProps = {
-    uni_campus: p => [p.name, p.students_total ? Number(p.students_total).toLocaleString() + " students" : p.groups].filter(Boolean).join(" · "),
-    uni_campus_site: p => (p.name || p.operator || "University campus") + " · campus",
-    uni_building: p => (p.name || p.operator || "University building"),
-    power_substation: p => [p.name || "Substation", p.kv ? `${p.kv} kV` : (p.voltage || "")].filter(Boolean).join(" · "),
-    power_line: p => ["Power line", p.kv ? `${p.kv} kV` : (p.voltage || ""), p.operator].filter(Boolean).join(" · "),
-    tec_register: p => [p.name || p.site, p.mw ? `${p.mw} MW` : "", p.status].filter(Boolean).join(" · "),
-    la_property: p => [p.name, p.titles ? `${p.titles} title${p.titles > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · "),
-    ukpn_sites: p => {
-      const hk = Object.keys(p).find(k => k.includes("headroom") && !isNaN(Number(p[k])));
-      return [p.name || "UKPN site", hk ? `${Number(p[hk]).toLocaleString()} headroom` : ""].filter(Boolean).join(" · ");
-    },
-    nged_sites: p => {
-      const hr = p.demandconnectedheadroommw ?? p.demand_connected_headroom_mw;
-      return [p.name || "NGED site", hr != null && hr !== "" ? `${Number(hr).toLocaleString()} MW headroom` : "", p.demandconnectedrag || ""].filter(Boolean).join(" · ");
-    },
-  };
-  const fmt = tipProps[key] || (p => p.name || key);
-  const pop = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
-  map.on("mouseenter", layerId, (e) => {
-    map.getCanvas().style.cursor = "pointer";
-    pop.setLngLat(e.lngLat).setHTML(`<strong>${fmt(e.features[0].properties)}</strong>`).addTo(map);
-  });
-  map.on("mousemove", layerId, (e) => pop.setLngLat(e.lngLat));
-  map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; pop.remove(); });
   // Click pins a card with EVERY attribute the feature carries (voltage,
   // operator, substation class, queued MW, ...). Same pattern as brownfield.
   map.on("click", layerId, (e) => {
     const p = e.features[0].properties || {};
-    pop.remove();
+    hoverCardHide();
     if (key === "uni_campus") {
       openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, e.lngLat,
         uniProviderCardHTML(p));
@@ -1418,7 +1467,8 @@ function updateOverlayAttribution() {
 let _osmPowerAttributionShown = false;
 
 function removeOverlayLayers(key) {
-  for (const id of [`ov-${key}-fill`, `ov-${key}-line`, `ov-${key}-pt`])
+  for (const id of [`ov-${key}-fill`, `ov-${key}-line`, `ov-${key}-pt`,
+                    `ov-${key}-icon`, `ov-${key}-lbl`])
     if (map.getLayer(id)) map.removeLayer(id);
   const srcId = `ov-${key}-src`;
   if (map.getSource(srcId)) map.removeSource(srcId);
@@ -2400,6 +2450,446 @@ function closeDetail() {
   panel.innerHTML = "";
 }
 
+// ---- Central hover system --------------------------------------------------
+// ONE mousemove pipeline for the whole map. Priority: station dots > rail
+// stops > overlay points/lines > overlay fills > green belt > LSOA. Whatever
+// wins renders into a single clean hover card (value-first rows, a colour chip
+// naming the layer); the hovered LSOA additionally gets its boundary drawn.
+
+const _esc = s => String(s).replace(/[&<>"']/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function _hoverEl() { return document.getElementById("hover-card"); }
+
+function hoverCardHide() {
+  const el = _hoverEl();
+  if (el) el.hidden = true;
+  if (map.getLayer("lsoa-hover")) map.setFilter("lsoa-hover", ["==", "lsoa_code", ""]);
+  if (map.getLayer("simd-hover")) map.setFilter("simd-hover", ["==", "lsoa_code", ""]);
+}
+
+// What the card says for each kind of feature: {title, kind, chip, rows} where
+// rows are [value, label] pairs (value leads, label follows).
+function hoverContentForOverlay(def, p) {
+  const d = def.dataset;
+  const row = (v, l) => (v == null || v === "" || v === "null") ? null : [String(v), l];
+  let title = p.name || def.label, kind = def.label, rows = [];
+  if (d === "power_substation") {
+    title = p.name || "Substation";
+    rows = [row(p.kv ? `${p.kv} kV` : null, "voltage"),
+            row(p.operator, "operator"),
+            row(p.substation, "class")];
+  } else if (d === "power_line") {
+    title = "Power line";
+    rows = [row(p.kv ? `${p.kv} kV` : (p.voltage || null), "voltage"), row(p.operator, "operator")];
+  } else if (d === "tec_register") {
+    title = p.name || p.site || "Connection project";
+    rows = [row(p.mw != null ? `${Number(p.mw).toLocaleString()} MW` : null, "queued"),
+            row(p.status, "status"), row(p.plant, "plant")];
+  } else if (d === "ukpn_sites") {
+    const hk = Object.keys(p).find(k => k.includes("headroom") && !isNaN(Number(p[k])));
+    title = p.name || "UKPN site";
+    rows = [row(hk ? `${Number(p[hk]).toLocaleString()} MW` : null, "headroom")];
+  } else if (d === "nged_sites") {
+    const hr = p.demandconnectedheadroommw ?? p.demand_connected_headroom_mw;
+    title = p.name || "NGED site";
+    rows = [row(hr != null && hr !== "" ? `${Number(hr).toLocaleString()} MW` : null, "demand headroom"),
+            row(p.demandconnectedrag, "RAG")];
+  } else if (d === "uni_campus") {
+    rows = [row(p.students_total ? Number(p.students_total).toLocaleString() : null, "students"),
+            row(p.intl_pct != null ? `${p.intl_pct}%` : null, "international")];
+  } else if (d === "uni_campus_site" || d === "uni_building") {
+    title = p.name || p.operator || def.label;
+  } else if (d === "la_property") {
+    title = p.name || "Council property";
+    rows = [row(p.titles ? `${p.titles} title${p.titles > 1 ? "s" : ""}` : null, "registered")];
+  } else if (d === "alc") {
+    title = p.alc_grade || p.name || "Agricultural land";
+  } else if (d === "ptal") {
+    title = `PTAL ${p.ptal ?? ""}`.trim();
+    kind = "Public transport access";
+  } else if (d === "la_rents") {
+    title = p.name || "Local authority";
+    rows = [row(p.rent_mean != null ? `£${Number(p.rent_mean).toLocaleString()}/mo` : null, "avg rent"),
+            row(p.annual_rent_change_pct != null ? `${p.annual_rent_change_pct > 0 ? "+" : ""}${p.annual_rent_change_pct}%` : null, "year on year")];
+  } else if (def.kinds || def.ownership) {
+    title = p.name || def.label;
+  }
+  return { title, kind, chip: def.color, rows: rows.filter(Boolean) };
+}
+
+function hoverCardHTML(c, hint) {
+  const rows = (c.rows || []).map(([v, l]) =>
+    `<span class="hc-row"><strong class="hc-v">${_esc(v)}</strong><span class="hc-k">${_esc(l)}</span></span>`).join("");
+  return `<div class="hc-head"><span class="hc-chip" style="background:${c.chip}"></span>` +
+         `<span class="hc-title">${_esc(c.title || "")}</span></div>` +
+         (c.kind ? `<div class="hc-kind">${_esc(c.kind)}</div>` : "") +
+         (rows ? `<div class="hc-rows">${rows}</div>` : "") +
+         (hint ? `<div class="hc-hint">${hint}</div>` : "");
+}
+
+function initHoverSystem() {
+  // Touch devices have no hover — the tap dispatcher already covers them.
+  if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) return;
+  const container = map.getContainer();
+  let card = _hoverEl();
+  if (!card) {
+    card = document.createElement("div");
+    card.id = "hover-card";
+    card.hidden = true;
+    container.appendChild(card);
+  }
+
+  // Hovered-boundary outline for LSOAs / Scottish Data Zones, under the
+  // station dots so markers stay on top.
+  const boundaryBefore = map.getLayer("station-dot") ? "station-dot" : undefined;
+  if (map.getLayer("lsoa-fill") && !map.getLayer("lsoa-hover"))
+    map.addLayer({ id: "lsoa-hover", type: "line", source: "lsoa", "source-layer": SOURCE_LAYER,
+      paint: { "line-color": "#339af0", "line-width": 1.8, "line-opacity": 0.95 },
+      filter: ["==", "lsoa_code", ""] }, boundaryBefore);
+  if (map.getLayer("simd-fill") && !map.getLayer("simd-hover"))
+    map.addLayer({ id: "simd-hover", type: "line", source: "lsoa", "source-layer": "simd",
+      paint: { "line-color": "#339af0", "line-width": 1.8, "line-opacity": 0.95 },
+      filter: ["==", "lsoa_code", ""] }, boundaryBefore);
+
+  const overlayLayerIds = () => {
+    // Points/lines first (small targets beat big fills), then polygon fills.
+    const ids = [];
+    for (const o of MAP_OVERLAYS)
+      for (const sfx of ["icon", "pt", "line"])
+        if (map.getLayer(`ov-${o.key}-${sfx}`)) ids.push(`ov-${o.key}-${sfx}`);
+    for (const o of MAP_OVERLAYS)
+      if (map.getLayer(`ov-${o.key}-fill`)) ids.push(`ov-${o.key}-fill`);
+    return ids;
+  };
+  const overlayFromLayerId = (id) => {
+    const m = id.match(/^ov-(.+)-(icon|pt|line|fill|lbl)$/);
+    return m ? overlayDef(m[1]) : null;
+  };
+
+  let raf = 0;
+  map.on("mousemove", (e) => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => { raf = 0; updateHover(e); });
+  });
+  map.getCanvas().addEventListener("mouseleave", () => {
+    map.getCanvas().style.cursor = "";
+    hoverCardHide();
+  });
+
+  function updateHover(e) {
+    const tol = 5;
+    const box = [[e.point.x - tol, e.point.y - tol], [e.point.x + tol, e.point.y + tol]];
+
+    // Priority candidates, in order.
+    const prio = [];
+    if (state.hasStations && state.stationsVisible !== false && map.getLayer("station-dot"))
+      prio.push("station-dot");
+    if (map.getLayer("rail-stop")) prio.push("rail-stop");
+    prio.push(...overlayLayerIds());
+    if (state.hasGreenbelt && map.getLayer("greenbelt-fill")
+        && map.getLayoutProperty("greenbelt-fill", "visibility") === "visible")
+      prio.push("greenbelt-fill");
+
+    let hits = [];
+    if (prio.length) {
+      try { hits = map.queryRenderedFeatures(box, { layers: prio }); } catch (_) { hits = []; }
+    }
+    let winner = null;
+    for (const id of prio) {
+      const f = hits.find(h => h.layer && h.layer.id === id);
+      if (f) { winner = { id, f }; break; }
+    }
+
+    // The LSOA under the cursor: boundary always highlights while a
+    // choropleth is on; the card falls back to its summary when nothing
+    // more specific is hovered.
+    let lsoa = null;
+    const lsoaLayers = ["lsoa-fill", "simd-fill"].filter(id => map.getLayer(id));
+    if (lsoaLayers.length && (state.imdOn || state.priceOn)) {
+      try {
+        const lf = map.queryRenderedFeatures(e.point, { layers: lsoaLayers });
+        if (lf.length) lsoa = lf[0].properties;
+      } catch (_) {}
+    }
+    const code = lsoa ? lsoa.lsoa_code : "";
+    if (map.getLayer("lsoa-hover")) map.setFilter("lsoa-hover", ["==", "lsoa_code", code || ""]);
+    if (map.getLayer("simd-hover")) map.setFilter("simd-hover", ["==", "lsoa_code", code || ""]);
+
+    let html = null;
+    if (winner) {
+      const p = winner.f.properties || {};
+      if (winner.id === "station-dot") {
+        const rows = [];
+        if (p.usage != null && p.usage !== "")
+          rows.push([fmtCount(Number(p.usage)), "entries/exits"]);
+        if (p.crs) rows.push([p.crs, "CRS"]);
+        html = hoverCardHTML({ title: p.name || "Station", kind: "Rail station (usage-scaled)",
+                               chip: STATION_COLOR, rows }, "click for the station workflow");
+      } else if (winner.id === "rail-stop") {
+        const m = railMode(p.mode);
+        html = hoverCardHTML({ title: p.name || "Stop", kind: m ? m.label : "Transit stop",
+                               chip: (m && m.color) || "#666", rows: [] }, "click for details");
+      } else if (winner.id === "greenbelt-fill") {
+        html = hoverCardHTML({ title: p.name || "Green Belt", kind: "Green Belt",
+                               chip: GREENBELT_COLOR, rows: [] });
+      } else {
+        const def = overlayFromLayerId(winner.id);
+        if (def) html = hoverCardHTML(hoverContentForOverlay(def, p), "click for full details");
+      }
+    } else if (lsoa) {
+      const rows = [[combinedScore(lsoa, state.weights).toFixed(0) + "/100", "deprivation"]];
+      if (lsoa.price_ppm2 != null) rows.push([ppm2Fmt(lsoa.price_ppm2), "house price"]);
+      else if (lsoa.price_median != null) rows.push([priceFmt(lsoa.price_median), "median sale"]);
+      if (lsoa.population != null && !isNaN(lsoa.population))
+        rows.push([Number(lsoa.population).toLocaleString(), "residents"]);
+      html = hoverCardHTML({ title: lsoa.lad_name || lsoa.lsoa_name || "Neighbourhood",
+                             kind: lsoa.lsoa_name ? `${lsoa.lsoa_name} · ${code}` : code,
+                             chip: rampColor(combinedScore(lsoa, state.weights)), rows },
+                           "click to inspect · right-click for spot summary");
+    }
+
+    map.getCanvas().style.cursor = (winner || lsoa) ? "pointer" : "";
+    if (!html) { card.hidden = true; return; }
+    card.innerHTML = html;
+    card.hidden = false;
+    // Position beside the cursor, flipping at the right/bottom edges.
+    const mw = container.clientWidth, mh = container.clientHeight;
+    const cw = card.offsetWidth || 220, ch = card.offsetHeight || 90;
+    let x = e.point.x + 16, y = e.point.y + 14;
+    if (x + cw > mw - 8) x = e.point.x - cw - 14;
+    if (y + ch > mh - 8) y = e.point.y - ch - 12;
+    card.style.left = `${Math.max(8, x)}px`;
+    card.style.top = `${Math.max(8, y)}px`;
+  }
+}
+
+// ---- Right-click "Spot summary" --------------------------------------------
+// A small context menu on right-click; "Spot summary" pulls everything we know
+// about that exact point into a floating card — LSOA stats client-side, plus
+// the point_summary RPC answering from the full national tables (so layers
+// don't need to be switched on to be reported).
+
+function constraintChipMeta(kind) {
+  const o = MAP_OVERLAYS.find(m => m.kinds && m.kinds.includes(kind));
+  if (o) return { label: o.label, color: o.color };
+  if (kind === "green_belt") return { label: "Green Belt", color: GREENBELT_COLOR };
+  return { label: kind.replace(/_/g, " "), color: "#868e96" };
+}
+
+function _distMeters(a, b) {
+  const R = 6371000, dLat = (b.lat - a.lat) * Math.PI / 180, dLng = (b.lng - a.lng) * Math.PI / 180;
+  const s = Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+function _fmtDist(m) {
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+function nearestUsageStation(lngLat) {
+  const feats = (state.stationsData && state.stationsData.features) || [];
+  let best = null, bestD = Infinity;
+  for (const f of feats) {
+    const c = f.geometry && f.geometry.coordinates;
+    if (!c) continue;
+    const d = _distMeters(lngLat, { lng: c[0], lat: c[1] });
+    if (d < bestD) { bestD = d; best = f; }
+  }
+  return best ? { props: best.properties, dist: bestD } : null;
+}
+
+function initSpotSummary() {
+  const container = map.getContainer();
+  let menu = document.getElementById("ctx-menu");
+  if (!menu) {
+    menu = document.createElement("div");
+    menu.id = "ctx-menu";
+    menu.hidden = true;
+    container.appendChild(menu);
+  }
+  const hideMenu = () => { menu.hidden = true; };
+
+  map.on("contextmenu", (e) => {
+    if (e.originalEvent) e.originalEvent.preventDefault();
+    hoverCardHide();
+    const ll = e.lngLat;
+    menu.innerHTML =
+      `<button type="button" class="ctx-item" data-act="spot">📍 Spot summary</button>` +
+      `<button type="button" class="ctx-item" data-act="coords">⧉ Copy coordinates</button>`;
+    menu.hidden = false;
+    const mw = container.clientWidth, mh = container.clientHeight;
+    let x = e.point.x, y = e.point.y;
+    if (x + 180 > mw - 6) x = mw - 186;
+    if (y + 84 > mh - 6) y = mh - 90;
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    menu.querySelector('[data-act="spot"]').addEventListener("click", () => {
+      hideMenu();
+      showSpotSummary(ll, e.point);
+    });
+    menu.querySelector('[data-act="coords"]').addEventListener("click", () => {
+      hideMenu();
+      try { navigator.clipboard.writeText(`${ll.lat.toFixed(6)}, ${ll.lng.toFixed(6)}`); } catch (_) {}
+    });
+  });
+  document.addEventListener("click", (ev) => { if (!menu.contains(ev.target)) hideMenu(); });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { hideMenu(); closeSpotPanel(); }
+  });
+}
+
+function closeSpotPanel() {
+  const panel = document.getElementById("spot-panel");
+  if (panel) { panel.classList.remove("open"); panel.innerHTML = ""; }
+}
+
+async function showSpotSummary(lngLat, point) {
+  let panel = document.getElementById("spot-panel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "spot-panel";
+    document.getElementById("app").appendChild(panel);
+  }
+  const coordLine = `${lngLat.lat.toFixed(5)}, ${lngLat.lng.toFixed(5)}`;
+  panel.innerHTML = `
+    <button class="fd-close" aria-label="Close">×</button>
+    <div class="fd-location"><div class="fd-district">Spot summary</div>
+    <div class="fd-sub">${coordLine}</div></div>
+    <p class="hint">Reading this spot…</p>`;
+  panel.classList.add("open");
+  panel.querySelector(".fd-close").addEventListener("click", closeSpotPanel);
+  positionFloatingPanel(panel, point);
+
+  // Client-side context (available instantly).
+  let lsoa = null;
+  try {
+    const layers = ["lsoa-fill", "simd-fill"].filter(id => map.getLayer(id));
+    const lf = map.queryRenderedFeatures([point.x, point.y], { layers });
+    if (lf.length) lsoa = lf[0].properties;
+  } catch (_) {}
+  const stn = nearestUsageStation(lngLat);
+
+  // Server-side: everything at the point from the national tables.
+  let ps = null, psErr = null;
+  const sb = (typeof getSupabase === "function") ? getSupabase() : null;
+  if (sb) {
+    try {
+      const { data, error } = await sb.rpc("point_summary",
+        { p_lon: lngLat.lng, p_lat: lngLat.lat });
+      if (error) throw error;
+      ps = data || {};
+    } catch (err) {
+      console.error("point_summary failed", err);
+      psErr = err;
+    }
+  }
+
+  const line = (label, valueHTML) => valueHTML == null || valueHTML === "" ? "" :
+    `<div class="sp-row"><span class="sp-v">${valueHTML}</span><span class="sp-k">${_esc(label)}</span></div>`;
+  const sec = (title, inner) => inner ? `<div class="sp-sec"><div class="sp-h">${_esc(title)}</div>${inner}</div>` : "";
+  const strong = v => `<strong>${_esc(v)}</strong>`;
+
+  // Location.
+  const areas = (ps && ps.areas) || {};
+  const lad = (areas.lad_boundary && areas.lad_boundary.name) || (lsoa && lsoa.lad_name) || null;
+  const lpa = areas.lpa_boundary && areas.lpa_boundary.name;
+  let locSec = "";
+  locSec += line("district", lad ? strong(lad) : null);
+  locSec += line("planning authority", lpa && lpa !== lad ? strong(lpa) : null);
+  if (lsoa) locSec += line("LSOA", strong(lsoa.lsoa_name ? `${lsoa.lsoa_name} (${lsoa.lsoa_code})` : lsoa.lsoa_code));
+  if (areas.uni_campus_site) locSec += line("on campus", strong(areas.uni_campus_site.name || "university campus"));
+
+  // People & deprivation (LSOA-level, client side).
+  let peopleSec = "";
+  if (lsoa) {
+    const comb = combinedScore(lsoa, state.weights);
+    const worst = DOMAINS.map(d => ({ n: d.name, v: lsoa[`${d.key}_norm`] ?? 0 }))
+      .sort((a, b) => b.v - a.v).slice(0, 2);
+    peopleSec += line("deprivation", `<strong>${comb.toFixed(0)}/100</strong> <span class="sp-dim">worst: ${_esc(worst.map(w => `${w.n} ${w.v.toFixed(0)}`).join(", "))}</span>`);
+    if (lsoa.population != null && !isNaN(lsoa.population))
+      peopleSec += line("population", strong(Number(lsoa.population).toLocaleString()) + ` <span class="sp-dim">this LSOA</span>`);
+  }
+
+  // Housing.
+  let houseSec = "";
+  if (lsoa && lsoa.price_ppm2 != null) houseSec += line("house price", strong(ppm2Fmt(lsoa.price_ppm2)));
+  else if (lsoa && lsoa.price_median != null) houseSec += line("median sale", strong(priceFmt(lsoa.price_median)));
+  if (areas.la_rents && areas.la_rents.rent_mean != null) {
+    const ch = areas.la_rents.annual_rent_change_pct;
+    houseSec += line("avg private rent", strong(`£${Number(areas.la_rents.rent_mean).toLocaleString()}/mo`) +
+      (ch != null ? ` <span class="sp-dim">${ch > 0 ? "+" : ""}${_esc(ch)}% y/y</span>` : ""));
+  }
+  if (ps && ps.brownfield_nearby > 0)
+    houseSec += line("brownfield sites", strong(String(ps.brownfield_nearby)) + ` <span class="sp-dim">within 800 m</span>`);
+
+  // Planning & environment designations AT the point, as colour chips.
+  let chips = [];
+  for (const c of (ps && ps.constraints) || []) {
+    const m = constraintChipMeta(c.kind);
+    chips.push(`<span class="chip" title="${_esc(c.name || m.label)}"><i style="background:${m.color}"></i>${_esc(m.label)}</span>`);
+  }
+  for (const [dkey, label, color] of [["article4", "Article 4 area", "#c2255c"],
+                                      ["tpo_zone", "Tree preservation", "#2b8a3e"],
+                                      ["design_code_area", "Design code", "#e8590c"]]) {
+    if (areas[dkey]) chips.push(`<span class="chip" title="${_esc(areas[dkey].name || label)}"><i style="background:${color}"></i>${_esc(label)}</span>`);
+  }
+  let planSec = chips.length ? `<div class="sp-chips">${chips.join("")}</div>` : "";
+  if (!chips.length && ps) planSec = `<div class="sp-row"><span class="sp-dim">No designations at this exact spot.</span></div>`;
+  if (areas.alc) planSec += line("agricultural land", strong(areas.alc.alc_grade || areas.alc.name || ""));
+  if (areas.water_availability && (areas.water_availability.name || Object.keys(areas.water_availability).length > 1))
+    planSec += line("water availability", strong(areas.water_availability.name || "assessed catchment"));
+
+  // Ownership.
+  let ownSec = "";
+  for (const o of (ps && ps.ownership) || []) {
+    const body = MAP_OVERLAYS.find(m => m.bodies && m.bodies.includes(o.body));
+    ownSec += line("public land", strong(body ? body.label : (o.owner || o.body)));
+  }
+
+  // Power.
+  let powSec = "";
+  if (ps && ps.nearest_substation) {
+    const n = ps.nearest_substation;
+    powSec += line("nearest substation", strong(_fmtDist(n.dist_m)) +
+      ` <span class="sp-dim">${_esc([n.kv ? `${n.kv} kV` : "local", n.name || n.operator].filter(Boolean).join(" · "))}</span>`);
+  }
+  if (ps && ps.nearest_grid_substation) {
+    const n = ps.nearest_grid_substation;
+    powSec += line("nearest grid-scale", strong(_fmtDist(n.dist_m)) +
+      ` <span class="sp-dim">${_esc([`${n.kv} kV`, n.name || n.operator].filter(Boolean).join(" · "))}</span>`);
+  }
+  if (areas.gsp_boundary) powSec += line("grid supply point", strong(areas.gsp_boundary.name || ""));
+  if (ps && ps.nearest_tec && ps.nearest_tec.dist_m < 10000) {
+    const t = ps.nearest_tec;
+    powSec += line("connection queue", strong(`${t.mw ?? "?"} MW`) +
+      ` <span class="sp-dim">${_esc([t.status, t.name, _fmtDist(t.dist_m)].filter(Boolean).join(" · "))}</span>`);
+  }
+
+  // Transport.
+  let trSec = "";
+  if (stn) trSec += line("nearest station", strong(stn.props.name || "Station") +
+    ` <span class="sp-dim">${_fmtDist(stn.dist)}${stn.props.usage ? ` · ${fmtCount(Number(stn.props.usage))} entries/exits` : ""}</span>`);
+  if (areas.ptal) trSec += line("PTAL", strong(String(areas.ptal.ptal ?? areas.ptal.name ?? "")));
+
+  const errNote = psErr ? `<p class="hint">Some checks didn't load (database busy) — showing what's available.</p>` : "";
+
+  panel.innerHTML = `
+    <button class="fd-close" aria-label="Close">×</button>
+    <div class="fd-location"><div class="fd-district">Spot summary</div>
+    <div class="fd-sub">${coordLine}</div></div>
+    ${sec("Location", locSec)}
+    ${sec("People & deprivation", peopleSec)}
+    ${sec("Housing & land", houseSec)}
+    ${sec("Planning & environment", planSec)}
+    ${sec("Public land ownership", ownSec)}
+    ${sec("Power", powSec)}
+    ${sec("Transport", trSec)}
+    ${errNote}`;
+  panel.querySelector(".fd-close").addEventListener("click", closeSpotPanel);
+  positionFloatingPanel(panel, point);
+}
+
 // ---- Hover popup ----------------------------------------------------------
 
 // Within an open deep dive, resolve a tap to a detail-layer feature (brownfield
@@ -2603,28 +3093,8 @@ function wireInteractions() {
     }, { passive: true });
   })();
 
-  const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
-  map.on("mousemove", "lsoa-fill", (e) => {
-    const f = e.features[0];
-    const p = f.properties;
-    map.getCanvas().style.cursor = "pointer";
-    // Show the deprivation score, plus the price when the price layer is on
-    // (both layers can be visible at once now).
-    let detail = "combined " + combinedScore(p, state.weights).toFixed(0);
-    if (state.priceOn) {
-      detail += p.price_ppm2 != null ? ` · ${ppm2Fmt(p.price_ppm2)}`
-        : (p.price_median != null ? ` · ${priceFmt(p.price_median)} median` : "");
-    }
-    popup.setLngLat(e.lngLat)
-      .setHTML(`${p.lsoa_code} · ${detail} · click to inspect`)
-      .addTo(map);
-  });
-  map.on("mouseleave", "lsoa-fill", () => {
-    map.getCanvas().style.cursor = "";
-    popup.remove();
-  });
-
-  // (LSOA zone clicks are handled by the unified handleMapTap dispatcher above.)
+  // (LSOA hover is handled by the central hover-card system; zone clicks by
+  // the unified handleMapTap dispatcher above.)
 
   map.on("draw.create", onDrawChange);
   map.on("draw.update", onDrawChange);
@@ -2634,27 +3104,13 @@ function wireInteractions() {
       `<p class="empty">No site selected yet.</p>`;
   });
 
-  // Rail stops: hover shows a quick tooltip; click pins a full info panel.
-  // Bound only when the rail layer exists. Stops sit above the choropleth, so
-  // they take priority when the cursor is over a dot.
-  if (state.hasRail) {
-    const stopPopup = new maplibregl.Popup({
-      closeButton: false, closeOnClick: false, offset: 10,
-    });
-    map.on("mouseenter", "rail-stop", (e) => {
-      const p = e.features[0].properties;
-      map.getCanvas().style.cursor = "pointer";
-      stopPopup.setLngLat(e.lngLat)
-        .setHTML(`<strong>${p.name || "Stop"}</strong> · ${railMode(p.mode)?.label || p.mode}`)
-        .addTo(map);
-    });
-    map.on("mousemove", "rail-stop", (e) => stopPopup.setLngLat(e.lngLat));
-    map.on("mouseleave", "rail-stop", () => {
-      map.getCanvas().style.cursor = "";
-      stopPopup.remove();
-    });
-    // (Rail-stop clicks are handled by the unified handleMapTap dispatcher.)
-  }
+  // (Rail-stop hover is handled by the central hover-card system; clicks by
+  // the unified handleMapTap dispatcher.)
+
+  // The context-aware hover card, LSOA boundary highlight, and the
+  // right-click "Spot summary" menu.
+  initHoverSystem();
+  initSpotSummary();
 }
 
 // Find the station-usage feature matching a rail-stop's properties, by CRS
