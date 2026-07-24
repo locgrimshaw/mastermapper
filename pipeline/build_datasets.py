@@ -168,20 +168,27 @@ NGED_SITES_URL = ("https://connecteddata.nationalgrid.co.uk/dataset/"
 # warns and the *_SITES_SRC repo variable takes an updated export URL
 # (see docs/MANUAL_TASKS.md 9b).
 DNO_SITES = [
+    # SPEN publishes DG heat maps per licence area — primaries carry a
+    # green/amber/red capacity class. "|" separates multiple export URLs;
+    # the builder concatenates them into one layer.
     ("spen_sites", "SPEN_SITES_SRC",
      "https://spenergynetworks.opendatasoft.com/api/explore/v2.1/catalog/"
-     "datasets/spen-network-headroom/exports/csv?delimiter=%2C",
+     "datasets/distributed-generation-sp-distribution-heat-maps-spd-primary-"
+     "substations/exports/csv?delimiter=%2C"
+     "|https://spenergynetworks.opendatasoft.com/api/explore/v2.1/catalog/"
+     "datasets/distributed-generation-sp-manweb-heat-maps-spm-primary-"
+     "substations/exports/csv?delimiter=%2C",
      "spen-sites.csv", "SP Energy Networks (Scotland S + Merseyside/N Wales)"),
     ("npg_sites", "NPG_SITES_SRC",
      "https://northernpowergrid.opendatasoft.com/api/explore/v2.1/catalog/"
-     "datasets/substation-capacity-headroom/exports/csv?delimiter=%2C",
+     "datasets/heatmapsubstationareas/exports/csv?delimiter=%2C",
      "npg-sites.csv", "Northern Powergrid (North East + Yorkshire)"),
     ("enwl_sites", "ENWL_SITES_SRC",
      "https://electricitynorthwest.opendatasoft.com/api/explore/v2.1/catalog/"
-     "datasets/grid-and-primary-headroom/exports/csv?delimiter=%2C",
+     "datasets/distribution-tx-headroom/exports/csv?delimiter=%2C",
      "enwl-sites.csv", "Electricity North West"),
     ("ssen_sites", "SSEN_SITES_SRC",
-     None,   # SSEN's portal is CKAN-based with hashed links — needs the var.
+     None,   # data.ssen.co.uk uses hashed CKAN links — needs the var.
      "ssen-sites.csv", "SSEN (north Scotland + central southern England)"),
 ]
 LAD_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
@@ -1154,19 +1161,49 @@ def build_dno_group():
     prop so the click card shows the operator's own headroom vocabulary."""
     out = {}
     for key, env, default_url, drop_name, label in DNO_SITES:
-        path, how = _resolve_source(key, [env], default_url, drop_name)
-        if path is None:
-            _warn(key, f"{how} — set {env} to a CSV export from the {label} "
-                       "open data portal (docs/MANUAL_TASKS.md 9b)")
-            _note(key, how)
+        # "|"-separated URLs (env or default) concatenate into one layer —
+        # operators like SPEN split their network across licence areas.
+        srcs = os.environ.get(env, "").strip() or (default_url or "")
+        parts = [s.strip() for s in srcs.split("|") if s.strip()]
+        stem, ext = (drop_name.rsplit(".", 1) + ["csv"])[:2]
+        resolved = []
+        if parts:
+            for i, u in enumerate(parts):
+                cname = drop_name if i == 0 else f"{stem}-{i + 1}.{ext}"
+                if u.lower().startswith(("http://", "https://")):
+                    path, how = _resolve_source(key, [], u, cname)
+                else:
+                    p = Path(u)
+                    path, how = (p, "local file") if p.exists() \
+                        else (None, f"{u} does not exist")
+                if path is None:
+                    _warn(key, f"{how} — set {env} to a CSV export from the "
+                               f"{label} open data portal "
+                               "(docs/MANUAL_TASKS.md 9b)")
+                else:
+                    resolved.append((path, how))
+        else:
+            path, how = _resolve_source(key, [env], None, drop_name)
+            if path is not None:
+                resolved.append((path, how))
+            else:
+                _warn(key, f"{how} — set {env} to a CSV export from the "
+                           f"{label} open data portal (docs/MANUAL_TASKS.md 9b)")
+        if not resolved:
+            _note(key, "no reachable source")
             continue
-        print(f"  [{key}] reading {path.name} ({how}) ...")
-        try:
-            df = _read_csv(path)
-        except Exception as e:
-            _warn(key, f"unreadable CSV ({e}) — check {env}")
+        dfs = []
+        for path, how in resolved:
+            print(f"  [{key}] reading {path.name} ({how}) ...")
+            try:
+                dfs.append(_read_csv(path))
+            except Exception as e:
+                _warn(key, f"unreadable CSV {path.name} ({e}) — check {env}")
+        if not dfs:
             _note(key, "unreadable CSV")
             continue
+        df = pd.concat(dfs, ignore_index=True, sort=False) \
+            if len(dfs) > 1 else dfs[0]
         gdf = _dno_points(df, key)
         if gdf is None or not len(gdf):
             _note(key, "no mappable rows")
