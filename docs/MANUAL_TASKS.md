@@ -120,19 +120,22 @@ The working route — repeat monthly when HMLR refresh the file:
    the bucket automatically).
 4. Optionally delete the zip from the bucket afterwards to save storage.
 
-## 8c. National land-parcel outlines (INSPIRE tiles)
+## 8c. National land-parcel outlines (INSPIRE tiles) — ONE step left
 
-Nationwide parcel boundaries under the council dots, streamed as tiles (no
-database load). One-off setup, then re-run the workflow occasionally:
+The national tile file is **built and waiting** (4.5 GB, kept as a workflow
+artifact) — only the upload is blocked by the project's storage limit:
 
-1. In the Supabase dashboard: **Project Settings → Storage → Upload file size
-   limit** → set to at least **5 GB** (the national tile file is ~1–3 GB).
-2. Run the **"Build national INSPIRE parcel tiles"** workflow from the
-   Actions tab, leaving *max_las* blank. It downloads all ~330 local
-   authorities from HMLR, tiles them, and uploads to the public `tiles`
-   storage bucket. Takes 2–5 hours.
+1. In the Supabase dashboard: **Project Settings → Storage → Upload file
+   size limit** → set to at least **5 GB** (default is 50 MB; the file is
+   4.5 GB).
+2. Run the **"Finish national parcel tiles"** workflow from the Actions tab
+   with *source_run_id* = **30136665316**. It reuses that run's downloaded
+   data (nothing re-fetched from HMLR), re-tiles (~1¾ h) and uploads.
 3. Hard-refresh the map and turn on **Land parcels (HMLR INSPIRE)** under
    Land ownership — parcels appear from zoom 13.
+
+(Future rebuilds: run "Build national INSPIRE parcel tiles" with max_las
+blank — it now fans out across 8 parallel runners, ~3.5 h total.)
 
 ## 8b. (superseded) original HMLR steps
 

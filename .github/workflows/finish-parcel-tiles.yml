@@ -1,0 +1,88 @@
+name: Finish national parcel tiles
+
+# Retry vehicle for the parcel-tiles pipeline: reuses artifacts from an
+# earlier build run so nothing is re-downloaded from HMLR. If that run saved
+# a finished parcels-pmtiles artifact, this just re-uploads it; otherwise it
+# re-tiles from the 8 download-shard artifacts first (~1h45m). Use after
+# fixing whatever blocked the original upload (typically the Supabase
+# storage upload size limit — raise to 5 GB: Project Settings -> Storage).
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Run ID of the build-parcel-tiles run whose artifacts to finish"
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Try the finished tiles artifact first
+        id: pm
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: parcels-pmtiles
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Fall back to the download shards
+        if: ${{ steps.pm.outcome == 'failure' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: parcels-shard-*
+          merge-multiple: true
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Tile with tippecanoe (only when no finished artifact existed)
+        if: ${{ steps.pm.outcome == 'failure' }}
+        run: |
+          sudo apt-get update -qq
+          if ! sudo apt-get install -y -qq tippecanoe; then
+            sudo apt-get install -y -qq build-essential libsqlite3-dev zlib1g-dev git
+            git clone --depth 1 https://github.com/felt/tippecanoe /tmp/tippecanoe
+            make -j"$(nproc)" -C /tmp/tippecanoe
+            sudo make -C /tmp/tippecanoe install
+          fi
+          gunzip parcels-*.jsonl.gz
+          tippecanoe -o parcels.pmtiles -l parcels \
+            --minimum-zoom=12 --maximum-zoom=15 \
+            --coalesce-densest-as-needed --extend-zooms-if-still-dropping \
+            --force --read-parallel parcels-*.jsonl
+          rm -f parcels-*.jsonl
+
+      # Save the tiles from THIS run too — if the storage upload still fails,
+      # the next finish attempt (pointed at this run) skips straight to upload.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parcels-pmtiles
+          path: parcels.pmtiles
+          compression-level: 0
+        continue-on-error: true
+
+      - name: Upload to Supabase storage (public tiles bucket)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          ls -la parcels.pmtiles
+          code=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' -X POST \
+            "$SUPABASE_URL/storage/v1/object/tiles/parcels.pmtiles" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/octet-stream" \
+            -H "x-upsert: true" \
+            -T parcels.pmtiles)
+          cat /tmp/resp.txt; echo
+          if [ "$code" != "200" ]; then
+            echo "::error::Upload failed (HTTP $code). If this is a size rejection, raise Project Settings -> Storage -> Upload file size limit to at least 5 GB and re-run this workflow."
+            exit 1
+          fi
+          echo "Uploaded: $SUPABASE_URL/storage/v1/object/public/tiles/parcels.pmtiles"
