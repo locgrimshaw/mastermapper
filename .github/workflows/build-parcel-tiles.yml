@@ -3,15 +3,20 @@ name: Build national INSPIRE parcel tiles
 # Nationwide land-parcel outlines (HM Land Registry INSPIRE index polygons,
 # ~26M parcels) as a single PMTiles file hosted on Supabase Storage (public
 # 'tiles' bucket). The map streams just the parcels in view from z13 — no
-# database involvement at all. Re-run occasionally (HMLR refresh monthly-ish);
-# takes roughly 2-5 hours for the full country.
+# database involvement at all.
+#
+# ARCHITECTURE: the first full attempt spent 6 hours inside sequential
+# downloads alone (HMLR throttles per connection), so the build is now a
+# fan-out — 8 parallel shard jobs each download/convert ~1/8th of the local
+# authorities (different runners, different IPs), hand their line-delimited
+# GeoJSON up as artifacts, and one final job tiles the merged stream and
+# uploads. Wall clock ~2-3 h total.
 #
 # BEFORE the first full run: in the Supabase dashboard raise the global
 # upload size limit (Project Settings -> Storage -> Upload file size limit)
 # to at least 5 GB, or the final upload step will be rejected.
 #
-# Smoke test: set max_las to e.g. 3 to validate the whole pipeline (download,
-# convert, tile, upload) in ~10 minutes before committing to the full run.
+# Smoke test: set max_las to e.g. 8 to validate the whole pipeline in ~15 min.
 #
 # Licence: INSPIRE index polygons are subject to Crown copyright and database
 # right, reproduced with permission of HM Land Registry; geometry derived
@@ -22,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       max_las:
-        description: "Limit the number of local authorities (blank = all ~330; use 3 for a smoke test)"
+        description: "Limit the number of local authorities (blank = all ~330; use 8 for a smoke test)"
         required: false
         default: ""
 
@@ -30,29 +35,17 @@ permissions:
   contents: read
 
 jobs:
-  tiles:
+  discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 15
     steps:
-      - name: Install GDAL + tippecanoe
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gdal-bin
-          if ! sudo apt-get install -y tippecanoe; then
-            sudo apt-get install -y build-essential libsqlite3-dev zlib1g-dev git
-            git clone --depth 1 https://github.com/felt/tippecanoe /tmp/tippecanoe
-            make -j"$(nproc)" -C /tmp/tippecanoe
-            sudo make -C /tmp/tippecanoe install
-          fi
-          tippecanoe --version
-
       - name: Discover the local-authority download list
+        env:
+          MAX_LAS: ${{ inputs.max_las }}
         run: |
           # curl with a cookie jar: the site sets a session cookie and then
           # redirects; cookie-less clients (urllib) loop on the 302 forever.
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-          # The landing page only links to /datasets/inspire/download — the
-          # per-LA list lives on that second page. Fetch both.
           curl -fsSL -A "$UA" -c /tmp/ck -b /tmp/ck --max-redirs 10 \
             -o inspire.html "https://use-land-property-data.service.gov.uk/datasets/inspire"
           curl -fsSL -A "$UA" -c /tmp/ck -b /tmp/ck --max-redirs 10 \
@@ -64,8 +57,6 @@ jobs:
               html += open("inspire2.html", encoding="utf-8", errors="replace").read()
           except OSError:
               pass
-          # Primary pattern, plus fallbacks for layout drift; if nothing hits,
-          # dump every download-ish href so the logs teach us the real shape.
           slugs = sorted(set(re.findall(r"/datasets/inspire/download/([^\"'/?#]+?)(?:\.zip)?[\"'?#]", html)))
           if not slugs:
               slugs = sorted(set(re.findall(r"inspire[^\"']*/([A-Za-z0-9_%\-]+)\.zip", html)))
@@ -79,41 +70,100 @@ jobs:
               fh.write("\n".join(slugs) + "\n")
           print(f"{len(slugs)} local authorities discovered; first: {slugs[:5]}")
           EOF
+          if [ -n "$MAX_LAS" ]; then
+            head -n "$MAX_LAS" las.txt > las.trim && mv las.trim las.txt
+            echo "limited to $(wc -l < las.txt) LAs (smoke test)"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: la-list
+          path: las.txt
+          if-no-files-found: error
 
-      - name: Download and convert every LA to line-delimited GeoJSON
+  download:
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - name: Install GDAL
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gdal-bin
+      - uses: actions/download-artifact@v4
+        with:
+          name: la-list
+      - name: Download and convert this shard's local authorities
         env:
-          MAX_LAS: ${{ inputs.max_las }}
+          SHARD: ${{ matrix.shard }}
         run: |
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-          : > parcels.jsonl
-          n=0; ok=0; bad=0
+          # Prime the session cookie once.
+          curl -fsSL -A "$UA" -c /tmp/ck -b /tmp/ck --max-redirs 10 -o /dev/null \
+            "https://use-land-property-data.service.gov.uk/datasets/inspire" || true
+          awk -v s="$SHARD" 'NR % 8 == s' las.txt > mine.txt
+          echo "shard $SHARD: $(wc -l < mine.txt) local authorities"
+          : > "parcels-$SHARD.jsonl"
+          ok=0; bad=0
           while read -r slug; do
-            n=$((n+1))
-            if [ -n "$MAX_LAS" ] && [ "$n" -gt "$MAX_LAS" ]; then break; fi
-            echo "($n) $slug"
-            if ! curl -fsSL -A "$UA" -c /tmp/ck -b /tmp/ck -o la.zip "https://use-land-property-data.service.gov.uk/datasets/inspire/download/${slug}.zip"; then
-              echo "::warning::download failed for $slug"; bad=$((bad+1)); continue
-            fi
+            got=0
+            for attempt in 1 2 3; do
+              if curl -fsSL -A "$UA" -c /tmp/ck -b /tmp/ck --retry 2 --retry-delay 10 \
+                   -o la.zip "https://use-land-property-data.service.gov.uk/datasets/inspire/download/${slug}.zip"; then
+                got=1; break
+              fi
+              sleep $((attempt * 20))
+            done
+            if [ "$got" != 1 ]; then echo "::warning::download failed for $slug"; bad=$((bad+1)); continue; fi
             gml=$(python3 -c "import zipfile,sys; print(next((m for m in zipfile.ZipFile('la.zip').namelist() if m.lower().endswith('.gml')),''))")
             if [ -z "$gml" ]; then echo "::warning::no gml in $slug"; bad=$((bad+1)); rm -f la.zip; continue; fi
-            if ogr2ogr -f GeoJSONSeq /vsistdout/ "/vsizip/la.zip/$gml" -t_srs EPSG:4326 >> parcels.jsonl 2>/dev/null; then
-              ok=$((ok+1))
+            if ogr2ogr -f GeoJSONSeq /vsistdout/ "/vsizip/la.zip/$gml" -t_srs EPSG:4326 >> "parcels-$SHARD.jsonl" 2>/dev/null; then
+              ok=$((ok+1)); echo "($ok) $slug"
             else
               echo "::warning::convert failed for $slug"; bad=$((bad+1))
             fi
             rm -f la.zip
-          done < las.txt
-          echo "converted $ok LAs ($bad failed)"
-          wc -l parcels.jsonl; df -h /
+          done < mine.txt
+          echo "shard $SHARD: converted $ok LAs ($bad failed)"
+          wc -l "parcels-$SHARD.jsonl"; df -h /
+          gzip "parcels-$SHARD.jsonl"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parcels-shard-${{ matrix.shard }}
+          path: parcels-${{ matrix.shard }}.jsonl.gz
+          if-no-files-found: error
+          compression-level: 0
 
+  tile:
+    needs: download
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Install tippecanoe
+        run: |
+          sudo apt-get update -qq
+          if ! sudo apt-get install -y -qq tippecanoe; then
+            sudo apt-get install -y -qq build-essential libsqlite3-dev zlib1g-dev git
+            git clone --depth 1 https://github.com/felt/tippecanoe /tmp/tippecanoe
+            make -j"$(nproc)" -C /tmp/tippecanoe
+            sudo make -C /tmp/tippecanoe install
+          fi
+          tippecanoe --version
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: parcels-shard-*
+          merge-multiple: true
       - name: Tile with tippecanoe
         run: |
+          ls -la parcels-*.jsonl.gz; df -h /
+          gunzip parcels-*.jsonl.gz
           tippecanoe -o parcels.pmtiles -l parcels \
             --minimum-zoom=12 --maximum-zoom=15 \
             --coalesce-densest-as-needed --extend-zooms-if-still-dropping \
-            --force --read-parallel parcels.jsonl
+            --force --read-parallel parcels-*.jsonl
+          rm -f parcels-*.jsonl
           ls -la parcels.pmtiles; df -h /
-
       - name: Upload to Supabase storage (public tiles bucket)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
