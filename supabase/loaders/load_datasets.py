@@ -152,27 +152,66 @@ def read_records(path: Path, wanted) -> list:
     return deduped
 
 
+def count_dataset(dataset: str):
+    """How many rows the table currently holds for one dataset (None if the
+    count can't be read)."""
+    url = (f"{SUPABASE_URL}/rest/v1/map_features"
+           f"?dataset=eq.{urllib.parse.quote(dataset)}&select=dataset&limit=1")
+    headers = dict(_headers())
+    headers["Prefer"] = "count=exact"
+    headers["Range-Unit"] = "items"
+    headers["Range"] = "0-0"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            resp.read()
+            # content-range comes back as "0-0/12345" (or "*/12345" when empty)
+            cr = resp.headers.get("content-range") or ""
+        total = cr.split("/")[-1]
+        return int(total) if total.isdigit() else None
+    except (urllib.error.HTTPError, urllib.error.URLError, ValueError):
+        return None
+
+
 def delete_dataset(dataset: str) -> bool:
     """DELETE every existing row for one dataset, so the upsert fully replaces
-    it (stale features whose source ids changed don't linger). Best-effort:
-    a failed delete is reported but doesn't stop the load — the upsert still
-    overwrites every current key."""
+    it (stale features whose source ids changed don't linger).
+
+    This USED to be best-effort: one DELETE, and on failure a warning and
+    carry on, on the theory that the upsert overwrites every current key
+    anyway. That reasoning is wrong whenever a re-run produces FEWER rows than
+    before — the surplus old rows keep their old keys, are never overwritten,
+    and silently mix into the new data. It happened: a corrected public_parcel
+    run wrote 112,650 good rows on top of 93,214 stale ones from a superseded
+    run, and the dataset looked plausible while being 45% wrong.
+
+    So now: retry, verify the dataset is actually empty afterwards, and return
+    False only when it genuinely isn't — main() turns that into a hard failure
+    rather than a warning nobody reads."""
     url = (f"{SUPABASE_URL}/rest/v1/map_features"
            f"?dataset=eq.{urllib.parse.quote(dataset)}")
-    req = urllib.request.Request(url, headers=_headers(), method="DELETE")
-    try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            resp.read()
-        print(f"  cleared existing rows for dataset '{dataset}'")
-        return True
-    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-        detail = ""
-        if isinstance(exc, urllib.error.HTTPError):
-            detail = " " + exc.read().decode("utf-8", "replace")[:300]
-        print(f"  WARNING: delete for dataset '{dataset}' failed: {exc}{detail}")
-        print("  continuing — the upsert still replaces every current key, "
-              "but stale rows may remain.")
-        return False
+    for attempt in range(1, 5):
+        try:
+            req = urllib.request.Request(url, headers=_headers(), method="DELETE")
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                resp.read()
+        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+            detail = ""
+            if isinstance(exc, urllib.error.HTTPError):
+                detail = " " + exc.read().decode("utf-8", "replace")[:300]
+            print(f"  delete attempt {attempt} for '{dataset}' failed: "
+                  f"{exc}{detail}")
+        left = count_dataset(dataset)
+        if left == 0:
+            print(f"  cleared existing rows for dataset '{dataset}'")
+            return True
+        if left is None:
+            print(f"  WARNING: could not verify '{dataset}' is empty after the "
+                  "delete; assuming it is not.")
+        else:
+            print(f"  {left:,} row(s) still present for '{dataset}' after "
+                  f"attempt {attempt}")
+    return False
 
 
 def upsert(records: list):
@@ -238,8 +277,17 @@ def main() -> int:
         print("LOAD_MODE=append — existing rows kept; matching keys refreshed.")
     else:
         print("Clearing datasets being reloaded ...")
-        for dataset in sorted(by_dataset):
-            delete_dataset(dataset)
+        undeleted = [d for d in sorted(by_dataset) if not delete_dataset(d)]
+        if undeleted:
+            # Loading fresh rows on top of rows that should have gone produces
+            # a dataset that looks fine and is partly stale. Refuse: the CSV is
+            # kept as a workflow artifact, so re-loading after clearing by hand
+            # costs nothing, whereas silently-wrong ownership data is expensive.
+            print(f"::error::Could not clear {', '.join(undeleted)} — refusing "
+                  "to upsert on top of rows that should have been replaced. "
+                  "Delete them (in batches if the table is large) and re-run "
+                  "the load against the import CSV artifact.")
+            return 1
 
     upsert(records)
 
