@@ -2409,3 +2409,48 @@ footer {
   font: 600 12px var(--font-ui);
   cursor: pointer;
 }
+
+/* ---- Deep-dive map legend -------------------------------------------------
+   Sits at the base of the map while the deep dive paints colour-coded land, so
+   every colour on screen has a stated meaning. Never covers the map centre. */
+#dd-legend {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  z-index: 6;
+  max-width: min(760px, calc(100vw - 480px));
+  padding: 9px 14px 8px;
+  border-radius: 10px;
+  background: var(--surface-float);
+  border: 1px solid var(--ink-line);
+  box-shadow: var(--float-shadow);
+  font-family: var(--font-ui);
+  color: var(--text);
+  pointer-events: none;
+}
+#dd-legend[hidden] { display: none; }
+.ddl-items { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.ddl-item { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; white-space: nowrap; }
+.ddl-item b { font-weight: 600; font-family: var(--font-data); }
+.ddl-sw {
+  width: 14px; height: 14px; border-radius: 3px; flex: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+.ddl-note { margin-top: 6px; font-size: 10.5px; color: var(--text-dim); }
+
+/* Public-land readout inside the deep-dive panel. */
+.dd-pl-hero { margin: 8px 0 4px; font-size: 13px; }
+.dd-pl-hero strong { font-family: var(--font-data); font-size: 15px; color: #7d97ff; }
+.dd-pl-rows { display: flex; flex-direction: column; gap: 2px; }
+.dd-pl-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-size: 11.5px; color: var(--text-dim);
+}
+.dd-pl-row span:last-child { font-family: var(--font-data); color: var(--text); }
+.dd-dim { color: var(--text-dim); }
+
+@media (max-width: 900px) {
+  #dd-legend { max-width: calc(100vw - 28px); bottom: 10px; }
+  .ddl-item { font-size: 11px; }
+}

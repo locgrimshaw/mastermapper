@@ -150,6 +150,13 @@ const DEVELOPABLE_SUBTRACT_KINDS = [
 // subtracted "blocker" constraints.
 const DEVELOPABLE_COLOR = "#2f9e44";
 const DEVELOPABLE_BLOCKER_COLOR = "#c0392b";
+// Developable land inside the inner ring carries the URBAN dwellings-per-
+// hectare rate — far more homes per acre than the same land further out — so
+// it gets its own hotter colour rather than reading as "more green".
+const DEVELOPABLE_INNER_COLOR = "#a9d626";
+// Publicly-owned parcels (CCOD x INSPIRE, flats excluded): indigo, deliberately
+// outside the green/red developable language.
+const PUBLIC_LAND_COLOR = "#4c6ef5";
 
 // OS / Environment Agency / OGL attribution appended to the datasource footer
 // while the developable-land layers are shown.
@@ -1070,6 +1077,7 @@ const MAP_OVERLAYS = [
   // CCOD sweep now keeps EVERY public body (owner_class prop from the
   // pipeline); dots colour by class at wide zooms, the town glyph takes over
   // close in.
+  { key: "public_parcel",         group: "land", label: "Public land parcels (CCOD x INSPIRE)", color: "#4c6ef5", dataset: "public_parcel", minZoom: 11, lim: 6000 },
   { key: "la_property",           group: "land", label: "Public-authority property (CCOD)", color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000, icon: "town",
     cap: { color: ["match", ["to-string", ["get", "owner_class"]],
            "local_authority", "#c92a2a", "parish", "#f08c00",
@@ -1124,7 +1132,7 @@ const MAP_OVERLAYS = [
     cap: { color: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "price"]], 0],
            100000, "#f7b267", 300000, "#ef8354", 500000, "#d64550",
            800000, "#a4243b", 1500000, "#6d1a36"] } },
-  { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5 },
+  { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5, nameLabel: true },
   // Bus network (NaPTAN + BODS GTFS). ~400k stops nationally: the numeric
   // prop filter thins wide zooms to frequent-service stops, so the row cap
   // bites frequency-first rather than arbitrarily. Until the GTFS timetable
@@ -1188,6 +1196,16 @@ const MAP_OVERLAYS = [
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
   { key: "ofcom_fibre",        group: "sitefactors", label: "Full-fibre availability (Ofcom)", color: "#1971c2", dataset: "ofcom_fibre",       minZoom: 5 },
   { key: "slope_grid",         group: "sitefactors", label: "Ground slope (1 km cells)",       color: "#e8590c", dataset: "slope_grid",        minZoom: 8, lim: 8000, noOutline: true },
+  // Built form: OSM-tagged building heights, low/mid/high-rise coloured. Wide
+  // zooms show the tall ones first (the numeric filter), so a city reads as
+  // its skyline before it fills in.
+  { key: "building_height", group: "sitefactors", label: "Building heights (low/mid/high)", color: "#7048e8", dataset: "building_height", render: "point", minZoom: 11, lim: 8000,
+    numFilter: z => z < 13 ? { key: "height_m", min: 25 } : z < 15 ? { key: "height_m", min: 12 } : null,
+    radius: ["interpolate", ["linear"],
+             ["coalesce", ["to-number", ["get", "height_m"]], 6],
+             6, 2.5, 15, 3.5, 30, 5, 60, 7, 120, 9],
+    cap: { color: ["match", ["to-string", ["get", "class"]],
+           "high", "#5f3dc4", "mid", "#9775fa", "low", "#c5b3f6", "#adb5bd"] } },
 ];
 // Layers persist when zooming OUT now: the bbox RPCs take a p_zoom argument
 // and simplify geometry to ~1 screen pixel server-side (dropping sub-pixel
@@ -1215,6 +1233,8 @@ const LAYER_INFO = {
   census_students:    { about: "Full-time students (NS-SeC class L15) as a share of adults per authority — the structural PBSA demand base, independent of any one university's numbers.", source: "Census 2021 TS062 via NOMIS (OGL)" },
   student_accom:      { about: "Existing purpose-built student accommodation and dormitories mapped in OpenStreetMap — the PBSA competition map. Coverage reflects OSM mapping quality.", source: "OpenStreetMap contributors (ODbL)" },
   slope_grid:         { about: "Mean ground slope per 1 km cell from OS Terrain 50 (hover shows the steepest 50 m within the cell). Green = flat, red = steep — the data-centre construction-feasibility screen.", source: "OS Terrain 50 © Crown copyright (OGL)" },
+  building_height:    { about: "Building heights from OpenStreetMap height / building:levels tags, coloured low (under 12 m) / mid (12-25 m) / high rise (25 m+). Wide zooms show the tall buildings first. Coverage is a SAMPLE, not a survey: excellent for landmarks and city centres, patchy for suburban housing.", source: "OpenStreetMap contributors (ODbL)" },
+  public_parcel:      { about: "Land parcels in public ownership: CCOD ownership records matched to HMLR INSPIRE parcel boundaries by location, with individual flats excluded so a single ex-right-to-buy flat can't claim a whole block. INDICATIVE — the exact title-to-polygon link is HMLR's licensed National Polygon Service.", source: "HM Land Registry CCOD + INSPIRE index polygons © Crown copyright and database right" },
   bus_route:          { about: "Every mapped bus route (OpenStreetMap route relations) as lines, with route number and operator on hover. Coverage reflects OSM mapping — dense in urban areas, occasionally patchy on rural services.", source: "OpenStreetMap contributors (ODbL)" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
   grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },
@@ -1327,6 +1347,8 @@ function setOverlayOpacity(key, v) {
     map.setPaintProperty(`ov-${key}-icon`, "icon-opacity", Math.min(1, v * 2.5));
   if (map.getLayer(`ov-${key}-lbl`))
     map.setPaintProperty(`ov-${key}-lbl`, "text-opacity", Math.min(1, v * 2.5));
+  if (map.getLayer(`ov-${key}-name`))
+    map.setPaintProperty(`ov-${key}-name`, "text-opacity", Math.min(1, v * 2.6));
 }
 
 function refreshMapOverlays() {
@@ -1630,6 +1652,26 @@ function renderOverlay(key, def, fc) {
       layout: { "line-join": "round", "line-cap": "round" },
       paint: { "line-color": color, "line-width": width,
                "line-opacity": Math.min(1, opacity * 2.5) } }, before);
+    // Boundary datasets can name themselves on the map (authority names) —
+    // one label per polygon, placed inside it, never colliding.
+    if (def.nameLabel) {
+      map.addLayer({ id: `ov-${key}-name`, type: "symbol", source: srcId,
+        filter: ["has", "name"],
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 5, 10, 8, 12, 12, 14],
+          "text-max-width": 8,
+          "text-padding": 6,
+          "symbol-placement": "point",
+        },
+        paint: {
+          "text-color": def.color,
+          "text-halo-color": body_is_light() ? "#ffffff" : "#12181f",
+          "text-halo-width": 1.6,
+          "text-opacity": Math.min(1, opacity * 2.6),
+        } }, before);
+    }
   } else {
     // Attribute-driven fills where the data carries a classification —
     // painting these one flat colour throws the information away.
@@ -1797,7 +1839,8 @@ let _osmPowerAttributionShown = false;
 
 function removeOverlayLayers(key) {
   for (const id of [`ov-${key}-fill`, `ov-${key}-line`, `ov-${key}-pt`,
-                    `ov-${key}-icon`, `ov-${key}-lbl`, `ov-${key}-heat`])
+                    `ov-${key}-icon`, `ov-${key}-lbl`, `ov-${key}-heat`,
+                    `ov-${key}-name`])
     if (map.getLayer(id)) map.removeLayer(id);
   const srcId = `ov-${key}-src`;
   if (map.getSource(srcId)) map.removeSource(srcId);
@@ -2977,6 +3020,22 @@ function hoverContentForOverlay(def, p) {
     title = p.slope != null ? `${p.slope}° mean slope` : "Slope cell";
     kind = "Ground slope — 1 km cell";
     rows = [row(p.max_slope != null ? `${p.max_slope}°` : null, "steepest 50 m")];
+  } else if (d === "building_height") {
+    const CLS = { high: "High rise", mid: "Mid rise", low: "Low rise" };
+    title = p.name || CLS[p.class] || "Building";
+    kind = `${CLS[p.class] || "Building"} — OSM tagged height`;
+    rows = [row(p.height_m != null ? `${p.height_m} m` : null, "height"),
+            row(p.storeys != null ? `${p.storeys} storeys` : null, "levels")];
+  } else if (d === "public_parcel") {
+    const OWNER_LABELS = { local_authority: "Local authority", parish: "Parish / town council",
+      combined_authority: "Combined authority", nhs: "NHS", university: "University",
+      police_fire: "Police / fire", government: "Central government" };
+    title = p.owner || p.name || "Public land";
+    kind = "Publicly owned parcel";
+    rows = [row(OWNER_LABELS[p.owner_class] || p.owner_class, "owner type"),
+            row(p.area_m2 != null ? `${(Number(p.area_m2) / 10000).toFixed(2)} ha` : null, "parcel area"),
+            row(p.titles_land != null ? `${p.titles_land} land title${p.titles_land == 1 ? "" : "s"}` : null, "registered"),
+            row(p.match === "nearest" ? "nearest parcel (30 m)" : "point inside parcel", "match")];
   } else if (d === "bus_route") {
     title = p.ref ? `Bus ${p.ref}` : (p.name || "Bus route");
     kind = p.name && p.ref ? p.name : "Bus route";
@@ -3445,13 +3504,30 @@ function tapDeepDiveLayers(point, box, nearest, coarse) {
     return true;
   }
 
+  // 3b. Publicly-owned parcels — smaller than the developable blanket, so
+  // they win over it.
+  {
+    const hits = q("publicland-fill");
+    if (hits) {
+      const ll = map.unproject([point.x, point.y]);
+      openClickPopup({ offset: 8, maxWidth: "300px" }, ll,
+        publicLandPopupHTML(hits[0].properties || {}));
+      return true;
+    }
+  }
+
   // 4. Developable land / blockers — large area polygons, lowest priority so
   // amenity / brownfield / crime taps win over them.
-  for (const id of ["developable-blockers", "developable-fill"]) {
+  for (const id of ["developable-inner-fill", "developable-fill", "developable-blockers"]) {
     const hits = q(id);
     if (hits) {
       const ll = map.unproject([point.x, point.y]);
-      openClickPopup({ offset: 8 }, ll, developablePopupHTML(id));
+      if (id === "developable-blockers") {
+        openClickPopup({ offset: 8 }, ll, developablePopupHTML(id));
+      } else {
+        // A specific green plot: highlight it and analyse just that plot.
+        selectDevelopablePlot(hits[0], ll, point);
+      }
       return true;
     }
   }
@@ -4190,6 +4266,10 @@ const deep = {
   developableRegime: "auto",// "auto" | "rural" | "suburban" | "urban" (override)
   developableDensity: null, // people/km² over the radius circle (auto-classify)
   developableDph: null,     // editable dwellings-per-hectare per regime
+  publicLand: null,         // RPC row { parcels_geojson, total_ha, inner_ha, ... }
+  publicLandVisible: false, // public-parcel layer toggle
+  _plots: null,             // per-plot features for click-to-analyse
+  _innerCircle: null,       // cached inner-ring circle (turf polygon)
 };
 
 // ---- Workstream 3: shortlist, triad, synthesis, comparison, export --------
@@ -4492,6 +4572,12 @@ function runDeepDive(catchment, meta) {
   deep.developableRegime = "auto";
   deep.developableDensity = null;
   deep.developableDph = { ...DPH_DEFAULTS };
+  deep.publicLand = null;
+  deep.publicLandVisible = false;
+  deep._plots = null;
+  deep._innerCircle = null;
+  removePublicLandLayer();
+  renderDeepDiveLegend();
 
   // The mask dims everything outside the catchment, so we keep the choropleth
   // reasonably visible (it shows through inside the catchment) rather than
@@ -4941,13 +5027,15 @@ function clearDeepDiveMapArtifacts() {
   // Layers first (a source can't be removed while a layer uses it).
   for (const id of layerIds) {
     if (id.startsWith("amenity-") || id.startsWith("access-route-")
-        || id.startsWith("brownfield-") || id.startsWith("developable-")) {
+        || id.startsWith("brownfield-") || id.startsWith("developable-")
+        || id.startsWith("publicland-")) {
       if (map.getLayer(id)) map.removeLayer(id);
     }
   }
   for (const id of sourceIds) {
     if (id.startsWith("amenity-") || id.startsWith("access-route-")
-        || id.startsWith("brownfield-") || id.startsWith("developable-")) {
+        || id.startsWith("brownfield-") || id.startsWith("developable-")
+        || id.startsWith("publicland-")) {
       if (map.getSource(id)) map.removeSource(id);
     }
   }
@@ -5582,10 +5670,74 @@ function developableDwellings() {
 // developable fill + outline on top. Clicks are handled by the shared
 // handleMapTap dispatcher (see tapDeepDiveLayers); here we only set the hover
 // cursor and flag the footer attribution.
+// turf v7 takes a FeatureCollection where v6 took two arguments — the app
+// vendors v7 but stays tolerant of either.
+function _turfIntersect(a, b) {
+  if (!window.turf) return null;
+  try {
+    const r = turf.intersect(turf.featureCollection([a, b]));
+    if (r) return r;
+  } catch (_) {}
+  try { return turf.intersect(a, b) || null; } catch (_) { return null; }
+}
+
+// Split the RPC's single developable MultiPolygon into individually
+// selectable plots, each tagged with its area and the share of it that sits
+// inside the inner (high-density) ring. Falls back to one whole-geometry
+// feature if turf is unavailable or the geometry defeats it.
+function developablePlotFeatures(geom) {
+  const base = { type: "Feature", geometry: geom, properties: {} };
+  if (!window.turf) return [{ ...base, properties: { plot: 0 } }];
+  let parts = [];
+  try {
+    const flat = turf.flatten(base);
+    parts = (flat.features || []).filter(f => f && f.geometry);
+  } catch (_) {
+    parts = [base];
+  }
+  const inner = deep._innerCircle;
+  return parts.map((f, i) => {
+    let ha = null, innerHa = 0;
+    try { ha = turf.area(f) / 10000; } catch (_) {}
+    if (inner) {
+      const cut = _turfIntersect(f, inner);
+      if (cut) { try { innerHa = turf.area(cut) / 10000; } catch (_) {} }
+    }
+    return { ...f, properties: { ...(f.properties || {}), plot: i,
+             area_ha: ha != null ? Math.round(ha * 100) / 100 : null,
+             inner_ha: Math.round(innerHa * 100) / 100 } };
+  });
+}
+
+// The developable area clipped to the inner ring — painted hotter because it
+// carries the urban dwellings-per-hectare rate.
+function developableInnerGeometry(geom) {
+  const inner = deep._innerCircle;
+  if (!window.turf || !inner) return null;
+  const cut = _turfIntersect(
+    { type: "Feature", geometry: geom, properties: {} }, inner);
+  return cut ? cut.geometry : null;
+}
+
+// Render the developable overlay: muted-red blocker fill underneath, green
+// developable fill + outline on top, with the inner (high-density) portion in
+// a hotter green and a highlight layer for the selected plot. Clicks are
+// handled by the shared handleMapTap dispatcher (see tapDeepDiveLayers).
 function renderDevelopableLayer() {
   removeDevelopableLayer();
   const r = deep.developableResult;
   if (!r) return;
+
+  // Cache the inner-ring circle once — used for the density split and for
+  // per-plot stats.
+  deep._innerCircle = null;
+  if (window.turf && deep.stationCentre && deep.developable) {
+    try {
+      deep._innerCircle = turf.circle(deep.stationCentre,
+        (deep.developable.inner_radius_m || 200) / 1000,
+        { units: "kilometers", steps: 64 });
+    } catch (_) {}
+  }
 
   if (r.blockers_geojson) {
     map.addSource("developable-blockers-src", {
@@ -5602,37 +5754,220 @@ function renderDevelopableLayer() {
     });
   }
   if (r.developable_geojson) {
+    deep._plots = developablePlotFeatures(r.developable_geojson);
     map.addSource("developable-src", {
       type: "geojson",
-      data: { type: "Feature", geometry: r.developable_geojson, properties: {} },
+      data: { type: "FeatureCollection", features: deep._plots },
     });
     map.addLayer({
       id: "developable-fill", type: "fill", source: "developable-src",
       paint: { "fill-color": DEVELOPABLE_COLOR, "fill-opacity": 0.42 },
     });
+    // Inner ring portion: same land, urban density — hotter fill on top.
+    const innerGeom = developableInnerGeometry(r.developable_geojson);
+    if (innerGeom) {
+      map.addSource("developable-inner-src", {
+        type: "geojson",
+        data: { type: "Feature", geometry: innerGeom, properties: {} },
+      });
+      map.addLayer({
+        id: "developable-inner-fill", type: "fill", source: "developable-inner-src",
+        paint: { "fill-color": DEVELOPABLE_INNER_COLOR, "fill-opacity": 0.55 },
+      });
+    }
     map.addLayer({
       id: "developable-line", type: "line", source: "developable-src",
       paint: { "line-color": DEVELOPABLE_COLOR, "line-width": 1.8 },
     });
+    // Selected-plot highlight (filter set on click; empty until then).
+    map.addLayer({
+      id: "developable-selected", type: "line", source: "developable-src",
+      filter: ["==", ["get", "plot"], -1],
+      paint: { "line-color": "#ffffff", "line-width": 3.4, "line-opacity": 0.95 },
+    });
   }
 
-  for (const id of ["developable-fill", "developable-blockers"]) {
+  for (const id of ["developable-fill", "developable-inner-fill", "developable-blockers"]) {
     if (map.getLayer(id)) {
       map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
     }
   }
   updateDevelopableAttribution(true);
+  renderDeepDiveLegend();
 }
 
 function removeDevelopableLayer() {
-  for (const id of ["developable-fill", "developable-line", "developable-blockers"]) {
+  for (const id of ["developable-fill", "developable-inner-fill", "developable-line",
+                    "developable-selected", "developable-blockers"]) {
     if (map.getLayer(id)) map.removeLayer(id);
   }
-  for (const id of ["developable-src", "developable-blockers-src"]) {
+  for (const id of ["developable-src", "developable-inner-src", "developable-blockers-src"]) {
     if (map.getSource(id)) map.removeSource(id);
   }
+  deep._plots = null;
   updateDevelopableAttribution(false);
+  renderDeepDiveLegend();
+}
+
+// ---- Per-plot analysis (click a green plot) --------------------------------
+// The developable source carries one feature per contiguous plot. Clicking one
+// highlights it and reports what that plot alone is worth: area, the soft
+// designations covering it, the land parcels it spans, and its own dwelling
+// capacity split by the inner/outer density regimes.
+
+async function selectDevelopablePlot(hit, lngLat, point) {
+  // The inner-ring fill is a single merged geometry with no plot id — resolve
+  // the click back to the real plot underneath it.
+  let plotId = hit && hit.properties ? hit.properties.plot : undefined;
+  if (plotId == null || plotId === undefined) {
+    try {
+      const under = map.queryRenderedFeatures([point.x, point.y],
+        { layers: ["developable-fill"] });
+      if (under && under.length) plotId = under[0].properties.plot;
+    } catch (_) {}
+  }
+  const plot = (deep._plots || []).find(f => f.properties.plot === plotId);
+  if (!plot) { openClickPopup({ offset: 8 }, lngLat, developablePopupHTML("developable-fill")); return; }
+
+  if (map.getLayer("developable-selected"))
+    map.setFilter("developable-selected", ["==", ["get", "plot"], plotId]);
+
+  const areaHa = plot.properties.area_ha != null ? plot.properties.area_ha
+    : (window.turf ? turf.area(plot) / 10000 : 0);
+  const innerHa = plot.properties.inner_ha || 0;
+  const outerHa = Math.max(0, areaHa - innerHa);
+  const dph = deep.developableDph || DPH_DEFAULTS;
+  const regime = activeDevelopableRegime();
+  const homes = regime === "urban"
+    ? Math.round(innerHa * dph.urbanInner + outerHa * dph.urbanOuter)
+    : Math.round(areaHa * (dph[regime] || dph.suburban));
+
+  // Land parcels the plot spans — counted from the rendered INSPIRE tiles, so
+  // it needs the parcels layer on and z13+; say so rather than showing 0.
+  let parcelTxt = null;
+  try {
+    if (map.getLayer("parcel-fill")) {
+      const feats = map.queryRenderedFeatures({ layers: ["parcel-fill"] });
+      let n = 0;
+      for (const f of feats) {
+        try {
+          const c = turf.centroid(f);
+          if (turf.booleanPointInPolygon(c, plot)) n++;
+        } catch (_) {}
+      }
+      parcelTxt = `${n}${n >= 1 ? "" : ""} in view`;
+    }
+  } catch (_) {}
+
+  const esc = _esc;
+  const head = `<strong>Developable plot</strong><br>` +
+    `<span style="font-size:11px">${areaHa.toFixed(2)} ha · ${(areaHa * 2.471).toFixed(2)} ac` +
+    (innerHa > 0 ? ` · ${innerHa.toFixed(2)} ha within ${deep.developable.inner_radius_m} m` : "") +
+    `</span><br><span style="font-size:11px">~<b>${homes.toLocaleString()}</b> homes at ${esc(regime)} density</span>` +
+    (parcelTxt ? `<br><span style="font-size:11px">land parcels: ${esc(parcelTxt)}</span>` : "");
+  const pop = openClickPopup({ offset: 8, maxWidth: "320px" }, lngLat,
+    head + `<br><span style="font-size:11px;opacity:.7">checking designations…</span>`);
+
+  // Soft constraints covering THIS plot, from the shared polygon_summary RPC.
+  let softLine = "";
+  try {
+    const sb = getSupabase();
+    if (sb) {
+      const { data, error } = await sb.rpc("polygon_summary",
+        { p_geojson: JSON.stringify(plot.geometry) });
+      if (!error && data && !data.error) {
+        const cons = (data.constraints || []).filter(c => c.pct >= 1);
+        softLine = cons.length
+          ? `<br><span style="font-size:11px">designations: ` +
+            cons.slice(0, 5).map(c => `${esc(c.kind.replace(/_/g, " "))} ${c.pct}%`).join(", ") +
+            `</span>`
+          : `<br><span style="font-size:11px">no designations cover this plot</span>`;
+        if (data.grey_belt_pct)
+          softLine += `<br><span style="font-size:11px">grey-belt candidate: ${data.grey_belt_pct}%</span>`;
+      }
+    }
+  } catch (_) {}
+  try { pop.setHTML(head + (softLine || "")); } catch (_) {}
+}
+
+// ---- Public land inside the catchment -------------------------------------
+// Publicly-owned parcels (CCOD ownership points paired to INSPIRE parcel
+// polygons — individual flats excluded upstream) clipped to the catchment
+// circle. Indicative: the exact title->polygon link is HMLR's licensed
+// National Polygon Service, so this is a postcode-centroid spatial join.
+
+async function loadPublicLand() {
+  deep.publicLand = null;
+  const sb = getSupabase();
+  const centre = deep.stationCentre;
+  if (!sb || !centre) return null;
+  const cfg = deep.developable || defaultDevelopableConfig();
+  try {
+    const { data, error } = await sb.rpc("public_land_in_catchment", {
+      centre_lng: centre[0], centre_lat: centre[1],
+      radius_m: cfg.radius_m, inner_radius_m: cfg.inner_radius_m,
+    });
+    if (error) throw error;
+    deep.publicLand = (data && data[0]) || null;
+  } catch (err) {
+    console.error("public_land_in_catchment failed", err);
+    deep._lastPublicLandError = err.message || "query failed";
+    return null;
+  }
+  deep._lastPublicLandError = null;
+  return deep.publicLand;
+}
+
+function renderPublicLandLayer() {
+  removePublicLandLayer();
+  const pl = deep.publicLand;
+  const fc = pl && pl.parcels_geojson;
+  if (!deep.publicLandVisible || !fc || !(fc.features || []).length) return;
+  map.addSource("publicland-src", { type: "geojson", data: fc });
+  map.addLayer({
+    id: "publicland-fill", type: "fill", source: "publicland-src",
+    paint: { "fill-color": PUBLIC_LAND_COLOR, "fill-opacity": 0.5 },
+  });
+  map.addLayer({
+    id: "publicland-line", type: "line", source: "publicland-src",
+    paint: { "line-color": PUBLIC_LAND_COLOR, "line-width": 1.6,
+             "line-opacity": 0.95 },
+  });
+  map.on("mouseenter", "publicland-fill", () => { map.getCanvas().style.cursor = "pointer"; });
+  map.on("mouseleave", "publicland-fill", () => { map.getCanvas().style.cursor = ""; });
+  renderDeepDiveLegend();
+}
+
+function removePublicLandLayer() {
+  for (const id of ["publicland-fill", "publicland-line"])
+    if (map.getLayer(id)) map.removeLayer(id);
+  if (map.getSource("publicland-src")) map.removeSource("publicland-src");
+}
+
+// Popup for a tapped public parcel: who owns it, how much land, and the
+// honest caveat about title counts at the postcode.
+function publicLandPopupHTML(pr) {
+  const OWNER_LABELS = {
+    local_authority: "Local authority", parish: "Parish / town council",
+    combined_authority: "Combined authority", nhs: "NHS",
+    university: "University", police_fire: "Police / fire",
+    government: "Central government",
+  };
+  const ha = pr.clipped_ha != null ? Number(pr.clipped_ha) : null;
+  const rows = [
+    ["owner type", OWNER_LABELS[pr.owner_class] || pr.owner_class || "Public body"],
+    ["parcel area", ha != null ? `${ha.toFixed(2)} ha (${(ha * 2.471).toFixed(2)} ac)` : null],
+    ["titles here", pr.titles_land != null
+      ? `${pr.titles_land} land title${pr.titles_land == 1 ? "" : "s"}` +
+        (pr.titles_flat ? ` · ${pr.titles_flat} flat${pr.titles_flat == 1 ? "" : "s"} excluded` : "")
+      : null],
+    ["address", pr.address || null],
+  ].filter(r => r[1]);
+  return `<strong>${_esc(pr.owner || "Public land")}</strong>` +
+    rows.map(([k, v]) => `<br><span style="font-size:11px">${_esc(k)}: ${_esc(String(v))}</span>`).join("") +
+    `<br><span style="font-size:10px;opacity:.7">Indicative — ownership point matched to parcel` +
+    (pr.match === "nearest" ? " (nearest within 30 m)" : "") + `.</span>`;
 }
 
 // Flip the footer attribution flag and refresh the datasource note.
@@ -5687,6 +6022,106 @@ async function toggleDevelopable(on) {
   renderDevelopableLayer();
   renderDevelopableSummary();
   setDevelopableStatus("");
+}
+
+// ---- Public land toggle, readout and the deep-dive legend ------------------
+
+async function togglePublicLand(on) {
+  deep.publicLandVisible = on;
+  const stat = document.getElementById("dd-publicland-status");
+  if (!on) {
+    removePublicLandLayer();
+    renderPublicLandSummary();
+    renderDeepDiveLegend();
+    if (stat) stat.textContent = "";
+    return;
+  }
+  if (stat) stat.textContent = "loading…";
+  const r = await loadPublicLand();
+  if (r === null) {
+    if (stat) stat.textContent = deep._lastPublicLandError ? "err" : "n/a";
+    deep.publicLandVisible = false;
+    const cb = document.getElementById("dd-publicland-show");
+    if (cb) cb.checked = false;
+    return;
+  }
+  if (stat) stat.textContent = "";
+  renderPublicLandLayer();
+  renderPublicLandSummary();
+}
+
+// Quantify the holding: hectares/acres, parcel count, how much sits in the
+// high-density inner ring, and the split by owner type.
+function renderPublicLandSummary() {
+  const el = document.getElementById("dd-publicland-summary");
+  if (!el) return;
+  const pl = deep.publicLand;
+  if (!deep.publicLandVisible || !pl) { el.innerHTML = ""; return; }
+  const ha = Number(pl.total_ha) || 0;
+  const n = Number(pl.n_parcels) || 0;
+  if (!n) {
+    el.innerHTML = `<p class="hint" style="margin-top:6px">No publicly-owned parcels matched inside this catchment.</p>`;
+    return;
+  }
+  const OWNER_LABELS = {
+    local_authority: "Local authority", parish: "Parish / town",
+    combined_authority: "Combined authority", nhs: "NHS",
+    university: "University", police_fire: "Police / fire",
+    government: "Government", other: "Other public",
+  };
+  const byOwner = pl.by_owner || {};
+  const rows = Object.entries(byOwner)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<div class="dd-pl-row"><span>${_esc(OWNER_LABELS[k] || k)}</span>` +
+      `<span>${Number(v).toFixed(2)} ha</span></div>`).join("");
+  const innerHa = Number(pl.inner_ha) || 0;
+  // Rough capacity of the public holding at the active regime's rates.
+  const dph = deep.developableDph || DPH_DEFAULTS;
+  const regime = activeDevelopableRegime();
+  const cap = regime === "urban"
+    ? Math.round(innerHa * dph.urbanInner + (ha - innerHa) * dph.urbanOuter)
+    : Math.round(ha * (dph[regime] || dph.suburban));
+  el.innerHTML =
+    `<div class="dd-pl-hero"><strong>${ha.toFixed(2)} ha</strong> ` +
+    `<span class="dd-dim">(${(ha * 2.471).toFixed(1)} ac) across ${n} parcel${n === 1 ? "" : "s"}</span></div>` +
+    `<div class="dd-pl-rows">${rows}</div>` +
+    (innerHa > 0 ? `<div class="dd-pl-row"><span>within ${deep.developable.inner_radius_m} m of the station</span><span>${innerHa.toFixed(2)} ha</span></div>` : "") +
+    `<div class="dd-pl-row"><span>capacity at ${_esc(regime)} density</span><span>~${cap.toLocaleString()} homes</span></div>` +
+    `<p class="hint" style="margin-top:6px">Indicative: CCOD ownership points matched to INSPIRE parcels by location (individual flats excluded). Verify title-by-title before relying on it.</p>`;
+}
+
+// Map legend for the deep dive — explains every colour currently painted.
+// Rendered into #dd-legend at the base of the map; hidden when nothing that
+// needs explaining is on.
+function renderDeepDiveLegend() {
+  let el = document.getElementById("dd-legend");
+  const showDev = !!(deep.active && deep.developableVisible && deep.developableResult);
+  const showPub = !!(deep.active && deep.publicLandVisible && deep.publicLand
+                     && Number(deep.publicLand.n_parcels) > 0);
+  if (!showDev && !showPub) { if (el) el.hidden = true; return; }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "dd-legend";
+    (document.getElementById("app") || document.body).appendChild(el);
+  }
+  const dph = deep.developableDph || DPH_DEFAULTS;
+  const inner = (deep.developable && deep.developable.inner_radius_m) || 200;
+  const sw = (color, opacity) =>
+    `<i class="ddl-sw" style="background:${color};opacity:${opacity}"></i>`;
+  const items = [];
+  if (showDev) {
+    items.push(`<span class="ddl-item">${sw(DEVELOPABLE_INNER_COLOR, 0.85)}` +
+      `Developable · inner ${inner} m <b>${dph.urbanInner} dph</b></span>`);
+    items.push(`<span class="ddl-item">${sw(DEVELOPABLE_COLOR, 0.7)}` +
+      `Developable · outer <b>${activeDevelopableRegime() === "urban" ? dph.urbanOuter : (dph[activeDevelopableRegime()] || dph.suburban)} dph</b></span>`);
+    items.push(`<span class="ddl-item">${sw(DEVELOPABLE_BLOCKER_COLOR, 0.5)}Constrained (subtracted)</span>`);
+  }
+  if (showPub) {
+    items.push(`<span class="ddl-item">${sw(PUBLIC_LAND_COLOR, 0.75)}Publicly owned land</span>`);
+  }
+  el.innerHTML = `<div class="ddl-items">${items.join("")}</div>` +
+    (showDev ? `<div class="ddl-note">Click any green plot for its own area, constraints and capacity.</div>` : "");
+  el.hidden = false;
 }
 
 // Re-run the RPC after a radius / subtract change (only while visible). Regime
@@ -5869,6 +6304,12 @@ function developableSectionHTML(station) {
             <label class="dd-bf-filter"><span>Urban inner dph</span><input type="number" id="dd-dph-urban-inner" min="1" max="1000" value="${dph.urbanInner}" /></label>
           </div>
           <div id="dd-developable-summary"></div>
+          <label class="dd-row dd-row-all">
+            <input type="checkbox" class="enable" id="dd-publicland-show" />
+            <span class="dd-label"><strong>Public land in catchment</strong></span>
+            <span class="dd-stat" id="dd-publicland-status"></span>
+          </label>
+          <div id="dd-publicland-summary"></div>
           <p class="hint" style="margin-top:8px">Developable land = the radius catchment minus the selected physical/planning constraints (OS &amp; Environment Agency data). Capacity applies dwellings-per-hectare by regime; the highlighted regime is auto-selected from catchment density. Constraints re-query the database; regime &amp; dph recompute instantly.</p>
         </div>
       </section>`;
@@ -5881,6 +6322,9 @@ function wireDevelopableControls(panel) {
 
   const show = panel.querySelector("#dd-developable-show");
   if (show) show.addEventListener("change", (e) => toggleDevelopable(e.target.checked));
+
+  const pub = panel.querySelector("#dd-publicland-show");
+  if (pub) pub.addEventListener("change", (e) => togglePublicLand(e.target.checked));
 
   const radius = panel.querySelector("#dd-developable-radius");
   if (radius) radius.addEventListener("change", (e) => {
@@ -9845,4 +10289,9 @@ map.on("load", async () => {
 // Test/debug handle: module-scoped internals reachable from the console and
 // the offline smoke harness. Read-only usage only — not a public API.
 window.__mm = { MAP_OVERLAYS, LAYER_INFO, renderOverlay, hoverContentForOverlay,
-                setOverlayOpacity, overlayDef, pf, pfPrintReport, _cellsToPoints };
+                setOverlayOpacity, overlayDef, pf, pfPrintReport, _cellsToPoints,
+                deep, renderDevelopableLayer, renderPublicLandLayer,
+                renderDeepDiveLegend, renderPublicLandSummary,
+                developablePlotFeatures, publicLandPopupHTML,
+                selectDevelopablePlot, DEVELOPABLE_COLOR,
+                DEVELOPABLE_INNER_COLOR, PUBLIC_LAND_COLOR };

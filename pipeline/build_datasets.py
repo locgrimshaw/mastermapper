@@ -217,6 +217,7 @@ ALL_DATASETS = [
     "lad_boundary", "la_rents", "alc", "water_availability", "hdt",
     "planit_rates", "bus_route",
     "ofcom_fibre", "census_students", "student_accom",
+    "building_height",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -1528,6 +1529,110 @@ def build_hdt():
     return {key: rows}
 
 
+def build_building_height():
+    """Building heights from OpenStreetMap `height` / `building:levels` tags,
+    as points (one per building centroid) classified low / mid / high rise.
+
+    Coverage is whatever OSM contributors have tagged — excellent in city
+    centres and for tall/landmark buildings, patchy for suburban housing — so
+    the layer is honest about being a sample, not a survey. Single-storey
+    sheds and garages are dropped (storeys >= 2 or height >= 6 m) to keep the
+    national volume sane; the frontend thins further by height at wide zooms.
+
+    The workflow's osmium step writes data/raw/osm_building_height.geojson.
+    """
+    key = "building_height"
+    path = RAW / "osm_building_height.geojson"
+    if not path.exists():
+        _warn(key, "no osm_building_height.geojson — run via the workflow "
+                   "(its osmium step extracts tagged buildings from the UK PBF)")
+        _note(key, "no OSM extract")
+        return {}
+    print(f"  [{key}] reading {path.name} ...")
+    gdf = gpd.read_file(path)
+    gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty].copy()
+
+    def tagval(s, k):
+        if not isinstance(s, str):
+            return None
+        m = re.search('"' + k + '"=>"([^"]*)"', s)
+        return m.group(1) if m else None
+
+    def parse_height(v):
+        """OSM height: metres, sometimes with units or feet."""
+        if not v:
+            return None
+        v = str(v).strip().lower()
+        m = re.match(r"^([\d.]+)\s*(m|metres?|meters?)?$", v)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        m = re.match(r"^([\d.]+)\s*(ft|feet|')$", v)
+        if m:
+            try:
+                return float(m.group(1)) * 0.3048
+            except ValueError:
+                return None
+        return None
+
+    ot = gdf["other_tags"] if "other_tags" in gdf.columns else None
+    heights, storeys = [], []
+    for i in range(len(gdf)):
+        tags = ot.iloc[i] if ot is not None else None
+        h = parse_height(gdf["height"].iloc[i] if "height" in gdf.columns else None) \
+            or parse_height(tagval(tags, "height"))
+        lv = None
+        raw_lv = tagval(tags, "building:levels")
+        if raw_lv:
+            try:
+                lv = float(re.sub(r"[^\d.]", "", raw_lv) or 0) or None
+            except ValueError:
+                lv = None
+        # Either measure can stand in for the other: ~3.2 m per storey.
+        if h is None and lv:
+            h = round(lv * 3.2, 1)
+        if lv is None and h:
+            lv = round(h / 3.2)
+        heights.append(h)
+        storeys.append(lv)
+    gdf["_h"] = heights
+    gdf["_lv"] = storeys
+    before = len(gdf)
+    gdf = gdf[gdf["_h"].notna()]
+    gdf = gdf[(gdf["_h"] >= 6) | (gdf["_lv"].fillna(0) >= 2)]
+    # Sanity: drop obvious tagging errors (a 900 m house).
+    gdf = gdf[(gdf["_h"] > 1.5) & (gdf["_h"] < 400)]
+    print(f"  [{key}] {before:,} tagged buildings -> {len(gdf):,} usable "
+          "(>=2 storeys or >=6 m)")
+    if not len(gdf):
+        _note(key, "no usable heights")
+        return {}
+    # Points keep a national layer tractable; footprints stay in OSM.
+    gdf["geometry"] = gdf.geometry.centroid
+    name_col = _find_col(gdf, ["name"], contains=False)
+
+    def hclass(h):
+        if h >= 25:
+            return "high"
+        if h >= 12:
+            return "mid"
+        return "low"
+
+    def props_fn(f):
+        h = float(f["_h"])
+        out = {"height_m": round(h, 1), "class": hclass(h)}
+        if f["_lv"]:
+            out["storeys"] = int(f["_lv"])
+        return out
+
+    rows = _emit(gdf, key, name_col=name_col, want="point", simplify=False,
+                 props_fn=props_fn)
+    _note(key, "OSM height/building:levels", len(rows))
+    return {key: rows}
+
+
 def build_ofcom_fibre():
     """Ofcom Connected Nations fixed-coverage stats joined onto LAD polygons
     — full-fibre / gigabit availability per authority, the data-centre and
@@ -2005,6 +2110,7 @@ GROUPS = (
         (["ofcom_fibre"], build_ofcom_fibre, []),
         (["census_students"], build_census_students, []),
         (["student_accom"], build_student_accom, []),
+        (["building_height"], build_building_height, []),
     ]
 )
 
