@@ -1,0 +1,127 @@
+name: Build building-footprint height tiles
+
+# Building FOOTPRINTS coloured by height, as a single PMTiles file on Supabase
+# Storage (public 'tiles' bucket) — the same architecture as the national
+# parcel tiles, and for the same reason: ~1.5M polygons is far too much to
+# serve per viewport from Postgres, and a dot per building tells you nothing
+# about built form.
+#
+# The `building_height` POINT dataset in map_features stays as it is: it is the
+# wide-zoom "where are the tall buildings" view. This is the close-zoom view.
+# Both parse height the same way (pipeline/build_building_tiles.py mirrors
+# build_datasets.build_building_height), so their counts agree.
+#
+# Runtime is ~40-60 min, nearly all of it the OSM download and the osmium pass.
+#
+# Licence: OpenStreetMap contributors, ODbL. The map shows the attribution
+# while the layer is on.
+
+on:
+  workflow_dispatch:
+    inputs:
+      osm_pbf_url:
+        description: "OSM PBF to build from (blank = Geofabrik united-kingdom-latest)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  tiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install osmium, gdal and tippecanoe
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq osmium-tool gdal-bin
+          if ! sudo apt-get install -y -qq tippecanoe; then
+            sudo apt-get install -y -qq build-essential libsqlite3-dev zlib1g-dev git
+            git clone --depth 1 https://github.com/felt/tippecanoe /tmp/tippecanoe
+            make -j"$(nproc)" -C /tmp/tippecanoe
+            sudo make -C /tmp/tippecanoe install
+          fi
+          tippecanoe --version
+
+      - name: Extract buildings that carry a height signal
+        env:
+          OSM_PBF_SRC: ${{ inputs.osm_pbf_url }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          mkdir -p data/raw
+          PBF_URL="${OSM_PBF_SRC:-https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf}"
+          echo "Downloading OSM PBF (~1.8 GB): $PBF_URL"
+          curl -fL --retry 3 --retry-delay 15 -o data/raw/uk.osm.pbf "$PBF_URL"
+          df -h /
+          # tags-filter keeps a feature if ANY listed tag matches, so this is
+          # "buildings that carry a height signal" — everything else is dropped
+          # before the much slower geometry export.
+          osmium tags-filter data/raw/uk.osm.pbf \
+            w/height r/height w/building:levels r/building:levels \
+            -o data/raw/bld.osm.pbf --overwrite
+          rm -f data/raw/uk.osm.pbf
+          # GeoJSONSeq (one Feature per line) streams into the normaliser; a
+          # single GeoJSON array of 1.5M features would have to be parsed whole.
+          ogr2ogr -f GeoJSONSeq data/raw/osm_buildings.geojsonl \
+            data/raw/bld.osm.pbf multipolygons -t_srs EPSG:4326 \
+            -where "building IS NOT NULL"
+          rm -f data/raw/bld.osm.pbf
+          ls -la data/raw; df -h /
+
+      - name: Normalise heights
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python pipeline/build_building_tiles.py
+          rm -f data/raw/osm_buildings.geojsonl
+          df -h /
+
+      - name: Tile with tippecanoe
+        run: |
+          # Buildings only make sense close in, so the tileset starts at z13.
+          # --drop-densest-as-needed keeps dense city centres under the tile
+          # size limit by dropping features rather than mangling geometry —
+          # for footprints, a coalesced blob would be worse than a gap.
+          tippecanoe -o buildings.pmtiles -l buildings \
+            --minimum-zoom=13 --maximum-zoom=16 \
+            --drop-densest-as-needed --extend-zooms-if-still-dropping \
+            --force --read-parallel data/raw/buildings-tiles.jsonl
+          ls -la buildings.pmtiles; df -h /
+
+      # Keep the tiles as an artifact BEFORE the upload, so a rejected upload
+      # never costs the whole build (the parcel tiles learned this the hard way).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buildings-pmtiles
+          path: buildings.pmtiles
+          compression-level: 0
+
+      - name: Upload to Supabase storage (public tiles bucket)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."; exit 1
+          fi
+          # -T streams from disk; --data-binary would buffer the file in RAM.
+          code=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' -X POST \
+            "$SUPABASE_URL/storage/v1/object/tiles/buildings.pmtiles" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/octet-stream" \
+            -H "x-upsert: true" \
+            -T buildings.pmtiles)
+          cat /tmp/resp.txt; echo
+          if [ "$code" != "200" ]; then
+            echo "::error::Upload failed (HTTP $code). If this is a size rejection, raise Project Settings -> Storage -> Upload file size limit in the Supabase dashboard, then re-run just this step against the buildings-pmtiles artifact."
+            exit 1
+          fi
+          echo "Uploaded: $SUPABASE_URL/storage/v1/object/public/tiles/buildings.pmtiles"

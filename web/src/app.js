@@ -184,7 +184,12 @@ function defaultDevelopableConfig() {
   for (const k of DEVELOPABLE_SUBTRACT_KINDS) subtract[k.key] = k.on;
   // minPlotAc: drop developable plots below this many acres (0 = keep all).
   // largestOnly: keep only the single largest contiguous developable plot.
-  return { radius_m: 800, inner_radius_m: 200, subtract, minPlotAc: 0, largestOnly: false };
+  // minWidthM: drop anything narrower than this, wherever it occurs — an AREA
+  // test can't catch a 4 m x 300 m ribbon left along a railway or a road verge,
+  // which is big enough to pass but impossible to build on. 15 m is about the
+  // narrowest strip that takes a single row of housing plus access.
+  return { radius_m: 800, inner_radius_m: 200, subtract, minPlotAc: 0,
+           largestOnly: false, minWidthM: 15 };
 }
 
 const M2_PER_ACRE = 4046.856;
@@ -879,6 +884,9 @@ function updateDataSourceNote() {
     if (typeof parcelsState !== "undefined" && parcelsState.on) {
       el.textContent += " Parcel outlines: HM Land Registry INSPIRE index polygons © Crown copyright and database right, geometry derived from Ordnance Survey data.";
     }
+    if (typeof buildingsState !== "undefined" && buildingsState.on) {
+      el.textContent += " Building footprints & heights © OpenStreetMap contributors (ODbL).";
+    }
   }
 }
 
@@ -1196,16 +1204,10 @@ const MAP_OVERLAYS = [
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
   { key: "ofcom_fibre",        group: "sitefactors", label: "Full-fibre availability (Ofcom)", color: "#1971c2", dataset: "ofcom_fibre",       minZoom: 5 },
   { key: "slope_grid",         group: "sitefactors", label: "Ground slope (1 km cells)",       color: "#e8590c", dataset: "slope_grid",        minZoom: 8, lim: 8000, noOutline: true },
-  // Built form: OSM-tagged building heights, low/mid/high-rise coloured. Wide
-  // zooms show the tall ones first (the numeric filter), so a city reads as
-  // its skyline before it fills in.
-  { key: "building_height", group: "sitefactors", label: "Building heights (low/mid/high)", color: "#7048e8", dataset: "building_height", render: "point", minZoom: 11, lim: 8000,
-    numFilter: z => z < 13 ? { key: "height_m", min: 25 } : z < 15 ? { key: "height_m", min: 12 } : null,
-    radius: ["interpolate", ["linear"],
-             ["coalesce", ["to-number", ["get", "height_m"]], 6],
-             6, 2.5, 15, 3.5, 30, 5, 60, 7, 120, 9],
-    cap: { color: ["match", ["to-string", ["get", "class"]],
-           "high", "#5f3dc4", "mid", "#9775fa", "low", "#c5b3f6", "#adb5bd"] } },
+  // Built form is NOT here: a dot per building said nothing about the shape of
+  // a place. It is now a footprint layer shaded by height, served from PMTiles
+  // (setBuildingsVisible) because 1.5M polygons can't come from a bbox RPC.
+  // The building_height POINT dataset stays in map_features, currently unused.
 ];
 // Layers persist when zooming OUT now: the bbox RPCs take a p_zoom argument
 // and simplify geometry to ~1 screen pixel server-side (dropping sub-pixel
@@ -1233,7 +1235,7 @@ const LAYER_INFO = {
   census_students:    { about: "Full-time students (NS-SeC class L15) as a share of adults per authority — the structural PBSA demand base, independent of any one university's numbers.", source: "Census 2021 TS062 via NOMIS (OGL)" },
   student_accom:      { about: "Existing purpose-built student accommodation and dormitories mapped in OpenStreetMap — the PBSA competition map. Coverage reflects OSM mapping quality.", source: "OpenStreetMap contributors (ODbL)" },
   slope_grid:         { about: "Mean ground slope per 1 km cell from OS Terrain 50 (hover shows the steepest 50 m within the cell). Green = flat, red = steep — the data-centre construction-feasibility screen.", source: "OS Terrain 50 © Crown copyright (OGL)" },
-  building_height:    { about: "Building heights from OpenStreetMap height / building:levels tags, coloured low (under 12 m) / mid (12-25 m) / high rise (25 m+). Wide zooms show the tall buildings first. Coverage is a SAMPLE, not a survey: excellent for landmarks and city centres, patchy for suburban housing.", source: "OpenStreetMap contributors (ODbL)" },
+  building_height:    { about: "Every building tagged with a height or storey count in OpenStreetMap, drawn as its actual footprint and shaded light-to-dark by height — so a street of terraces, a mid-rise block and a tower read differently at a glance. Streams nationwide from z13. Coverage is a SAMPLE, not a survey: excellent for landmarks and city centres, patchy across suburbia. An untagged building is absent rather than shown as low rise.", source: "OpenStreetMap contributors (ODbL)" },
   public_parcel:      { about: "Land parcels in public ownership: CCOD ownership records matched to HMLR INSPIRE parcel boundaries by location, with individual flats excluded so a single ex-right-to-buy flat can't claim a whole block. INDICATIVE — the exact title-to-polygon link is HMLR's licensed National Polygon Service.", source: "HM Land Registry CCOD + INSPIRE index polygons © Crown copyright and database right" },
   bus_route:          { about: "Every mapped bus route (OpenStreetMap route relations) as lines, with route number and operator on hover. Coverage reflects OSM mapping — dense in urban areas, occasionally patchy on rural services.", source: "OpenStreetMap contributors (ODbL)" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
@@ -1902,6 +1904,102 @@ function setParcelOpacity(v) {
   if (map.getLayer("parcel-fill")) map.setPaintProperty("parcel-fill", "fill-opacity", Math.min(0.15, v * 0.08));
 }
 
+// ---- Building footprints coloured by height (OSM, PMTiles) -----------------
+// Every OSM building that carries a height or building:levels tag, drawn as its
+// actual FOOTPRINT and shaded by height (built by
+// .github/workflows/build-building-tiles.yml). A dot per building told you
+// nothing about built form; a coloured footprint reads as a townscape — you can
+// see the terraces, the tower, the industrial sheds, at a glance.
+//
+// Coverage is whatever OSM contributors have tagged: excellent in city centres
+// and for landmarks, patchy across suburbia. Untagged buildings are simply
+// absent, which is honest — they are not "low rise", they are unknown.
+const BUILDING_HEIGHT_BANDS = [
+  { max: 6,        color: "#c7e9b4", label: "under 6 m · 1–2 storeys" },
+  { max: 12,       color: "#7fcdbb", label: "6–12 m · 2–4 storeys" },
+  { max: 25,       color: "#41b6c4", label: "12–25 m · 4–8 storeys" },
+  { max: 50,       color: "#1d91c0", label: "25–50 m · 8–16 storeys" },
+  { max: 100,      color: "#225ea8", label: "50–100 m · 16–32 storeys" },
+  { max: Infinity, color: "#0c2c84", label: "over 100 m" },
+];
+const buildingsState = { on: false, opacity: 0.85, available: null };
+
+function buildingTilesUrl() {
+  const cfg = window.MASTERMAPPER_CONFIG || {};
+  return cfg.SUPABASE_URL
+    ? `${cfg.SUPABASE_URL}/storage/v1/object/public/tiles/buildings.pmtiles`
+    : null;
+}
+
+// Sequential light->dark ramp on height, as a MapLibre step expression.
+function buildingHeightColorExpr() {
+  const expr = ["step", ["coalesce", ["to-number", ["get", "height_m"]], 0],
+                BUILDING_HEIGHT_BANDS[0].color];
+  for (let i = 0; i < BUILDING_HEIGHT_BANDS.length - 1; i++)
+    expr.push(BUILDING_HEIGHT_BANDS[i].max, BUILDING_HEIGHT_BANDS[i + 1].color);
+  return expr;
+}
+
+// The swatch a given height falls in — same bands as the fill ramp, so the
+// hover card's chip always matches what's under the cursor.
+function buildingBandColor(h) {
+  const v = Number(h);
+  if (!isFinite(v)) return BUILDING_HEIGHT_BANDS[0].color;
+  for (const b of BUILDING_HEIGHT_BANDS) if (v < b.max) return b.color;
+  return BUILDING_HEIGHT_BANDS[BUILDING_HEIGHT_BANDS.length - 1].color;
+}
+
+async function setBuildingsVisible(on) {
+  buildingsState.on = on;
+  const stat = document.getElementById("buildings-stat");
+  const url = buildingTilesUrl();
+  if (!url) { if (stat) stat.textContent = "n/a"; return; }
+  if (on && buildingsState.available === null) {
+    try {
+      const r = await fetch(url, { method: "HEAD" });
+      buildingsState.available = r.ok;
+    } catch (_) { buildingsState.available = false; }
+  }
+  if (on && buildingsState.available === false) {
+    if (stat) stat.textContent = "tiles not built yet";
+    return;
+  }
+  if (on && !map.getSource("buildings")) {
+    map.addSource("buildings", { type: "vector", url: "pmtiles://" + url });
+    const before = overlayBeforeId();
+    map.addLayer({ id: "building-fill", type: "fill", source: "buildings",
+      "source-layer": "buildings", minzoom: 13,
+      paint: { "fill-color": buildingHeightColorExpr(),
+               "fill-opacity": buildingsState.opacity } }, before);
+    // A hairline outline at close zoom separates a terrace into houses instead
+    // of one merged block of colour.
+    map.addLayer({ id: "building-line", type: "line", source: "buildings",
+      "source-layer": "buildings", minzoom: 15,
+      paint: { "line-color": "#ffffff",
+               "line-width": ["interpolate", ["linear"], ["zoom"], 15, 0.2, 18, 0.7],
+               "line-opacity": 0.5 * buildingsState.opacity } }, before);
+  }
+  for (const id of ["building-fill", "building-line"])
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+  if (stat) stat.textContent = on ? "streams from z13" : "";
+  const legend = document.getElementById("buildings-legend");
+  if (legend) legend.hidden = !on;
+  updateDataSourceNote();
+}
+
+function setBuildingOpacity(v) {
+  buildingsState.opacity = v;
+  if (map.getLayer("building-fill")) map.setPaintProperty("building-fill", "fill-opacity", v);
+  if (map.getLayer("building-line")) map.setPaintProperty("building-line", "line-opacity", 0.5 * v);
+}
+
+// The height ramp is meaningless without a key, so the row carries its own.
+function buildingsLegendHTML() {
+  const items = BUILDING_HEIGHT_BANDS.map(b =>
+    `<span class="bh-key"><span class="bh-sw" style="background:${b.color}"></span>${b.label}</span>`).join("");
+  return `<div id="buildings-legend" class="bh-legend" hidden>${items}</div>`;
+}
+
 // ---- Data layers panel (left box 1) ---------------------------------------
 // The grouped, sub-grouped layer tree. Every layer gets a visibility toggle
 // and a transparency slider; groups and sub-groups collapse. Data-gated rows
@@ -2020,6 +2118,15 @@ function buildLayersPanel() {
                             info: { about: "Green Belt land, where national policy restrains most new development. Shown nationwide from a static extract.",
                                     source: "MHCLG via planning.data.gov.uk (OGL v3)" } });
       }
+      // Building footprints (PMTiles, not a bbox overlay) lead Site factors,
+      // and carry their own height key underneath the row.
+      if (g.key === "sitefactors") {
+        rows += ltRowHTML({ cbId: "buildings-show", label: "Building heights (footprints)",
+                            color: BUILDING_HEIGHT_BANDS[3].color, statId: "buildings-stat",
+                            checked: false, opacity: buildingsState.opacity, opacityKey: "buildings",
+                            info: LAYER_INFO.building_height });
+        rows += buildingsLegendHTML();
+      }
       rows += MAP_OVERLAYS.filter(o => o.group === g.key).map(o =>
         ltRowHTML({ dataKey: o.key, label: o.label, color: o.color, statId: `ov-stat-${o.key}`,
                     checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}`,
@@ -2103,6 +2210,10 @@ function buildLayersPanel() {
   const parcelsCb = document.getElementById("parcels-show");
   if (parcelsCb) parcelsCb.addEventListener("change", e => setParcelsVisible(e.target.checked));
 
+  // Building-footprint tiles (also storage-served, not a bbox overlay).
+  const buildingsCb = document.getElementById("buildings-show");
+  if (buildingsCb) buildingsCb.addEventListener("change", e => setBuildingsVisible(e.target.checked));
+
   // Every transparency slider routes through one dispatcher.
   host.querySelectorAll(".lt-opacity").forEach(sl =>
     sl.addEventListener("input", e => {
@@ -2114,6 +2225,7 @@ function buildLayersPanel() {
       else if (k === "rail") setRailOverlayOpacity(v);
       else if (k === "stations") setStationOpacity(v);
       else if (k === "parcels") setParcelOpacity(v);
+      else if (k === "buildings") setBuildingOpacity(v);
       else if (k && k.startsWith("ov:")) setOverlayOpacity(k.slice(3), v);
     }));
 
@@ -3020,12 +3132,6 @@ function hoverContentForOverlay(def, p) {
     title = p.slope != null ? `${p.slope}° mean slope` : "Slope cell";
     kind = "Ground slope — 1 km cell";
     rows = [row(p.max_slope != null ? `${p.max_slope}°` : null, "steepest 50 m")];
-  } else if (d === "building_height") {
-    const CLS = { high: "High rise", mid: "Mid rise", low: "Low rise" };
-    title = p.name || CLS[p.class] || "Building";
-    kind = `${CLS[p.class] || "Building"} — OSM tagged height`;
-    rows = [row(p.height_m != null ? `${p.height_m} m` : null, "height"),
-            row(p.storeys != null ? `${p.storeys} storeys` : null, "levels")];
   } else if (d === "public_parcel") {
     const OWNER_LABELS = { local_authority: "Local authority", parish: "Parish / town council",
       combined_authority: "Combined authority", nhs: "NHS", university: "University",
@@ -3137,6 +3243,8 @@ function initHoverSystem() {
     if (state.hasGreenbelt && map.getLayer("greenbelt-fill")
         && map.getLayoutProperty("greenbelt-fill", "visibility") === "visible")
       prio.push("greenbelt-fill");
+    // Buildings sit above parcels: the smaller, more specific thing wins.
+    if (buildingsState.on && map.getLayer("building-fill")) prio.push("building-fill");
     if (parcelsState.on && map.getLayer("parcel-fill")) prio.push("parcel-fill");
 
     let hits = [];
@@ -3181,6 +3289,14 @@ function initHoverSystem() {
       } else if (winner.id === "greenbelt-fill") {
         html = hoverCardHTML({ title: p.name || "Green Belt", kind: "Green Belt",
                                chip: GREENBELT_COLOR, rows: [] });
+      } else if (winner.id === "building-fill") {
+        const CLS = { high: "High rise", mid: "Mid rise", low: "Low rise" };
+        const rows = [];
+        if (p.height_m != null) rows.push([`${p.height_m} m`, "height"]);
+        if (p.storeys != null) rows.push([`${p.storeys}`, "storeys"]);
+        html = hoverCardHTML({ title: p.name || CLS[p.class] || "Building",
+                               kind: `${CLS[p.class] || "Building"} — OSM tagged height`,
+                               chip: buildingBandColor(p.height_m), rows });
       } else if (winner.id === "parcel-fill") {
         html = hoverCardHTML({ title: `Parcel ${p.INSPIREID ?? p.inspireid ?? ""}`.trim(),
                                kind: "HMLR INSPIRE index parcel", chip: PARCEL_COLOR, rows: [] },
@@ -5591,6 +5707,7 @@ async function loadDevelopable() {
     subtract: developableSubtractArray(),
     min_plot_m2: (cfg.minPlotAc > 0 ? cfg.minPlotAc * M2_PER_ACRE : 0),
     largest_only: !!cfg.largestOnly,
+    min_width_m: (cfg.minWidthM > 0 ? cfg.minWidthM : 0),
   };
   const { data, error } = await sb.rpc("developable_land_near_station", params);
   if (error) {
@@ -6293,6 +6410,10 @@ function developableSectionHTML(station) {
               <span>Min plot (acres)</span>
               <input type="number" id="dd-developable-minplot" min="0" max="50" step="0.25" value="${cfg.minPlotAc}" />
             </label>
+            <label class="dd-bf-filter" title="Drop land narrower than this, wherever it occurs — the thin ribbons left beside a railway or between a road and a boundary. An area filter can't catch them: a 4 m x 300 m strip is a third of an acre but you can't build on it. 0 = no width test.">
+              <span>Min width (m)</span>
+              <input type="number" id="dd-developable-minwidth" min="0" max="100" step="1" value="${cfg.minWidthM}" />
+            </label>
             <label class="dd-bf-check" title="Keep only the single largest contiguous developable plot in the catchment (ignores the scatter of smaller parcels).">
               <input type="checkbox" id="dd-developable-largest" ${cfg.largestOnly ? "checked" : ""} /> Largest plot only
             </label>
@@ -6344,6 +6465,13 @@ function wireDevelopableControls(panel) {
   if (minPlot) minPlot.addEventListener("change", (e) => {
     const v = parseFloat(e.target.value);
     deep.developable.minPlotAc = (isNaN(v) || v < 0) ? 0 : v;
+    refreshDevelopable();
+  });
+
+  const minWidth = panel.querySelector("#dd-developable-minwidth");
+  if (minWidth) minWidth.addEventListener("change", (e) => {
+    const v = parseFloat(e.target.value);
+    deep.developable.minWidthM = (isNaN(v) || v < 0) ? 0 : v;
     refreshDevelopable();
   });
 

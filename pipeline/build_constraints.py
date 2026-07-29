@@ -100,7 +100,7 @@ from pathlib import Path
 import pandas as pd
 import geopandas as gpd
 from shapely import make_valid, to_wkt
-from shapely.geometry import MultiPolygon
+from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -181,6 +181,17 @@ CLASS_CANDIDATES = [
     "classification", "class", "roadclass", "road_class", "featurecode",
     "legend", "drawlevel",
 ]
+# Which OS OpenMap Local road classes count as a constraint. 'Minor Road' is
+# included: distributor roads and their roundabouts sit OUTSIDE built-up areas
+# often enough that leaving them out painted junctions as developable land.
+# 'Local Street' is deliberately left out — residential streets are already
+# inside the built_land polygons, and adding ~3M more segments would make the
+# national dissolve intractable for no gain. Override with ROAD_CLASSES.
+ROAD_CLASS_RE = os.environ.get("ROAD_CLASSES") or (
+    "motorway|a road|b road|minor road|primary|trunk|secondary|tertiary")
+# Interior rings below this area in a dissolved road corridor are road, not
+# land: roundabout islands, gyratory centres, slip-road gores.
+ROAD_FILL_HOLES_M2 = float(os.environ.get("ROAD_FILL_HOLES_M2") or "3000")
 
 
 def _find_col(gdf, candidates):
@@ -387,8 +398,33 @@ def build_clip_mask():
     return mask
 
 
+def _fill_small_holes(geom, max_m2):
+    """Drop interior rings smaller than max_m2 from a (Multi)Polygon.
+
+    A dissolved road network is full of tiny holes that are road geometry, not
+    developable land: the island inside a roundabout, the middle of a gyratory,
+    the gap between a slip road and the main carriageway. Left alone they come
+    back as little circular 'developable' plots. Real enclosed land — a block
+    of houses ringed by roads — is far bigger than the threshold and survives.
+    Input must be in a metre CRS (this runs pre-reprojection, in 27700)."""
+    if geom is None or geom.is_empty or max_m2 <= 0:
+        return geom
+    parts = []
+    for poly in getattr(geom, "geoms", [geom]):
+        if not isinstance(poly, Polygon):
+            parts.append(poly)
+            continue
+        keep = [r for r in poly.interiors if Polygon(r).area >= max_m2]
+        parts.append(Polygon(poly.exterior, keep) if len(keep) != len(poly.interiors)
+                     else poly)
+    if not parts:
+        return geom
+    return parts[0] if len(parts) == 1 else MultiPolygon(
+        [p for p in parts if isinstance(p, Polygon)])
+
+
 def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None,
-            dissolve=False):
+            dissolve=False, fill_holes_m2=0.0):
     """Shared tail: clip to the mask (EPSG:27700), simplify lightly, reproject to
     4326, and emit one row per surviving feature. Returns a list of row dicts.
 
@@ -428,6 +464,8 @@ def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None,
     # hundreds of thousands of per-segment rows.
     if dissolve:
         merged = make_valid(unary_union(list(gdf.geometry.values)))
+        if fill_holes_m2 > 0:
+            merged = make_valid(_fill_small_holes(merged, fill_holes_m2))
         parts = list(getattr(merged, "geoms", [merged]))
         gdf = gpd.GeoDataFrame({"geometry": parts}, geometry="geometry", crs=gdf.crs)
         prop_cols, id_col, name_col = None, None, None
@@ -536,10 +574,12 @@ def _buffer_transport_layer(gdf, is_rail):
             return 15.0
         if "a road" in c or c.strip() == "a road":
             return 9.0
-        if "b road" in c:
+        if "b road" in c or "secondary" in c:
             return 5.0
-        if "minor" in c:
-            return 5.0
+        if "minor" in c or "tertiary" in c:
+            # Distributor roads: carriageway plus verges/footways is ~12 m, and
+            # these are the ones whose roundabouts sit in open land.
+            return 6.0
         if any(w in c for w in ("local", "resident", "restricted", "private",
                                 "access", "street", "alley", "track")):
             return 4.0
@@ -598,12 +638,15 @@ def build_transport(mask_27700, mask_geom_27700):
         cls_col = _find_col(roads, CLASS_CANDIDATES)
         if cls_col is not None:
             low = roads[cls_col].astype(str).str.lower()
-            roads = roads[low.str.contains(
-                "motorway|a road|b road|primary|trunk|secondary", na=False)]
-            print(f"    kept {len(roads)} A/B/motorway-road features")
+            roads = roads[low.str.contains(ROAD_CLASS_RE, na=False)]
+            print(f"    kept {len(roads)} road features matching {ROAD_CLASS_RE!r}")
         roads = _buffer_transport_layer(roads, is_rail=False)
         # dissolve=True: merge buffered roads into corridors (few rows, not 100k+).
-        rows += _finish(roads, "transport", mask_27700, dissolve=True)
+        # fill_holes_m2: a roundabout island is a hole in the dissolved corridor,
+        # and a hole in a constraint reads as developable land. 3,000 m2 covers
+        # roundabouts and gyratory centres without swallowing a real block.
+        rows += _finish(roads, "transport", mask_27700, dissolve=True,
+                        fill_holes_m2=ROAD_FILL_HOLES_M2)
     if rail_path:
         print(f"  [transport] reading railway from {rail_path.name} ...")
         # Pick the rail TRACK/line layer (never the station-points layer, which a

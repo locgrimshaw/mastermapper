@@ -2454,3 +2454,17 @@ footer {
   #dd-legend { max-width: calc(100vw - 28px); bottom: 10px; }
   .ddl-item { font-size: 11px; }
 }
+
+/* Building-height key, tucked under the footprints row in the layer tree. */
+.bh-legend {
+  display: flex; flex-wrap: wrap; gap: 3px 10px;
+  margin: 2px 0 6px 26px; padding: 0;
+}
+.bh-key {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; color: var(--text-dim); white-space: nowrap;
+}
+.bh-sw {
+  width: 10px; height: 10px; border-radius: 2px; flex: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+}
