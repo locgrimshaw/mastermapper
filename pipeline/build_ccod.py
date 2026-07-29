@@ -81,6 +81,43 @@ OWNER_CLASSES = [
 ]
 
 
+# A title whose address names a flat/apartment/unit inside a building is a
+# SINGLE DWELLING, not a land holding — a council owning one ex-right-to-buy
+# flat says nothing about developable land. Matching on the address text is
+# the only signal CCOD gives us (there is no title-type column).
+# CCOD's canonical flat format leads with the unit — "Flat 2, 19 Park Road".
+# That opening is decisive on its own (note "Park Road" must NOT drag it into
+# the land bucket, hence this beats the land veto below).
+FLAT_LEAD = re.compile(
+    r"^\s*(flat|apartment|apt\.?|maisonette|penthouse|studio)\s*[\dA-Z]*\s*[,\-]",
+    re.I)
+# Weaker, mid-string unit signals — only trusted when nothing says "whole site".
+FLAT_WEAK = re.compile(
+    r",\s*(flat|apartment|apt\.?|maisonette|penthouse)\b"
+    r"|\bflats?\s+\d+\s*[-–]\s*\d+"
+    r"|\b(unit|suite|room)\s+\d+[a-z]?\s*,",
+    re.I)
+# Addresses that read as a whole site, vetoing the weak signals above.
+LAND_ADDR = re.compile(
+    r"\bland\b|\bsite\b|\bcar park\b|\bdepot\b|\ballotment|\bplaying field|"
+    r"\bcemetery\b|\bgarages?\b|\bopen space\b|\bformer\b|\bschool\b|"
+    r"\blibrary\b|\bcommunity centre\b|\bworks\b|\byard\b|\bdepot\b|"
+    r"\bpublic conveniences?\b|\brecreation ground\b|\bplayground\b",
+    re.I)
+
+
+def is_flat_address(addr):
+    """True when this title's address describes an individual flat/unit
+    rather than a whole property or piece of land."""
+    if not addr:
+        return False
+    if FLAT_LEAD.search(addr):
+        return True                      # "Flat 2, 19 Park Road" — decisive
+    if LAND_ADDR.search(addr):
+        return False
+    return bool(FLAT_WEAK.search(addr))
+
+
 def classify_owner(name, category):
     """First matching owner class, else local_authority via the proprietorship
     category, else None (= not a public body we track)."""
@@ -338,13 +375,19 @@ def main():
                     continue
                 kept += 1
                 k = (pc, prop_name.upper())
-                a = agg.setdefault(k, {"n": 0, "name": prop_name,
+                a = agg.setdefault(k, {"n": 0, "flats": 0, "name": prop_name,
                                        "category": prop_cat, "postcode": row[i_pc],
                                        "owner_class": owner_cls,
-                                       "address": None})
+                                       "address": None, "land_address": None})
                 a["n"] += 1
-                if a["address"] is None and i_addr is not None and i_addr < len(row):
-                    a["address"] = row[i_addr][:160]
+                addr = row[i_addr][:160] if (i_addr is not None
+                                             and i_addr < len(row)) else None
+                if is_flat_address(addr):
+                    a["flats"] += 1
+                elif a["land_address"] is None:
+                    a["land_address"] = addr      # a whole-property example
+                if a["address"] is None:
+                    a["address"] = addr
     print(f"[ccod] {seen:,} titles scanned, {kept:,} public-body-owned with a "
           f"mappable postcode, {len(agg):,} aggregated points")
     cls_counts = {}
@@ -353,6 +396,12 @@ def main():
     print("[ccod] owner classes:",
           ", ".join(f"{k}={v:,}" for k, v in
                     sorted(cls_counts.items(), key=lambda kv: -kv[1])))
+    tot_titles = sum(a["n"] for a in agg.values())
+    tot_flats = sum(a["flats"] for a in agg.values())
+    pts_land = sum(1 for a in agg.values() if a["n"] > a["flats"])
+    print(f"[ccod] flat filter: {tot_flats:,}/{tot_titles:,} titles are "
+          f"individual flats/units; {pts_land:,}/{len(agg):,} points hold at "
+          "least one whole-property title")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("w", newline="", encoding="utf-8") as fh:
@@ -362,11 +411,17 @@ def main():
         for (pc, _), a in agg.items():
             e, n = pcs[pc]
             lon, lat = tr.transform(e, n)
+            # titles_land = titles that are NOT individual flats — the ones
+            # that can plausibly correspond to a land parcel.
+            land_titles = a["n"] - a["flats"]
             props = {k: v for k, v in (("titles", a["n"]),
+                                       ("titles_flat", a["flats"]),
+                                       ("titles_land", land_titles),
                                        ("category", a["category"]),
                                        ("owner_class", a["owner_class"]),
                                        ("postcode", a["postcode"]),
-                                       ("address", a["address"])) if v}
+                                       ("address", a["land_address"] or a["address"])) if v}
+            props["has_land"] = land_titles > 0
             w.writerow({
                 "dataset": "la_property",
                 "source_id": f"{pc}-{re.sub(r'[^A-Z0-9]+', '', a['name'].upper())[:40]}",

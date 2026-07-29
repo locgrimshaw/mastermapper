@@ -1,0 +1,83 @@
+name: Build public-authority land parcels
+
+# Pairs CCOD public-ownership points with HMLR INSPIRE parcel polygons to
+# produce the `public_parcel` dataset — the actual SHAPE of publicly owned
+# land, with individual flats filtered out (see pipeline/pair_public_parcels.py).
+#
+# It reuses the parcel shard artifacts from a build-parcel-tiles run, so HMLR
+# is never re-downloaded: pass that run's ID as source_run_id. (Artifacts
+# expire after ~90 days; re-run build-parcel-tiles first if they're gone.)
+#
+# Licence: INSPIRE index polygons and CCOD are © Crown copyright and database
+# right, reproduced with permission of HM Land Registry.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Run ID of the build-parcel-tiles run whose parcel shards to use"
+        required: true
+      near_m:
+        description: "Max metres a postcode centroid may sit outside a parcel (default 30)"
+        required: false
+        default: "30"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  pair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install shapely pyproj
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: parcels-shard-*
+          merge-multiple: true
+          path: parcels
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Unpack the parcel shards
+        run: |
+          ls -la parcels
+          gunzip parcels/parcels-*.jsonl.gz
+          wc -l parcels/*.jsonl | tail -1
+          df -h /
+
+      - name: Pair ownership points with parcels
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PARCEL_DIR: parcels
+          PARCEL_NEAR_M: ${{ inputs.near_m }}
+          PYTHONUNBUFFERED: "1"
+        run: python pipeline/pair_public_parcels.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public_parcel_csv
+          path: supabase/datasets_import.csv
+          if-no-files-found: error
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: public_parcel
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          python supabase/loaders/load_datasets.py
