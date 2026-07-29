@@ -32,6 +32,7 @@ import csv
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -111,6 +112,41 @@ def read_records(path: Path) -> list:
     return deduped
 
 
+def _post_with_retry(url, body, headers, attempts=5):
+    """POST a batch, retrying transient failures with exponential backoff.
+
+    Returns (True, "") or (False, reason).
+
+    This exists because a 2.5-hour national road build was thrown away by a
+    momentary Cloudflare 520/521 — the origin was briefly unreachable, all six
+    batches failed inside 72 seconds, and the loader exited with nothing
+    loaded. 5xx and connection errors are transient by definition and deserve
+    a wait, not a shrug. 4xx is our own bad request and retrying it would just
+    burn time, so those fail immediately."""
+    delay = 4
+    for attempt in range(1, attempts + 1):
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers,
+                                         method="POST")
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                resp.read()
+            return True, ""
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:300]
+            if exc.code < 500:
+                return False, f"HTTP {exc.code} {detail}"
+            why = f"HTTP {exc.code} {detail}"
+        except urllib.error.URLError as exc:
+            why = str(exc)
+        if attempt == attempts:
+            return False, f"{why} (after {attempts} attempts)"
+        print(f"    transient failure ({why}); retrying in {delay}s "
+              f"[{attempt}/{attempts - 1}]")
+        time.sleep(delay)
+        delay = min(delay * 2, 60)
+    return False, "unreachable"
+
+
 def upsert(records: list):
     """Upsert records into Supabase via PostgREST (on_conflict kind,source_id).
 
@@ -134,20 +170,14 @@ def upsert(records: list):
     for i in range(0, len(records), BATCH):
         batch = records[i:i + BATCH]
         body = json.dumps(batch).encode("utf-8")
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=180) as resp:
-                resp.read()
+        ok, why = _post_with_retry(url, body, headers)
+        if ok:
             total += len(batch)
             print(f"  upserted {total} / {len(records)}")
-        except urllib.error.HTTPError as exc:
+        else:
             failed += len(batch)
-            detail = exc.read().decode("utf-8", "replace")[:500]
-            print(f"  batch starting {i} failed: HTTP {exc.code} {detail}")
+            print(f"  batch starting {i} failed: {why}")
             # Keep going — a later batch may be fine, and partial load beats none.
-        except urllib.error.URLError as exc:
-            failed += len(batch)
-            print(f"  batch starting {i} failed: {exc}")
     if total == 0:
         print("Nothing loaded — every batch failed. See the error above.")
         sys.exit(1)

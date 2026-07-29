@@ -1,0 +1,64 @@
+name: Finish a constraints load
+
+# Retry vehicle for load-constraints.yml: re-runs ONLY the Supabase load,
+# reusing the constraints_import_csv artifact from an earlier run so nothing
+# is re-downloaded or re-dissolved.
+#
+# Why this exists: the national road build spends ~2.5 hours dissolving OS
+# OpenMap Local before it writes a single row, and a momentary Cloudflare
+# 520/521 in front of Supabase was enough to fail every batch and throw the
+# whole thing away. The loaders now retry transient 5xx, but the artifact is
+# uploaded BEFORE the load either way, so a load that still fails costs
+# minutes to redo instead of hours.
+#
+# Usage: pass the run ID of the load-constraints run whose CSV you want
+# loaded. Every kind in that CSV loads — the constraints loader has no kind
+# filter, and the CSV only ever holds the kinds its build run was asked for.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Run ID of the load-constraints run whose import CSV to load"
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: constraints_import_csv
+          path: supabase
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Show what is about to load
+        run: |
+          ls -la supabase/constraints_import.csv
+          echo "rows (incl. header): $(wc -l < supabase/constraints_import.csv)"
+          echo "kinds present:"
+          cut -d, -f1 supabase/constraints_import.csv | tail -n +2 | sort | uniq -c
+
+      - name: Load the constraints into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          python supabase/loaders/load_constraints.py
