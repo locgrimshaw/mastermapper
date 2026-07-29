@@ -124,8 +124,12 @@ def main() -> int:
         return 1
 
     tree = STRtree(pts)
-    # Metres-accurate work happens in British National Grid.
+    # Metres-accurate work happens in British National Grid. Every point is
+    # projected ONCE here: a point sits in the query envelope of many parcels,
+    # so transforming it inside the match loop re-does the same work over and
+    # over (~40 us a call, millions of calls).
     to_bng = Transformer.from_crs(4326, 27700, always_xy=True).transform
+    pts_bng = [shp_transform(to_bng, p) for p in pts]
     deg_near = NEAR_M / 111_320.0     # rough degrees for the query envelope
 
     matched = {}          # parcel key -> row dict (best match wins)
@@ -165,7 +169,7 @@ def main() -> int:
                     else:
                         if area_m2 > NEAR_MAX_M2:
                             continue
-                        d = poly_bng.distance(shp_transform(to_bng, p))
+                        d = poly_bng.distance(pts_bng[i])
                         if d > NEAR_M:
                             continue
                         kind = "nearest"
