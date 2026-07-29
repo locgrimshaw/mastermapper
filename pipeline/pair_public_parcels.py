@@ -81,7 +81,7 @@ def fetch_points():
 
 def main() -> int:
     try:
-        from shapely.geometry import shape, Point
+        from shapely.geometry import shape, box
         from shapely.strtree import STRtree
         from shapely.ops import transform as shp_transform
         from pyproj import Transformer
@@ -147,8 +147,12 @@ def main() -> int:
                     continue
                 if poly.is_empty:
                     continue
-                # Candidate points near this parcel (index query is cheap).
-                idxs = tree.query(poly.buffer(deg_near))
+                # Candidate points near this parcel. Query with an expanded
+                # BOUNDS BOX, never poly.buffer() — buffering 26M polygons
+                # costs hours, and the tree only uses the envelope anyway.
+                minx, miny, maxx, maxy = poly.bounds
+                idxs = tree.query(box(minx - deg_near, miny - deg_near,
+                                      maxx + deg_near, maxy + deg_near))
                 if len(idxs) == 0:
                     continue
                 poly_bng = shp_transform(to_bng, poly)
