@@ -971,6 +971,20 @@ def build_listed_building(mask_27700, mask_geom_4326):
             # GeoPandas spells shapely's quad_segs as `resolution`.
             g["geometry"] = g.geometry.buffer(LISTED_POINT_BUFFER_M, resolution=6)
             g["geom_source"] = "point"
+            # Give the proxies their OWN id namespace. Both datasets carry the
+            # same `reference` for the same listing, and _finish picks the id
+            # from ID_CANDIDATES (reference is in there), so without a prefix a
+            # point proxy upserts straight over the real outline for the same
+            # building — the first run silently replaced ~51,000 digitised
+            # outlines with 8 m circles. 'source_id' is first in ID_CANDIDATES,
+            # so setting it here wins; outline ids are left untouched so their
+            # existing rows keep refreshing in place rather than being orphaned.
+            _ref = None
+            for _c in ("reference", "entity"):
+                if _c in g.columns:
+                    _ref = g[_c].astype(str)
+                    break
+            g["source_id"] = ("lbpt-" + _ref) if _ref is not None else None
             print(f"    {len(g)} list entry point(s) buffered to "
                   f"{LISTED_POINT_BUFFER_M:.0f} m")
             rows += _finish(g, "listed_building", mask_27700,
