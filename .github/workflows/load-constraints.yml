@@ -86,6 +86,16 @@ jobs:
             [park_garden]=park-and-garden
             [listed_building]=listed-building-outline
           )
+          # listed_building needs a SECOND file: the outline layer is digitised
+          # per-authority and misses whole cities (Norwich, Ipswich, Derby,
+          # Nottingham, Sunderland...), while listed-building is the complete
+          # Historic England list as points. The builder loads both.
+          if echo "${{ inputs.kinds }}" | grep -qw "listed_building"; then
+            echo "listed-building (full Historic England list, points)..."
+            curl -fL --retry 3 --retry-delay 5 -o "data/raw/listed-building.geojson" \
+              "https://files.planning.data.gov.uk/dataset/listed-building.geojson" \
+              || echo "::warning::listed-building download failed — outlines only, coverage will be partial"
+          fi
           K="${{ inputs.kinds }}"
           for kind in "${!PD_SLUGS[@]}"; do
             if echo "$K" | grep -qw "$kind"; then

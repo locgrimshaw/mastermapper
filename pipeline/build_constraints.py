@@ -168,6 +168,13 @@ PLANNING_DATA_KINDS = {
 # barrier. ~12 m half-width ≈ a 24 m corridor.
 RAIL_HALF_WIDTH = 12.0
 
+# A listed-building LIST ENTRY is a point, but the developable RPC measures
+# heritage friction by area, so each point becomes a small footprint proxy.
+# 8 m radius is ~200 m2, about a modest building; big enough to register, small
+# enough that a catchment full of listings still reads as a soft constraint
+# rather than a hard one.
+LISTED_POINT_BUFFER_M = float(os.environ.get("LISTED_POINT_BUFFER_M") or "8")
+
 # --- generic column matching -------------------------------------------------
 # A per-feature id, in priority order. Used for a stable source_id / upsert key.
 ID_CANDIDATES = [
@@ -908,6 +915,76 @@ def build_planning_data(kind, mask_27700, mask_geom_4326):
     return _finish(gdf, kind, mask_27700, prop_cols=prop_cols)
 
 
+def build_listed_building(mask_27700, mask_geom_4326):
+    """Listed buildings from BOTH planning.data.gov.uk datasets, because one of
+    them alone is nowhere near complete.
+
+    listed-building-outline is the polygon layer and it is what this pipeline
+    used to load on its own. But those outlines are digitised by individual
+    planning authorities and coverage is badly uneven: measured against OS
+    built-up areas, 69 of 197 English cells holding more than 5 km2 of built
+    land had ZERO listed buildings — 2,443 km2 of built-up England — including
+    the whole of Norwich, Ipswich, Derby, Nottingham, Sunderland, Preston,
+    Chesterfield and Chelmsford. Cities with hundreds of listed buildings each
+    were reading as having none.
+
+    listed-building is the full Historic England National Heritage List, as
+    POINTS. A point has no area, and the developable RPC measures listed-building
+    friction by AREA, so each is buffered to a small footprint proxy
+    (LISTED_POINT_BUFFER_M, 8 m ~ 200 m2). The RPC unions the kind before
+    measuring, so a point sitting inside its own outline cannot double-count.
+    props.geom_source records which source a row came from ('outline' or
+    'point') so the distinction stays inspectable rather than implied.
+
+    ENGLAND ONLY. Both datasets are Historic England's. Scotland (Historic
+    Environment Scotland, ~47k listings) and Wales (Cadw, ~30k) publish
+    separately and are NOT included — see the SCOTLAND_SOURCES pattern if those
+    are added later.
+    """
+    rows = []
+    outline = _src_path("LISTED_BUILDING_SRC",
+                        ["listed-building-outline.geojson",
+                         "listed-building-outline.json"])
+    if outline:
+        print(f"  [listed_building] reading outlines from {outline.name} ...")
+        g = _to_27700(_read_source(outline, None, mask_geom_4326), assume_epsg=4326)
+        g = g[g.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
+        if not g.empty:
+            g = g.copy()
+            g["geom_source"] = "outline"
+            print(f"    {len(g)} digitised outline(s)")
+            rows += _finish(g, "listed_building", mask_27700,
+                            prop_cols=["reference", "entity", "name", "geom_source"])
+    else:
+        _skip("listed_building (outlines)",
+              "planning.data.gov.uk listed-building-outline", "LISTED_BUILDING_SRC")
+
+    points = _src_path("LISTED_BUILDING_POINT_SRC",
+                       ["listed-building.geojson", "listed-building.json"])
+    if points:
+        print(f"  [listed_building] reading list entries from {points.name} ...")
+        g = _to_27700(_read_source(points, None, mask_geom_4326), assume_epsg=4326)
+        g = g[g.geometry.geom_type.isin(["Point", "MultiPoint"])]
+        if not g.empty:
+            g = g.copy()
+            # Buffer in 27700, so the radius is metres.
+            # GeoPandas spells shapely's quad_segs as `resolution`.
+            g["geometry"] = g.geometry.buffer(LISTED_POINT_BUFFER_M, resolution=6)
+            g["geom_source"] = "point"
+            print(f"    {len(g)} list entry point(s) buffered to "
+                  f"{LISTED_POINT_BUFFER_M:.0f} m")
+            rows += _finish(g, "listed_building", mask_27700,
+                            prop_cols=["reference", "entity", "name", "geom_source"])
+    else:
+        _skip("listed_building (list entries)",
+              "planning.data.gov.uk listed-building", "LISTED_BUILDING_POINT_SRC")
+
+    if not rows:
+        return None
+    print(f"  [listed_building] {len(rows)} row(s) from both sources")
+    return rows
+
+
 BUILDERS = {
     "built_land": lambda m27, g27, g43: build_built_land(m27, g27),
     "green_space": lambda m27, g27, g43: build_green_space(m27, g27),
@@ -923,6 +1000,12 @@ for _pd_kind in PLANNING_DATA_KINDS:
     BUILDERS[_pd_kind] = (
         lambda m27, g27, g43, _k=_pd_kind: build_planning_data(_k, m27, g43)
     )
+# listed_building needs BOTH the outline polygons and the full list of points,
+# so it overrides the generic single-dataset builder registered above. This must
+# stay AFTER that loop.
+BUILDERS["listed_building"] = (
+    lambda m27, g27, g43: build_listed_building(m27, g43)
+)
 
 # Scotland-specific ingest kinds -> generic file builder (emit under canonical kind).
 ALL_KINDS = ALL_KINDS + list(SCOTLAND_SOURCES.keys())
