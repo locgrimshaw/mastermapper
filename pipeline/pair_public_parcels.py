@@ -50,6 +50,12 @@ NEAR_M = float(os.environ.get("PARCEL_NEAR_M") or "30")
 NEAR_MAX_M2 = 50_000.0
 
 
+def _parcel_key(feat, poly):
+    """Stable id for a parcel: its INSPIREID, else its centroid."""
+    fid = (feat.get("properties") or {}).get("INSPIREID")
+    return str(fid) if fid else f"{poly.centroid.x:.6f},{poly.centroid.y:.6f}"
+
+
 def fetch_points():
     """la_property points with at least one non-flat title -> list of dicts."""
     if not (SUPABASE_URL and SUPABASE_KEY):
@@ -133,6 +139,15 @@ def main() -> int:
     deg_near = NEAR_M / 111_320.0     # rough degrees for the query envelope
 
     matched = {}          # parcel key -> row dict (best match wins)
+    # A nearest-match is a RESCUE for one point that landed outside its parcel,
+    # so it must resolve per POINT, not per parcel. Deciding it inside the scan
+    # (which walks parcels) let every parcel within NEAR_M of a centroid claim
+    # it: the first national run produced 948k nearest-matches against 118k
+    # points — a median of 8 neighbouring parcels wrongly attributed to each
+    # council, and 58 in the worst case. So the scan only REMEMBERS the closest
+    # candidate per point here, and the winners are folded in after it ends.
+    contains_pts = set()  # point indices that sit inside a parcel already
+    best_near = {}        # point index -> (distance_m, key, poly, area_m2)
     scanned = 0
     for path in files:
         with path.open(encoding="utf-8", errors="ignore") as fh:
@@ -161,21 +176,30 @@ def main() -> int:
                     continue
                 poly_bng = shp_transform(to_bng, poly)
                 area_m2 = poly_bng.area
+                fid = None
                 for i in idxs:
                     i = int(i)
                     p = pts[i]
                     if poly.contains(p):
                         kind = "contains"
+                        contains_pts.add(i)
                     else:
                         if area_m2 > NEAR_MAX_M2:
                             continue
                         d = poly_bng.distance(pts_bng[i])
                         if d > NEAR_M:
                             continue
-                        kind = "nearest"
+                        # Remember only; the winner is decided once the whole
+                        # scan has seen every candidate parcel for this point.
+                        prev_near = best_near.get(i)
+                        if prev_near is None or d < prev_near[0]:
+                            if fid is None:
+                                fid = _parcel_key(feat, poly)
+                            best_near[i] = (d, fid, poly, area_m2)
+                        continue
                     m = meta[i]
-                    fid = (feat.get("properties") or {}).get("INSPIREID") \
-                        or f"{poly.centroid.x:.6f},{poly.centroid.y:.6f}"
+                    if fid is None:
+                        fid = _parcel_key(feat, poly)
                     key = str(fid)
                     prev = matched.get(key)
                     # A contains-match always beats a nearest-match; between
@@ -201,6 +225,41 @@ def main() -> int:
                             "match": kind,
                         },
                     }
+    # Fold in the rescues: one parcel per point, and only for points that never
+    # landed inside one. A point that IS inside a parcel needs no rescue, and
+    # letting it keep its neighbours is exactly the over-claim this avoids.
+    rescued = 0
+    for i, (d, key, poly, area_m2) in best_near.items():
+        if i in contains_pts:
+            continue
+        m = meta[i]
+        prev = matched.get(key)
+        if prev and prev["_kind"] == "contains":
+            continue          # a confident owner already holds this parcel
+        if prev and prev["_land"] >= (m.get("titles_land") or 0):
+            continue
+        if prev is None:
+            rescued += 1
+        matched[key] = {
+            "_kind": "nearest",
+            "_land": m.get("titles_land") or 0,
+            "geom": poly,
+            "props": {
+                "owner": m.get("owner"),
+                "owner_class": m.get("owner_class"),
+                "titles": m.get("titles"),
+                "titles_land": m.get("titles_land"),
+                "titles_flat": m.get("titles_flat"),
+                "postcode": m.get("postcode"),
+                "address": m.get("address"),
+                "area_m2": round(area_m2),
+                "match": "nearest",
+                "match_dist_m": round(d, 1),
+            },
+        }
+    print(f"[pair] {len(contains_pts):,}/{len(pts):,} points sit inside a "
+          f"parcel; {rescued:,} more rescued by proximity "
+          f"(<= {NEAR_M:.0f} m, one parcel each)")
     print(f"[pair] {scanned:,} parcels scanned -> {len(matched):,} publicly "
           "owned parcels identified")
     if not matched:
