@@ -1558,11 +1558,15 @@ def build_building_height():
         m = re.search('"' + k + '"=>"([^"]*)"', s)
         return m.group(1) if m else None
 
-    def parse_height(v):
-        """OSM height: metres, sometimes with units or feet."""
-        if not v:
-            return None
-        v = str(v).strip().lower()
+    def _multi(v):
+        """OSM records a way spanning parts of differing height as
+        semicolon-separated values ("4;1"). Stripping the punctuation and
+        reading the rest as one number gives 41 storeys — see
+        pipeline/build_building_tiles.py, which shares these rules."""
+        return [p for p in re.split(r"\s*;\s*", str(v).strip()) if p]
+
+    def _parse_one_height(v):
+        v = v.strip().lower()
         m = re.match(r"^([\d.]+)\s*(m|metres?|meters?)?$", v)
         if m:
             try:
@@ -1577,6 +1581,14 @@ def build_building_height():
                 return None
         return None
 
+    def parse_height(v):
+        """OSM height: metres, sometimes with units or feet, sometimes several
+        values for one way — the tallest part is what matters."""
+        if not v:
+            return None
+        vals = [h for h in (_parse_one_height(p) for p in _multi(v)) if h is not None]
+        return max(vals) if vals else None
+
     ot = gdf["other_tags"] if "other_tags" in gdf.columns else None
     heights, storeys = [], []
     for i in range(len(gdf)):
@@ -1586,10 +1598,15 @@ def build_building_height():
         lv = None
         raw_lv = tagval(tags, "building:levels")
         if raw_lv:
-            try:
-                lv = float(re.sub(r"[^\d.]", "", raw_lv) or 0) or None
-            except ValueError:
-                lv = None
+            parts = []
+            for part in _multi(raw_lv):
+                try:
+                    n = float(re.sub(r"[^\d.]", "", part) or 0)
+                except ValueError:
+                    continue
+                if n:
+                    parts.append(n)
+            lv = max(parts) if parts else None
         # Either measure can stand in for the other: ~3.2 m per storey.
         if h is None and lv:
             h = round(lv * 3.2, 1)

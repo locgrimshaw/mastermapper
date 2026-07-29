@@ -54,11 +54,21 @@ _H_M = re.compile(r"^([\d.]+)\s*(m|metres?|meters?)?$")
 _H_FT = re.compile(r"^([\d.]+)\s*(ft|feet|')$")
 
 
-def parse_height(v):
-    """OSM `height`: usually bare metres, sometimes with units, sometimes feet."""
-    if not v:
-        return None
-    v = str(v).strip().lower()
+def _multi(v):
+    """Split an OSM multi-valued tag into its parts.
+
+    A single way often covers buildings of differing heights, and OSM records
+    that as semicolon-separated values: building:levels="4;1". Stripping the
+    punctuation and reading what is left as one number turns that into FORTY
+    ONE storeys — which is exactly how terraces in Chelsea and South Kensington
+    came to be painted as 130 m towers. The tell was a spike in the national
+    storey histogram at 31, 41 and 43 ("3;1", "4;1", "4;3") where the counts
+    should be falling away."""
+    return [p for p in re.split(r"\s*;\s*", str(v).strip()) if p]
+
+
+def _parse_one_height(v):
+    v = v.strip().lower()
     m = _H_M.match(v)
     if m:
         try:
@@ -74,13 +84,28 @@ def parse_height(v):
     return None
 
 
+def parse_height(v):
+    """OSM `height`: usually bare metres, sometimes with units, sometimes feet,
+    sometimes several values for one way. The TALLEST part is what the layer
+    is about, so multi-values take their max."""
+    if not v:
+        return None
+    vals = [h for h in (_parse_one_height(p) for p in _multi(v)) if h is not None]
+    return max(vals) if vals else None
+
+
 def parse_levels(v):
     if not v:
         return None
-    try:
-        n = float(re.sub(r"[^\d.]", "", str(v)) or 0)
-    except ValueError:
-        return None
+    vals = []
+    for part in _multi(v):
+        try:
+            n = float(re.sub(r"[^\d.]", "", part) or 0)
+        except ValueError:
+            continue
+        if n:
+            vals.append(n)
+    n = max(vals) if vals else 0
     return n or None
 
 

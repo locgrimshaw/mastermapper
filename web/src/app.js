@@ -1914,13 +1914,21 @@ function setParcelOpacity(v) {
 // Coverage is whatever OSM contributors have tagged: excellent in city centres
 // and for landmarks, patchy across suburbia. Untagged buildings are simply
 // absent, which is honest — they are not "low rise", they are unknown.
+// Seven bands on a full-spectrum ramp, not a single-hue one. Almost every
+// building in a British town falls between 5 and 20 m, so a ramp that spends
+// its range on 0-100 m paints whole cities in two indistinguishable teals —
+// which is what the first version did. The bands are therefore tight where the
+// buildings actually are (5/9/14/20 m) and coarse above, and adjacent bands
+// change HUE rather than just lightness so a two-storey terrace and a
+// five-storey mansion block never read as the same colour.
 const BUILDING_HEIGHT_BANDS = [
-  { max: 6,        color: "#c7e9b4", label: "under 6 m · 1–2 storeys" },
-  { max: 12,       color: "#7fcdbb", label: "6–12 m · 2–4 storeys" },
-  { max: 25,       color: "#41b6c4", label: "12–25 m · 4–8 storeys" },
-  { max: 50,       color: "#1d91c0", label: "25–50 m · 8–16 storeys" },
-  { max: 100,      color: "#225ea8", label: "50–100 m · 16–32 storeys" },
-  { max: Infinity, color: "#0c2c84", label: "over 100 m" },
+  { max: 5,        color: "#a8d5e2", label: "under 5 m · 1 storey" },
+  { max: 9,        color: "#3fa7d6", label: "5–9 m · 2" },
+  { max: 14,       color: "#4cc38a", label: "9–14 m · 3–4" },
+  { max: 20,       color: "#f2d64b", label: "14–20 m · 5–6" },
+  { max: 35,       color: "#f28f3b", label: "20–35 m · 7–10" },
+  { max: 70,       color: "#d1495b", label: "35–70 m · 11–21" },
+  { max: Infinity, color: "#7b2d8b", label: "over 70 m · 22+" },
 ];
 const buildingsState = { on: false, opacity: 0.85, available: null };
 
@@ -2122,7 +2130,7 @@ function buildLayersPanel() {
       // and carry their own height key underneath the row.
       if (g.key === "sitefactors") {
         rows += ltRowHTML({ cbId: "buildings-show", label: "Building heights (footprints)",
-                            color: BUILDING_HEIGHT_BANDS[3].color, statId: "buildings-stat",
+                            color: BUILDING_HEIGHT_BANDS[4].color, statId: "buildings-stat",
                             checked: false, opacity: buildingsState.opacity, opacityKey: "buildings",
                             info: LAYER_INFO.building_height });
         rows += buildingsLegendHTML();
