@@ -93,6 +93,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -192,6 +193,15 @@ ROAD_CLASS_RE = os.environ.get("ROAD_CLASSES") or (
 # Interior rings below this area in a dissolved road corridor are road, not
 # land: roundabout islands, gyratory centres, slip-road gores.
 ROAD_FILL_HOLES_M2 = float(os.environ.get("ROAD_FILL_HOLES_M2") or "3000")
+# Dissolving the road network nationally in one go merges it into ONE polygon,
+# because the road network is connected: the first attempt produced a single
+# 72.9 MB row that no request could carry into Postgres, so the whole minor-road
+# fix silently did nothing. Union within grid cells of this size instead. Rows
+# stay small, their bounding boxes stay tight (so the GiST index stays
+# selective), and the result subtracts identically — the developable RPC unions
+# every constraint row intersecting the catchment, so a corridor split at a cell
+# boundary is indistinguishable from a whole one.
+DISSOLVE_GRID_M = float(os.environ.get("DISSOLVE_GRID_M") or "10000")
 
 
 def _find_col(gdf, candidates):
@@ -423,8 +433,40 @@ def _fill_small_holes(geom, max_m2):
         [p for p in parts if isinstance(p, Polygon)])
 
 
+def _dissolve_parts(geoms, fill_holes_m2, grid_m):
+    """Union a dense set of polygons into merged parts, in GRID CELLS.
+
+    A single national unary_union is both slow and wrong-shaped for storage:
+    the road network is connected, so it collapses to one polygon covering the
+    country. Bucketing by the cell each polygon's centroid falls in caps the
+    size of any one output row while producing the same coverage. Geometry is
+    in EPSG:27700, so grid_m is metres."""
+    if not grid_m or grid_m <= 0:
+        merged = make_valid(unary_union(list(geoms)))
+        if fill_holes_m2 > 0:
+            merged = make_valid(_fill_small_holes(merged, fill_holes_m2))
+        return list(getattr(merged, "geoms", [merged]))
+
+    buckets = {}
+    for g in geoms:
+        c = g.centroid
+        buckets.setdefault((math.floor(c.x / grid_m), math.floor(c.y / grid_m)),
+                           []).append(g)
+    out = []
+    for key in sorted(buckets):
+        merged = make_valid(unary_union(buckets[key]))
+        if fill_holes_m2 > 0:
+            merged = make_valid(_fill_small_holes(merged, fill_holes_m2))
+        if merged.is_empty:
+            continue
+        out.extend(getattr(merged, "geoms", [merged]))
+    print(f"    dissolved in {len(buckets)} grid cell(s) of {grid_m:.0f} m "
+          f"-> {len(out)} part(s)")
+    return out
+
+
 def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None,
-            dissolve=False, fill_holes_m2=0.0):
+            dissolve=False, fill_holes_m2=0.0, grid_m=0.0):
     """Shared tail: clip to the mask (EPSG:27700), simplify lightly, reproject to
     4326, and emit one row per surviving feature. Returns a list of row dicts.
 
@@ -463,10 +505,7 @@ def _finish(gdf, kind, mask_27700, prop_cols=None, id_col=None, name_col=None,
     # dense line layer becomes a handful of connected corridors rather than
     # hundreds of thousands of per-segment rows.
     if dissolve:
-        merged = make_valid(unary_union(list(gdf.geometry.values)))
-        if fill_holes_m2 > 0:
-            merged = make_valid(_fill_small_holes(merged, fill_holes_m2))
-        parts = list(getattr(merged, "geoms", [merged]))
+        parts = _dissolve_parts(list(gdf.geometry.values), fill_holes_m2, grid_m)
         gdf = gpd.GeoDataFrame({"geometry": parts}, geometry="geometry", crs=gdf.crs)
         prop_cols, id_col, name_col = None, None, None
 
@@ -646,7 +685,8 @@ def build_transport(mask_27700, mask_geom_27700):
         # and a hole in a constraint reads as developable land. 3,000 m2 covers
         # roundabouts and gyratory centres without swallowing a real block.
         rows += _finish(roads, "transport", mask_27700, dissolve=True,
-                        fill_holes_m2=ROAD_FILL_HOLES_M2)
+                        fill_holes_m2=ROAD_FILL_HOLES_M2,
+                        grid_m=DISSOLVE_GRID_M)
     if rail_path:
         print(f"  [transport] reading railway from {rail_path.name} ...")
         # Pick the rail TRACK/line layer (never the station-points layer, which a
@@ -668,7 +708,8 @@ def build_transport(mask_27700, mask_geom_27700):
             print(f"    read {len(rail)} rail features")
             rail = _buffer_transport_layer(rail, is_rail=True)
             print(f"    {len(rail)} rail features after buffering to curtilage")
-            rows += _finish(rail, "transport", mask_27700, dissolve=True)
+            rows += _finish(rail, "transport", mask_27700, dissolve=True,
+                            grid_m=DISSOLVE_GRID_M)
     return rows
 
 
