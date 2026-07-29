@@ -49,7 +49,13 @@ IMPORT_CSV = ROOT / "supabase" / "datasets_import.csv"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
-BATCH = 500   # rows per upsert request
+BATCH = 500   # max rows per upsert request
+# ...and a payload cap, because rows are not the same size. A dissolved
+# national road corridor is hundreds of kB while a point is ~200 bytes;
+# batching purely by row count produced a request large enough for
+# Postgres to cancel on statement timeout (57014). 4 MB keeps the work
+# per request roughly constant whatever the geometry.
+MAX_BATCH_BYTES = int(os.environ.get("MAX_BATCH_BYTES") or 4_000_000)
 
 # CSV can carry very long WKT fields (polygon rings) — lift the field-size cap.
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
@@ -215,6 +221,25 @@ def delete_dataset(dataset: str) -> bool:
     return False
 
 
+def _batches(records, max_rows, max_bytes):
+    """Yield (start_index, rows, body) batches capped by BOTH row count and
+    encoded payload size, because rows vary by orders of magnitude and a fixed
+    row count turns into a request Postgres cancels on statement timeout.
+
+    allow_nan=False turns any NaN that slipped past _clean_json into a loud
+    local error instead of a silent 400 for the whole batch."""
+    start, rows, size = 0, [], 0
+    for idx, rec in enumerate(records):
+        enc = json.dumps(rec, allow_nan=False)
+        if rows and (len(rows) >= max_rows or size + len(enc) > max_bytes):
+            yield start, rows, ("[" + ",".join(rows) + "]").encode("utf-8")
+            start, rows, size = idx, [], 0
+        rows.append(enc)
+        size += len(enc)
+    if rows:
+        yield start, rows, ("[" + ",".join(rows) + "]").encode("utf-8")
+
+
 def _post_with_retry(url, body, headers, attempts=5):
     """POST a batch, retrying transient failures with exponential backoff.
 
@@ -256,18 +281,15 @@ def upsert(records: list):
            "?on_conflict=dataset,source_id")
     headers = _headers()
     total, failed = 0, 0
-    for i in range(0, len(records), BATCH):
-        batch = records[i:i + BATCH]
-        # allow_nan=False turns any NaN that slipped past _clean_json into a
-        # loud local error instead of a silent 400 for the whole batch.
-        body = json.dumps(batch, allow_nan=False).encode("utf-8")
+    for i, rows, body in _batches(records, BATCH, MAX_BATCH_BYTES):
         ok, why = _post_with_retry(url, body, headers)
         if ok:
-            total += len(batch)
+            total += len(rows)
             print(f"  upserted {total} / {len(records)}")
         else:
-            failed += len(batch)
-            print(f"  batch starting {i} failed: {why}")
+            failed += len(rows)
+            print(f"  batch starting {i} ({len(rows)} rows, "
+                  f"{len(body) / 1e6:.1f} MB) failed: {why}")
             # Keep going — a later batch may be fine, and partial load beats none.
     if total == 0:
         print("Nothing loaded — every batch failed. See the error above.")

@@ -43,7 +43,13 @@ IMPORT_CSV = ROOT / "supabase" / "constraints_import.csv"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
-BATCH = 500   # rows per upsert request
+BATCH = 500   # max rows per upsert request
+# ...and a payload cap, because rows are not the same size. A dissolved
+# national road corridor is hundreds of kB while a point is ~200 bytes;
+# batching purely by row count produced a request large enough for
+# Postgres to cancel on statement timeout (57014). 4 MB keeps the work
+# per request roughly constant whatever the geometry.
+MAX_BATCH_BYTES = int(os.environ.get("MAX_BATCH_BYTES") or 4_000_000)
 
 # CSV can carry very long WKT fields (polygon rings) — lift the field-size cap.
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
@@ -112,6 +118,31 @@ def read_records(path: Path) -> list:
     return deduped
 
 
+def _batches(records, max_rows, max_bytes):
+    """Yield (start_index, rows, body) batches capped by BOTH row count and
+    encoded payload size.
+
+    A fixed row count is the wrong unit when rows vary by four orders of
+    magnitude. Dissolved national road corridors reach hundreds of kB each, so
+    a 500-row batch became a payload big enough that Postgres cancelled the
+    write on statement timeout (57014) — and retrying it just timed out five
+    more times, because nothing about that failure is transient. Splitting by
+    bytes keeps every request the same size in work, whatever the geometry.
+
+    A single row over the budget still goes on its own — there is no smaller
+    batch to make, and one giant row alone has the best chance of landing."""
+    start, rows, size = 0, [], 0
+    for idx, rec in enumerate(records):
+        enc = json.dumps(rec)
+        if rows and (len(rows) >= max_rows or size + len(enc) > max_bytes):
+            yield start, rows, ("[" + ",".join(rows) + "]").encode("utf-8")
+            start, rows, size = idx, [], 0
+        rows.append(enc)
+        size += len(enc)
+    if rows:
+        yield start, rows, ("[" + ",".join(rows) + "]").encode("utf-8")
+
+
 def _post_with_retry(url, body, headers, attempts=5):
     """POST a batch, retrying transient failures with exponential backoff.
 
@@ -167,16 +198,15 @@ def upsert(records: list):
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
     total, failed = 0, 0
-    for i in range(0, len(records), BATCH):
-        batch = records[i:i + BATCH]
-        body = json.dumps(batch).encode("utf-8")
+    for i, rows, body in _batches(records, BATCH, MAX_BATCH_BYTES):
         ok, why = _post_with_retry(url, body, headers)
         if ok:
-            total += len(batch)
+            total += len(rows)
             print(f"  upserted {total} / {len(records)}")
         else:
-            failed += len(batch)
-            print(f"  batch starting {i} failed: {why}")
+            failed += len(rows)
+            print(f"  batch starting {i} ({len(rows)} rows, "
+                  f"{len(body) / 1e6:.1f} MB) failed: {why}")
             # Keep going — a later batch may be fine, and partial load beats none.
     if total == 0:
         print("Nothing loaded — every batch failed. See the error above.")
