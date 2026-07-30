@@ -1235,7 +1235,7 @@ const LAYER_INFO = {
   census_students:    { about: "Full-time students (NS-SeC class L15) as a share of adults per authority — the structural PBSA demand base, independent of any one university's numbers.", source: "Census 2021 TS062 via NOMIS (OGL)" },
   student_accom:      { about: "Existing purpose-built student accommodation and dormitories mapped in OpenStreetMap — the PBSA competition map. Coverage reflects OSM mapping quality.", source: "OpenStreetMap contributors (ODbL)" },
   slope_grid:         { about: "Mean ground slope per 1 km cell from OS Terrain 50 (hover shows the steepest 50 m within the cell). Green = flat, red = steep — the data-centre construction-feasibility screen.", source: "OS Terrain 50 © Crown copyright (OGL)" },
-  building_height:    { about: "Every building tagged with a height or storey count in OpenStreetMap, drawn as its actual footprint and shaded light-to-dark by height — so a street of terraces, a mid-rise block and a tower read differently at a glance. Streams nationwide from z13. Coverage is a SAMPLE, not a survey: excellent for landmarks and city centres, patchy across suburbia. An untagged building is absent rather than shown as low rise.", source: "OpenStreetMap contributors (ODbL)" },
+  building_height:    { about: "Every building in OpenStreetMap, drawn as its actual footprint, on a cool-to-warm ramp: blue for single-storey through yellow and orange to dark red for towers. Streams nationwide from z13. Height itself is a SAMPLE, not a survey — excellent for landmarks and city centres, patchy across suburbia — so a building OSM has not given a height is drawn in neutral grey rather than left out or guessed at as low rise. Hover to see which.", source: "OpenStreetMap contributors (ODbL)" },
   public_parcel:      { about: "Land parcels in public ownership: CCOD ownership records matched to HMLR INSPIRE parcel boundaries by location, with individual flats excluded so a single ex-right-to-buy flat can't claim a whole block. INDICATIVE — the exact title-to-polygon link is HMLR's licensed National Polygon Service.", source: "HM Land Registry CCOD + INSPIRE index polygons © Crown copyright and database right" },
   bus_route:          { about: "Every mapped bus route (OpenStreetMap route relations) as lines, with route number and operator on hover. Coverage reflects OSM mapping — dense in urban areas, occasionally patchy on rural services.", source: "OpenStreetMap contributors (ODbL)" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
@@ -1914,22 +1914,28 @@ function setParcelOpacity(v) {
 // Coverage is whatever OSM contributors have tagged: excellent in city centres
 // and for landmarks, patchy across suburbia. Untagged buildings are simply
 // absent, which is honest — they are not "low rise", they are unknown.
-// Seven bands on a full-spectrum ramp, not a single-hue one. Almost every
-// building in a British town falls between 5 and 20 m, so a ramp that spends
-// its range on 0-100 m paints whole cities in two indistinguishable teals —
-// which is what the first version did. The bands are therefore tight where the
-// buildings actually are (5/9/14/20 m) and coarse above, and adjacent bands
-// change HUE rather than just lightness so a two-storey terrace and a
-// five-storey mansion block never read as the same colour.
+// A single cool-to-warm progression: blue for the shortest, dark red for the
+// tallest, yellow and orange between. No greens or purples — a ramp that wanders
+// through unrelated hues makes the reader look at the key instead of the map,
+// whereas "colder = shorter, hotter = taller" needs no key at all.
+//
+// The bands stay tight where the buildings actually are (5/9/14/20 m) and coarse
+// above, because almost every British building is between 5 and 20 m; spreading
+// the range evenly over 0-100 m is what made whole cities read as one colour.
 const BUILDING_HEIGHT_BANDS = [
-  { max: 5,        color: "#a8d5e2", label: "under 5 m · 1 storey" },
-  { max: 9,        color: "#3fa7d6", label: "5–9 m · 2" },
-  { max: 14,       color: "#4cc38a", label: "9–14 m · 3–4" },
-  { max: 20,       color: "#f2d64b", label: "14–20 m · 5–6" },
-  { max: 35,       color: "#f28f3b", label: "20–35 m · 7–10" },
-  { max: 70,       color: "#d1495b", label: "35–70 m · 11–21" },
-  { max: Infinity, color: "#7b2d8b", label: "over 70 m · 22+" },
+  { max: 5,        color: "#2c7fb8", label: "under 5 m · 1 storey" },
+  { max: 9,        color: "#92c5de", label: "5–9 m · 2" },
+  { max: 14,       color: "#fed976", label: "9–14 m · 3–4" },
+  { max: 20,       color: "#feb24c", label: "14–20 m · 5–6" },
+  { max: 35,       color: "#fd8d3c", label: "20–35 m · 7–10" },
+  { max: 70,       color: "#e31a1c", label: "35–70 m · 11–21" },
+  { max: Infinity, color: "#800026", label: "over 70 m · 22+" },
 ];
+// Buildings OSM has not given a height. They are drawn, in neutral grey, rather
+// than left out: a missing footprint reads as empty land, which is a worse lie
+// than an honest "not known". Deliberately outside the ramp so it can never be
+// mistaken for a height.
+const BUILDING_UNKNOWN_COLOR = "#b0b6bb";
 const buildingsState = { on: false, opacity: 0.85, available: null };
 
 function buildingTilesUrl() {
@@ -1941,18 +1947,22 @@ function buildingTilesUrl() {
 
 // Sequential light->dark ramp on height, as a MapLibre step expression.
 function buildingHeightColorExpr() {
-  const expr = ["step", ["coalesce", ["to-number", ["get", "height_m"]], 0],
+  const step = ["step", ["to-number", ["get", "height_m"]],
                 BUILDING_HEIGHT_BANDS[0].color];
   for (let i = 0; i < BUILDING_HEIGHT_BANDS.length - 1; i++)
-    expr.push(BUILDING_HEIGHT_BANDS[i].max, BUILDING_HEIGHT_BANDS[i + 1].color);
-  return expr;
+    step.push(BUILDING_HEIGHT_BANDS[i].max, BUILDING_HEIGHT_BANDS[i + 1].color);
+  // A building with no height must NOT fall through to the shortest band —
+  // coalescing a missing value to 0 would paint every untagged building as
+  // single-storey, which is a guess dressed up as data.
+  return ["case", ["!", ["has", "height_m"]], BUILDING_UNKNOWN_COLOR, step];
 }
 
 // The swatch a given height falls in — same bands as the fill ramp, so the
 // hover card's chip always matches what's under the cursor.
 function buildingBandColor(h) {
+  if (h == null || h === "") return BUILDING_UNKNOWN_COLOR;
   const v = Number(h);
-  if (!isFinite(v)) return BUILDING_HEIGHT_BANDS[0].color;
+  if (!isFinite(v)) return BUILDING_UNKNOWN_COLOR;
   for (const b of BUILDING_HEIGHT_BANDS) if (v < b.max) return b.color;
   return BUILDING_HEIGHT_BANDS[BUILDING_HEIGHT_BANDS.length - 1].color;
 }
@@ -2004,7 +2014,8 @@ function setBuildingOpacity(v) {
 // The height ramp is meaningless without a key, so the row carries its own.
 function buildingsLegendHTML() {
   const items = BUILDING_HEIGHT_BANDS.map(b =>
-    `<span class="bh-key"><span class="bh-sw" style="background:${b.color}"></span>${b.label}</span>`).join("");
+    `<span class="bh-key"><span class="bh-sw" style="background:${b.color}"></span>${b.label}</span>`).join("")
+    + `<span class="bh-key"><span class="bh-sw" style="background:${BUILDING_UNKNOWN_COLOR}"></span>no height in OSM</span>`;
   return `<div id="buildings-legend" class="bh-legend" hidden>${items}</div>`;
 }
 
@@ -3298,13 +3309,18 @@ function initHoverSystem() {
         html = hoverCardHTML({ title: p.name || "Green Belt", kind: "Green Belt",
                                chip: GREENBELT_COLOR, rows: [] });
       } else if (winner.id === "building-fill") {
-        const CLS = { high: "High rise", mid: "Mid rise", low: "Low rise" };
+        const CLS = { high: "High rise", mid: "Mid rise", low: "Low rise",
+                      unknown: "Building" };
+        const known = p.height_m != null && p.height_m !== "";
         const rows = [];
-        if (p.height_m != null) rows.push([`${p.height_m} m`, "height"]);
+        if (known) rows.push([`${p.height_m} m`, "height"]);
         if (p.storeys != null) rows.push([`${p.storeys}`, "storeys"]);
         html = hoverCardHTML({ title: p.name || CLS[p.class] || "Building",
-                               kind: `${CLS[p.class] || "Building"} — OSM tagged height`,
-                               chip: buildingBandColor(p.height_m), rows });
+                               kind: known
+                                 ? `${CLS[p.class] || "Building"} — OSM tagged height`
+                                 : "Building — no height recorded in OSM",
+                               chip: buildingBandColor(known ? p.height_m : null),
+                               rows });
       } else if (winner.id === "parcel-fill") {
         html = hoverCardHTML({ title: `Parcel ${p.INSPIREID ?? p.inspireid ?? ""}`.trim(),
                                kind: "HMLR INSPIRE index parcel", chip: PARCEL_COLOR, rows: [] },

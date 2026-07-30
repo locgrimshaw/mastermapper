@@ -110,11 +110,17 @@ def parse_levels(v):
 
 
 def height_and_storeys(props):
-    """(height_m, storeys) or (None, None) if the building isn't usable.
+    """(height_m, storeys), or (None, None) when the height is unknown.
 
-    Either measure stands in for the other at ~3.2 m per storey. Single-storey
-    sheds and garages are dropped — the same >=2 storeys or >=6 m rule the
-    point layer uses, so the two never disagree about what counts."""
+    Either measure stands in for the other at ~3.2 m per storey.
+
+    Two rules that used to live here are GONE. The old ">= 2 storeys or >= 6 m"
+    cut was meant to drop sheds and garages, but it also emptied the whole
+    bottom of the scale: a genuine single-storey building is ~3 m, so the
+    "under 5 m" band could essentially never be populated and the map showed no
+    short buildings at all. And a height outside the sane range no longer drops
+    the BUILDING — only the bad number — because a footprint with an absurd tag
+    is still a real building and belongs on the map as 'unknown'."""
     tags = props.get("other_tags")
     h = parse_height(props.get("height")) or parse_height(tagval(tags, "height"))
     lv = parse_levels(props.get("building:levels")) \
@@ -123,16 +129,15 @@ def height_and_storeys(props):
         h = round(lv * M_PER_STOREY, 1)
     if lv is None and h:
         lv = round(h / M_PER_STOREY)
-    if h is None:
-        return None, None
-    if not (MIN_H < h < MAX_H):
-        return None, None
-    if h < 6 and (lv or 0) < 2:
+    if h is None or not (MIN_H < h < MAX_H):
         return None, None
     return round(h, 1), (int(lv) if lv else None)
 
 
 def hclass(h):
+    """Coarse class kept for the hover card. None height -> 'unknown'."""
+    if h is None:
+        return "unknown"
     return "high" if h >= 25 else ("mid" if h >= 12 else "low")
 
 
@@ -144,7 +149,7 @@ def main() -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
 
     read = kept = 0
-    by_class = {"low": 0, "mid": 0, "high": 0}
+    by_class = {"low": 0, "mid": 0, "high": 0, "unknown": 0}
     tallest = (0.0, None)
     with SRC.open(encoding="utf-8", errors="ignore") as fin, \
             OUT.open("w", encoding="utf-8") as fout:
@@ -162,14 +167,17 @@ def main() -> int:
             read += 1
             props = feat.get("properties") or {}
             h, lv = height_and_storeys(props)
-            if h is None:
-                continue
             cls = hclass(h)
             by_class[cls] += 1
             kept += 1
-            if h > tallest[0]:
+            if h is not None and h > tallest[0]:
                 tallest = (h, props.get("name"))
-            out = {"height_m": h, "class": cls}
+            # An untagged building carries NO height_m at all, rather than a
+            # zero or a guess: the map paints those a neutral grey so a gap in
+            # OSM's tagging reads as "not known" instead of "short".
+            out = {"class": cls}
+            if h is not None:
+                out["height_m"] = h
             if lv:
                 out["storeys"] = lv
             if props.get("name"):
@@ -180,9 +188,13 @@ def main() -> int:
             if read % 500_000 == 0:
                 print(f"  [buildings] {read:,} read, {kept:,} kept", flush=True)
 
-    print(f"[buildings] {read:,} tagged footprints -> {kept:,} usable "
+    known = kept - by_class["unknown"]
+    print(f"[buildings] {read:,} footprints -> {kept:,} written "
           f"(low {by_class['low']:,} / mid {by_class['mid']:,} / "
-          f"high {by_class['high']:,})")
+          f"high {by_class['high']:,} / height unknown "
+          f"{by_class['unknown']:,})")
+    print(f"[buildings] {known:,} with a height "
+          f"({100.0 * known / kept:.0f}% of footprints)" if kept else "")
     if tallest[1] or tallest[0]:
         print(f"[buildings] tallest: {tallest[0]} m ({tallest[1] or 'unnamed'})")
     if not kept:

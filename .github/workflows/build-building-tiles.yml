@@ -60,13 +60,15 @@ jobs:
           echo "Downloading OSM PBF (~1.8 GB): $PBF_URL"
           curl -fL --retry 3 --retry-delay 15 -o data/raw/uk.osm.pbf "$PBF_URL"
           df -h /
-          # tags-filter keeps a feature if ANY listed tag matches, so this is
-          # "buildings that carry a height signal" — everything else is dropped
-          # before the much slower geometry export.
-          osmium tags-filter data/raw/uk.osm.pbf \
-            w/height r/height w/building:levels r/building:levels \
+          # EVERY building, not just the ones carrying a height tag. Filtering
+          # to height-tagged buildings left holes wherever OSM has not been
+          # surveyed — around Fenchurch Street and Smithfield among others —
+          # and those holes read as empty land rather than as missing data.
+          # Untagged footprints are now kept and painted 'unknown'.
+          osmium tags-filter data/raw/uk.osm.pbf w/building r/building \
             -o data/raw/bld.osm.pbf --overwrite
           rm -f data/raw/uk.osm.pbf
+          ls -la data/raw; df -h /
           # GeoJSONSeq (one Feature per line) streams into the normaliser; a
           # single GeoJSON array of 1.5M features would have to be parsed whole.
           ogr2ogr -f GeoJSONSeq data/raw/osm_buildings.geojsonl \
