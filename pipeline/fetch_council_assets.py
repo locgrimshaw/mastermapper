@@ -120,13 +120,18 @@ def discover():
 
 def _rows_from_csv(blob):
     text = blob.decode("utf-8-sig", "replace")
+    if text.lstrip()[:1] == "<":
+        return []          # an HTML error page served with a .csv URL
     # Sniff the delimiter; council exports are comma, semicolon or tab.
     sample = text[:8192]
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
     except csv.Error:
         dialect = csv.excel
-    return list(csv.DictReader(io.StringIO(text), dialect=dialect))
+    # newline="" matters: several registers contain unquoted line breaks inside
+    # address fields, and without it csv raises "new-line character seen in
+    # unquoted field" and takes the whole crawl down with it.
+    return list(csv.DictReader(io.StringIO(text, newline=""), dialect=dialect))
 
 
 def _rows_from_excel(blob):
@@ -171,11 +176,24 @@ def harvest(found):
                 per_source.append((council, title, "too large", 0))
                 continue
             n_ok += 1
-            rows = _rows_from_csv(blob) if fmt == "csv" else _rows_from_excel(blob)
+            # EVERY per-resource step is inside try/except. This crawl spans 131
+            # independent publishers with no shared schema, so malformed files
+            # are not an edge case, they are the norm — the first run died on
+            # the second council and lost the other 1,298 resources.
+            try:
+                rows = (_rows_from_csv(blob) if fmt == "csv"
+                        else _rows_from_excel(blob))
+            except Exception as exc:
+                per_source.append((council, title, f"parse failed", 0))
+                continue
             if not rows:
                 per_source.append((council, title, "unreadable/empty", 0))
                 continue
-            cols = list(rows[0].keys())
+            try:
+                cols = list(rows[0].keys())
+            except Exception:
+                per_source.append((council, title, "unreadable/empty", 0))
+                continue
             ucol = _pick(cols, UPRN_COL)
             if not ucol:
                 per_source.append((council, title, "no UPRN column", 0))
