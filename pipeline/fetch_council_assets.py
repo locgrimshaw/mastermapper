@@ -1,0 +1,245 @@
+"""
+fetch_council_assets.py
+-----------------------
+Harvest local-authority land and building asset registers and pull out UPRNs.
+
+WHY: our public-land layer currently places a council's holdings by POSTCODE
+CENTROID, and that is structurally lossy. CCOD holds 187,666 public land titles
+but only 120,789 distinct postcode+owner points, so a point can never stand for
+more than one parcel — 66,877 titles cannot be represented at all, and a
+centroid often sits on the road rather than on the site. A UPRN is a precise
+point on the actual property, so an asset register carrying UPRNs turns a guess
+into a lookup.
+
+WHERE FROM: the Local Government Transparency Code 2015 requires every English
+council to publish a register of its land and building assets annually. They are
+published individually, with no common schema, so this discovers them through
+the data.gov.uk CKAN API rather than relying on a hardcoded URL list that would
+rot silently.
+
+BE WARNED: coverage is expected to be uneven. Councils publish CSV, XLSX, PDF or
+nothing at all; column names vary; some registers omit UPRNs entirely. This
+script is deliberately loud about what it found and what it could not use — the
+coverage report is the point of running it, not a side effect.
+
+Output: data/raw/council_assets.csv
+        columns: council, uprn, description, address, source_url
+Also prints a per-source tally and an overall coverage summary.
+
+Licence: individual council registers are published under the Open Government
+Licence; check any that you rely on commercially.
+"""
+
+import csv
+import io
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+OUT = Path(os.environ.get("COUNCIL_ASSETS_OUT")
+           or (ROOT / "data" / "raw" / "council_assets.csv"))
+
+CKAN = os.environ.get(
+    "CKAN_API", "https://ckan.publishing.service.gov.uk/api/3/action/package_search")
+
+# Several phrasings, because councils title these things inconsistently:
+# "Land and building assets", "Asset register", "Property portfolio"...
+QUERIES = [q.strip() for q in (os.environ.get("ASSET_QUERIES") or
+    "land and building assets;asset register;land and property assets;"
+    "property asset register;council owned land"
+).split(";") if q.strip()]
+
+MAX_RESOURCE_BYTES = int(os.environ.get("MAX_RESOURCE_BYTES") or 60_000_000)
+HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT") or 60)
+# Politeness: these are small public servers, not a CDN.
+SLEEP_BETWEEN = float(os.environ.get("SLEEP_BETWEEN") or 0.4)
+
+UA = ("Mozilla/5.0 (compatible; MasterMapper/1.0; "
+      "+public-land-asset-register-harvest)")
+
+# A UPRN is a 1-12 digit number. Anything outside that is a mis-detected column.
+UPRN_RE = re.compile(r"^\d{1,12}$")
+UPRN_COL = re.compile(r"\buprn\b|unique\s*property\s*reference", re.I)
+DESC_COL = re.compile(r"desc|asset\s*name|property\s*name|site|building|title|"
+                      r"holding|premises", re.I)
+ADDR_COL = re.compile(r"address|location|street|postcode", re.I)
+
+
+def _get(url, timeout=HTTP_TIMEOUT):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(MAX_RESOURCE_BYTES + 1)
+
+
+def discover():
+    """Ask data.gov.uk for candidate asset-register datasets.
+
+    Returns [(council, title, resource_url, fmt)]. Dedupes by resource URL so
+    a dataset matching several queries is only fetched once."""
+    seen, found = set(), []
+    for q in QUERIES:
+        start, page = 0, 200
+        while True:
+            url = f"{CKAN}?" + urllib.parse.urlencode(
+                {"q": q, "rows": page, "start": start})
+            try:
+                data = json.loads(_get(url).decode("utf-8", "replace"))
+            except Exception as exc:
+                print(f"  [discover] query {q!r} failed: {exc}", file=sys.stderr)
+                break
+            result = (data.get("result") or {})
+            pkgs = result.get("results") or []
+            if not pkgs:
+                break
+            for p in pkgs:
+                org = ((p.get("organization") or {}).get("title")
+                       or p.get("author") or "unknown")
+                for res in (p.get("resources") or []):
+                    fmt = (res.get("format") or "").strip().lower()
+                    href = (res.get("url") or "").strip()
+                    if not href or fmt not in ("csv", "xls", "xlsx"):
+                        continue
+                    if href in seen:
+                        continue
+                    seen.add(href)
+                    found.append((org, p.get("title") or "", href, fmt))
+            start += page
+            if start >= min(result.get("count", 0), 2000):
+                break
+    print(f"[assets] {len(found)} candidate resource(s) across "
+          f"{len({f[0] for f in found})} publisher(s)")
+    return found
+
+
+def _rows_from_csv(blob):
+    text = blob.decode("utf-8-sig", "replace")
+    # Sniff the delimiter; council exports are comma, semicolon or tab.
+    sample = text[:8192]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+    return list(csv.DictReader(io.StringIO(text), dialect=dialect))
+
+
+def _rows_from_excel(blob):
+    try:
+        import pandas as pd
+    except ImportError:
+        return []
+    try:
+        sheets = pd.read_excel(io.BytesIO(blob), sheet_name=None, dtype=str)
+    except Exception:
+        return []
+    rows = []
+    for df in sheets.values():
+        df = df.fillna("")
+        rows.extend(df.to_dict("records"))
+    return rows
+
+
+def _pick(cols, rx):
+    for c in cols:
+        if c and rx.search(str(c)):
+            return c
+    return None
+
+
+def harvest(found):
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    n_ok = n_uprn_col = n_rows = 0
+    councils_with_uprn = set()
+    per_source = []
+    with OUT.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["council", "uprn", "description",
+                                           "address", "source_url"])
+        w.writeheader()
+        for i, (council, title, href, fmt) in enumerate(found, 1):
+            try:
+                blob = _get(href)
+            except Exception as exc:
+                per_source.append((council, title, "fetch failed", 0))
+                continue
+            if len(blob) > MAX_RESOURCE_BYTES:
+                per_source.append((council, title, "too large", 0))
+                continue
+            n_ok += 1
+            rows = _rows_from_csv(blob) if fmt == "csv" else _rows_from_excel(blob)
+            if not rows:
+                per_source.append((council, title, "unreadable/empty", 0))
+                continue
+            cols = list(rows[0].keys())
+            ucol = _pick(cols, UPRN_COL)
+            if not ucol:
+                per_source.append((council, title, "no UPRN column", 0))
+                continue
+            n_uprn_col += 1
+            dcol = _pick(cols, DESC_COL)
+            acol = _pick(cols, ADDR_COL)
+            wrote = 0
+            for r in rows:
+                raw = str(r.get(ucol) or "").strip().replace(".0", "")
+                # Strip thousands separators Excel loves to add.
+                raw = raw.replace(",", "").replace(" ", "")
+                if not UPRN_RE.match(raw):
+                    continue
+                w.writerow({
+                    "council": council,
+                    "uprn": raw,
+                    "description": str(r.get(dcol) or "").strip()[:200] if dcol else "",
+                    "address": str(r.get(acol) or "").strip()[:200] if acol else "",
+                    "source_url": href,
+                })
+                wrote += 1
+            n_rows += wrote
+            if wrote:
+                councils_with_uprn.add(council)
+            per_source.append((council, title, "ok", wrote))
+            if i % 25 == 0:
+                print(f"  [assets] {i}/{len(found)} resources, "
+                      f"{n_rows:,} UPRNs so far", flush=True)
+            time.sleep(SLEEP_BETWEEN)
+
+    print(f"\n[assets] fetched {n_ok}/{len(found)} resource(s); "
+          f"{n_uprn_col} had a UPRN column")
+    print(f"[assets] {n_rows:,} UPRN row(s) from "
+          f"{len(councils_with_uprn)} council(s)")
+    print(f"[assets] wrote {OUT}")
+    # The failures are the interesting part — they say what is NOT covered.
+    reasons = {}
+    for _, _, why, _ in per_source:
+        reasons[why] = reasons.get(why, 0) + 1
+    print("[assets] outcome by resource: "
+          + ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
+    top = sorted((p for p in per_source if p[3]), key=lambda p: -p[3])[:15]
+    if top:
+        print("[assets] largest registers:")
+        for council, title, _, n in top:
+            print(f"    {n:>7,}  {council} — {title[:60]}")
+    return n_rows
+
+
+def main() -> int:
+    found = discover()
+    if not found:
+        print("ERROR: discovery returned nothing — the CKAN API may have "
+              "changed or be unreachable.", file=sys.stderr)
+        return 1
+    n = harvest(found)
+    if not n:
+        print("ERROR: no UPRNs harvested. The registers exist but none exposed "
+              "a usable UPRN column; the join cannot be built from this.",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

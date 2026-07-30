@@ -1,0 +1,70 @@
+name: Harvest council asset registers (UPRN discovery)
+
+# DISCOVERY RUN. This deliberately does NOT load anything into Supabase.
+#
+# The public-land layer currently places council holdings by postcode centroid,
+# which is structurally lossy: CCOD holds 187,666 public land titles but only
+# 120,789 distinct postcode+owner points, so 66,877 titles cannot be represented
+# at all and a centroid often lands on the road rather than the site.
+#
+# A UPRN fixes that — it is a precise point on the actual property, and OS Open
+# UPRN turns it into a coordinate for free. The open question is how many
+# councils actually publish a register WITH UPRNs in a machine-readable format.
+# Nobody can answer that from a spec; the Local Government Transparency Code
+# requires publication but not a schema. So this run measures it, and the
+# coverage report in the log is the deliverable.
+#
+# The harvested CSV is uploaded as an artifact so the follow-up join can reuse
+# it without re-crawling a few hundred council websites.
+
+on:
+  workflow_dispatch:
+    inputs:
+      queries:
+        description: "Semicolon-separated data.gov.uk search phrases (blank = defaults)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl xlrd
+
+      - name: Discover and harvest
+        env:
+          ASSET_QUERIES: ${{ inputs.queries }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          mkdir -p data/raw
+          python pipeline/fetch_council_assets.py
+
+      - name: Summarise what landed
+        if: always()
+        run: |
+          if [ -f data/raw/council_assets.csv ]; then
+            echo "rows (incl. header): $(wc -l < data/raw/council_assets.csv)"
+            echo "distinct councils:   $(tail -n +2 data/raw/council_assets.csv | cut -d, -f1 | sort -u | wc -l)"
+            echo "distinct UPRNs:      $(tail -n +2 data/raw/council_assets.csv | cut -d, -f2 | sort -u | wc -l)"
+            head -5 data/raw/council_assets.csv
+          else
+            echo "::warning::no council_assets.csv produced"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: council_assets_csv
+          path: data/raw/council_assets.csv
+          if-no-files-found: warn
