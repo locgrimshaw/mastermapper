@@ -73,6 +73,21 @@ HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT") or 60)
 # Politeness: these are small public servers, not a CDN.
 SLEEP_BETWEEN = float(os.environ.get("SLEEP_BETWEEN") or 0.4)
 
+# STOP CRAWLING BEFORE THE RUNNER KILLS US. The crawl is 1,300 requests to a few
+# hundred independent servers, so its duration is set by how slow the slowest of
+# them are that day — it has taken 75 min and 118+ min on identical inputs. If
+# the job's own timeout fires first the step is killed mid-loop and every row
+# harvested so far dies with it, because the artifact upload never runs.
+# Rows are written to the CSV as they are found, so stopping the loop early
+# yields a complete, valid, smaller file — always worth more than nothing.
+# Keep this comfortably under the workflow's timeout-minutes.
+DEADLINE_S = float(os.environ.get("HARVEST_DEADLINE_MIN") or 150) * 60.0
+_STARTED = time.monotonic()
+
+
+def _time_left():
+    return DEADLINE_S - (time.monotonic() - _STARTED)
+
 UA = ("Mozilla/5.0 (compatible; MasterMapper/1.0; "
       "+public-land-asset-register-harvest)")
 
@@ -153,8 +168,11 @@ def _get_retry(url, attempts=2):
             last = exc
         except Exception as exc:           # timeout, reset, DNS, bad TLS
             last = exc
-        if n + 1 < attempts:
+        # Never spend the last of the budget on a second attempt at one file.
+        if n + 1 < attempts and _time_left() > 120:
             time.sleep(3.0)
+        else:
+            break
     raise last
 
 
@@ -304,7 +322,15 @@ def harvest(found):
                                            "area_ha", "description",
                                            "address", "source_url"])
         w.writeheader()
+        stopped_early = 0
         for i, (council, title, href, fmt) in enumerate(found, 1):
+            if _time_left() <= 0:
+                # Bank what we have. The file is already written up to here.
+                stopped_early = len(found) - i + 1
+                print(f"\n[assets] DEADLINE reached after {i - 1} resource(s) — "
+                      f"stopping with {stopped_early} unfetched so the "
+                      f"{n_rows:,} rows harvested so far are kept.", flush=True)
+                break
             try:
                 blob = _get_retry(href)
             except Exception as exc:
@@ -382,10 +408,16 @@ def harvest(found):
                 councils_with_uprn.add(council)
             per_source.append((council, title, "ok", wrote))
             if i % 25 == 0:
-                print(f"  [assets] {i}/{len(found)} resources, "
-                      f"{n_rows:,} UPRNs so far", flush=True)
+                print(f"  [assets] {i}/{len(found)} resources, {n_rows:,} rows, "
+                      f"{_time_left() / 60:.0f} min of budget left", flush=True)
             time.sleep(SLEEP_BETWEEN)
 
+    if stopped_early:
+        # Loud, and repeated at the end: a partial harvest that reads like a
+        # complete one is how a coverage number quietly becomes a lie.
+        print(f"::warning::PARTIAL HARVEST — {stopped_early} of {len(found)} "
+              f"resources were never fetched (time budget). Coverage figures "
+              f"below are a floor, not the ceiling.")
     print(f"\n[assets] fetched {n_ok}/{len(found)} resource(s); "
           f"{n_uprn_col} had a UPRN column, {n_xy_col} had coordinates")
     print(f"[assets] {n_rows:,} usable row(s) from "
