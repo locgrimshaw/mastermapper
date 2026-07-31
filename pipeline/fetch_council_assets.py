@@ -1,7 +1,9 @@
 """
 fetch_council_assets.py
 -----------------------
-Harvest local-authority land and building asset registers and pull out UPRNs.
+Harvest local-authority land and building asset registers and pull out a
+LOCATOR for each holding — a UPRN or a coordinate, whichever the register
+publishes.
 
 WHY: our public-land layer currently places a council's holdings by POSTCODE
 CENTROID, and that is structurally lossy. CCOD holds 187,666 public land titles
@@ -22,8 +24,18 @@ nothing at all; column names vary; some registers omit UPRNs entirely. This
 script is deliberately loud about what it found and what it could not use — the
 coverage report is the point of running it, not a side effect.
 
+COORDINATES MATTER AS MUCH AS UPRNs. The first run accepted only a UPRN column
+and discarded 768 registers that had been fetched and read perfectly well.
+Cambridgeshire's County Farms register is the case that exposed it: 3,280 plots
+with Centre_X/Centre_Y and no UPRN anywhere (it carries USRN, a STREET
+reference, which is a different thing). For LAND a coordinate is the better
+locator anyway — a UPRN sits on a building, a plot centroid sits on the field —
+so a register now qualifies on either, and eastings/northings are told apart
+from decimal degrees by magnitude rather than by trusting a column name.
+
 Output: data/raw/council_assets.csv
-        columns: council, uprn, description, address, source_url
+        columns: council, uprn, lng, lat, area_ha, description, address,
+                 source_url
 Also prints a per-source tally and an overall coverage summary.
 
 Licence: individual council registers are published under the Open Government
@@ -68,8 +80,30 @@ UA = ("Mozilla/5.0 (compatible; MasterMapper/1.0; "
 UPRN_RE = re.compile(r"^\d{1,12}$")
 UPRN_COL = re.compile(r"\buprn\b|unique\s*property\s*reference", re.I)
 DESC_COL = re.compile(r"desc|asset\s*name|property\s*name|site|building|title|"
-                      r"holding|premises", re.I)
+                      r"holding|premises|farm|parish", re.I)
 ADDR_COL = re.compile(r"address|location|street|postcode", re.I)
+
+# MANY registers carry COORDINATES instead of a UPRN, and the first run threw
+# all of them away — 768 resources were read fine and discarded purely for
+# lacking a UPRN column. Cambridgeshire's County Farms register is the example
+# that showed it: 3,280 plots with Centre_X/Centre_Y and no UPRN at all (it
+# carries USRN, a STREET reference, which is not the same thing).
+#
+# For LAND a coordinate is better than a UPRN anyway: a UPRN sits on a building,
+# a plot centroid sits on the field.
+XCOL = re.compile(r"centre[_ ]?x|\beasting|\beast\b|\bx[_ ]?coord|grid[_ ]?x|^x$", re.I)
+YCOL = re.compile(r"centre[_ ]?y|\bnorthing|\bnorth\b|\by[_ ]?coord|grid[_ ]?y|^y$", re.I)
+LATCOL = re.compile(r"\blatitude\b|^lat$", re.I)
+LONCOL = re.compile(r"\blongitude\b|^lon$|^lng$|^long$", re.I)
+AREACOL = re.compile(r"hectare|\bha\b|area", re.I)
+
+# Great Britain in EPSG:27700. Used to tell an easting/northing pair apart from
+# a decimal degree pair — they differ by orders of magnitude, so this is safe.
+BNG_X = (0.0, 800000.0)
+BNG_Y = (0.0, 1400000.0)
+# ...and the WGS84 window that actually contains the UK.
+WGS_LON = (-9.0, 2.5)
+WGS_LAT = (49.0, 61.5)
 
 
 def _get(url, timeout=HTTP_TIMEOUT):
@@ -157,13 +191,57 @@ def _pick(cols, rx):
     return None
 
 
+def _num(v):
+    if v is None:
+        return None
+    s = str(v).strip().replace(",", "")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _to_wgs84(x, y):
+    """(lng, lat) from a coordinate pair, deciding its CRS from magnitude.
+
+    A British National Grid easting is ~100000-700000; a longitude is between
+    -9 and 2.5. They cannot be confused, so the ranges classify the pair without
+    the register having to say which it is — and most of them do not say."""
+    if x is None or y is None:
+        return None, None
+    if BNG_X[0] <= x <= BNG_X[1] and BNG_Y[0] <= y <= BNG_Y[1] and (x > 1000 or y > 1000):
+        try:
+            from pyproj import Transformer
+        except ImportError:
+            return None, None
+        global _BNG_TF
+        try:
+            tf = _BNG_TF
+        except NameError:
+            tf = _BNG_TF = Transformer.from_crs(27700, 4326, always_xy=True)
+        lng, lat = tf.transform(x, y)
+    elif WGS_LON[0] <= x <= WGS_LON[1] and WGS_LAT[0] <= y <= WGS_LAT[1]:
+        lng, lat = x, y            # already degrees, x=lon y=lat
+    elif WGS_LON[0] <= y <= WGS_LON[1] and WGS_LAT[0] <= x <= WGS_LAT[1]:
+        lng, lat = y, x            # lat/lon the other way round
+    else:
+        return None, None
+    if not (WGS_LON[0] <= lng <= WGS_LON[1] and WGS_LAT[0] <= lat <= WGS_LAT[1]):
+        return None, None          # landed outside the UK: reject rather than plot it
+    return round(lng, 7), round(lat, 7)
+
+
 def harvest(found):
     OUT.parent.mkdir(parents=True, exist_ok=True)
     n_ok = n_uprn_col = n_rows = 0
+    n_xy_col = n_xy_rows = 0
     councils_with_uprn = set()
     per_source = []
     with OUT.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=["council", "uprn", "description",
+        w = csv.DictWriter(fh, fieldnames=["council", "uprn", "lng", "lat",
+                                           "area_ha", "description",
                                            "address", "source_url"])
         w.writeheader()
         for i, (council, title, href, fmt) in enumerate(found, 1):
@@ -195,27 +273,50 @@ def harvest(found):
                 per_source.append((council, title, "unreadable/empty", 0))
                 continue
             ucol = _pick(cols, UPRN_COL)
-            if not ucol:
-                per_source.append((council, title, "no UPRN column", 0))
+            # Coordinates are an equally good locator — better for land — so a
+            # register qualifies on EITHER.
+            xcol, ycol = _pick(cols, XCOL), _pick(cols, YCOL)
+            latcol, loncol = _pick(cols, LATCOL), _pick(cols, LONCOL)
+            has_xy = bool((xcol and ycol) or (latcol and loncol))
+            if not ucol and not has_xy:
+                per_source.append((council, title, "no UPRN or coordinates", 0))
                 continue
-            n_uprn_col += 1
+            if ucol:
+                n_uprn_col += 1
+            if has_xy:
+                n_xy_col += 1
             dcol = _pick(cols, DESC_COL)
             acol = _pick(cols, ADDR_COL)
+            arcol = _pick(cols, AREACOL)
             wrote = 0
             for r in rows:
-                raw = str(r.get(ucol) or "").strip().replace(".0", "")
-                # Strip thousands separators Excel loves to add.
-                raw = raw.replace(",", "").replace(" ", "")
-                if not UPRN_RE.match(raw):
-                    continue
+                raw = ""
+                if ucol:
+                    raw = str(r.get(ucol) or "").strip().replace(".0", "")
+                    # Strip thousands separators Excel loves to add.
+                    raw = raw.replace(",", "").replace(" ", "")
+                    if not UPRN_RE.match(raw):
+                        raw = ""
+                lng = lat = None
+                if latcol and loncol:
+                    lng, lat = _to_wgs84(_num(r.get(loncol)), _num(r.get(latcol)))
+                if lng is None and xcol and ycol:
+                    lng, lat = _to_wgs84(_num(r.get(xcol)), _num(r.get(ycol)))
+                if not raw and lng is None:
+                    continue          # neither locator on this row
                 w.writerow({
                     "council": council,
                     "uprn": raw,
+                    "lng": "" if lng is None else lng,
+                    "lat": "" if lat is None else lat,
+                    "area_ha": _num(r.get(arcol)) if arcol else "",
                     "description": str(r.get(dcol) or "").strip()[:200] if dcol else "",
                     "address": str(r.get(acol) or "").strip()[:200] if acol else "",
                     "source_url": href,
                 })
                 wrote += 1
+                if lng is not None:
+                    n_xy_rows += 1
             n_rows += wrote
             if wrote:
                 councils_with_uprn.add(council)
@@ -226,9 +327,11 @@ def harvest(found):
             time.sleep(SLEEP_BETWEEN)
 
     print(f"\n[assets] fetched {n_ok}/{len(found)} resource(s); "
-          f"{n_uprn_col} had a UPRN column")
-    print(f"[assets] {n_rows:,} UPRN row(s) from "
-          f"{len(councils_with_uprn)} council(s)")
+          f"{n_uprn_col} had a UPRN column, {n_xy_col} had coordinates")
+    print(f"[assets] {n_rows:,} usable row(s) from "
+          f"{len(councils_with_uprn)} publisher(s); "
+          f"{n_xy_rows:,} located by coordinate, "
+          f"{n_rows - n_xy_rows:,} by UPRN only")
     print(f"[assets] wrote {OUT}")
     # The failures are the interesting part — they say what is NOT covered.
     reasons = {}

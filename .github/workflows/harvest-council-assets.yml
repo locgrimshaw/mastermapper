@@ -56,7 +56,7 @@ jobs:
           if [ -f data/raw/council_assets.csv ]; then
             echo "rows (incl. header): $(wc -l < data/raw/council_assets.csv)"
             echo "distinct councils:   $(tail -n +2 data/raw/council_assets.csv | cut -d, -f1 | sort -u | wc -l)"
-            echo "distinct UPRNs:      $(tail -n +2 data/raw/council_assets.csv | cut -d, -f2 | sort -u | wc -l)"
+            echo "rows with a coordinate: $(tail -n +2 data/raw/council_assets.csv | awk -F, "$3 != \"\"" | wc -l)"
             head -5 data/raw/council_assets.csv
           else
             echo "::warning::no council_assets.csv produced"
