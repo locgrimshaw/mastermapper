@@ -69,7 +69,14 @@ jobs:
             f=$(find data/raw/osuprn -iname '*.csv' | head -1)
             if [ -n "$f" ]; then mv "$f" data/raw/osopenuprn.csv; fi
             rm -rf data/raw/osuprn data/raw/osuprn.zip
+            # The OS zip stores this CSV with mode 000 and unzip preserves it,
+            # so without a chmod the file exists at 2.2 GB and cannot be opened
+            # by anyone, including its owner. That is what killed the first run.
+            chmod u+rw data/raw/osopenuprn.csv 2>/dev/null || true
             ls -la data/raw/osopenuprn.csv || echo "::warning::no CSV inside OpenUPRN.zip"
+            head -c 200 data/raw/osopenuprn.csv > /dev/null \
+              && echo "OS Open UPRN is readable" \
+              || echo "::warning::OS Open UPRN present but unreadable — UPRN-only rows will be skipped"
           else
             echo "::warning::OS Open UPRN download failed — UPRN-only rows will be skipped"
           fi

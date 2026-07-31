@@ -138,12 +138,23 @@ def resolve_uprns(need):
     kept: holding the whole file would cost gigabytes for a few thousand hits."""
     if not need:
         return {}
-    if not OSUPRN.exists():
-        print(f"  WARNING: {OSUPRN} not found — uprn-only rows will be skipped "
-              "and only coordinate-bearing registers will load.", file=sys.stderr)
+    # This lookup is OPTIONAL and must degrade, never abort. The vast majority
+    # of holdings carry their own coordinate (75,810 of 85,191 on the first real
+    # run) and need nothing from this file. The first attempt died here with
+    # PermissionError: the OS zip stores the CSV with mode 000 and unzip
+    # preserves it, so the file existed, passed the .exists() check, and then
+    # failed to open — taking down a run that had already spent four minutes
+    # unpacking 24.4M parcels, to save 11% of the points. Any OSError is caught
+    # for the same reason.
+    try:
+        fh = OSUPRN.open(newline="", encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        print(f"  WARNING: cannot read {OSUPRN} ({exc}) — continuing WITHOUT it. "
+              f"{len(need):,} UPRN-only holding(s) will be dropped; every "
+              "coordinate-bearing holding is unaffected.", file=sys.stderr)
         return {}
     found, seen = {}, 0
-    with OSUPRN.open(newline="", encoding="utf-8-sig", errors="replace") as fh:
+    with fh:
         rd = csv.DictReader(fh)
         cols = {c.lower(): c for c in (rd.fieldnames or [])}
         ucol = cols.get("uprn")
