@@ -2437,6 +2437,15 @@ footer {
   width: 14px; height: 14px; border-radius: 3px; flex: none;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
 }
+/* Set-aside parcels: dashed outline, barely-there fill — the map's way of
+   saying "this boundary is not trusted" before anything is clicked. Mirrors
+   the publicland-line-disputed layer. */
+.ddl-sw-dashed {
+  background: transparent;
+  border: 1.5px dashed currentColor;
+  box-shadow: none;
+  opacity: 0.9;
+}
 .ddl-note { margin-top: 6px; font-size: 10.5px; color: var(--text-dim); }
 
 /* Public-land readout inside the deep-dive panel. */

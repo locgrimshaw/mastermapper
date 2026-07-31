@@ -1089,7 +1089,12 @@ const MAP_OVERLAYS = [
   // truth for how a public parcel is described — they were three near-identical
   // copies that had already drifted ("Central government" vs "Central
   // government & agencies").
-  { key: "public_parcel",         group: "land", label: "Public land parcels (CCOD x INSPIRE)", color: "#4c6ef5", dataset: "public_parcel", minZoom: 11, lim: 6000 },
+  // provisional: the owner's locator is precise but it landed in a title far
+  // larger than the holding the register describes, so the BOUNDARY is not
+  // trustworthy even though the ownership is. Drawn faded and dashed, and
+  // excluded from every hectare total (see migration 0040).
+  { key: "public_parcel",         group: "land", label: "Public land parcels (CCOD x INSPIRE)", color: "#4c6ef5", dataset: "public_parcel", minZoom: 11, lim: 6000,
+    provisional: ["==", ["to-boolean", ["get", "area_mismatch"]], true] },
   { key: "la_property",           group: "land", label: "Public-authority property (CCOD)", color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000, icon: "town",
     cap: { color: ["match", ["to-string", ["get", "owner_class"]],
            "local_authority", "#c92a2a", "parish", "#f08c00",
@@ -1297,7 +1302,7 @@ const LAYER_INFO = {
   student_accom:      { about: "Existing purpose-built student accommodation and dormitories mapped in OpenStreetMap — the PBSA competition map. Coverage reflects OSM mapping quality.", source: "OpenStreetMap contributors (ODbL)" },
   slope_grid:         { about: "Mean ground slope per 1 km cell from OS Terrain 50 (hover shows the steepest 50 m within the cell). Green = flat, red = steep — the data-centre construction-feasibility screen.", source: "OS Terrain 50 © Crown copyright (OGL)" },
   building_height:    { about: "Every building in OpenStreetMap, drawn as its actual footprint, on a cool-to-warm ramp: blue for single-storey through yellow and orange to dark red for towers. Streams nationwide from z13. Height itself is a SAMPLE, not a survey — excellent for landmarks and city centres, patchy across suburbia — so a building OSM has not given a height is drawn in neutral grey rather than left out or guessed at as low rise. Hover to see which.", source: "OpenStreetMap contributors (ODbL)" },
-  public_parcel:      { about: "Land parcels in public ownership, from two sources of differing certainty — click a parcel to see which. BEST: a coordinate or UPRN the owner published in its own asset register, which gives one locator per holding. WEAKER: a CCOD ownership record matched to an HMLR INSPIRE parcel by postcode centroid, which can stand for only one parcel per postcode however many the body owns there, with individual flats excluded so a single ex-right-to-buy flat can't claim a whole block. INDICATIVE either way — the exact title-to-polygon link is HMLR's licensed National Polygon Service.", source: "HM Land Registry CCOD + INSPIRE index polygons © Crown copyright and database right; local authority and Cabinet Office asset registers (OGL); OS Open UPRN © Crown copyright (OGL)" },
+  public_parcel:      { about: "Land parcels in public ownership, from two sources of differing certainty — click a parcel to see which. BEST: a coordinate or UPRN the owner published in its own asset register, which gives one locator per holding. WEAKER: a CCOD ownership record matched to an HMLR INSPIRE parcel by postcode centroid, which can stand for only one parcel per postcode however many the body owns there, with individual flats excluded so a single ex-right-to-buy flat can't claim a whole block. FADED WITH A DASHED EDGE means the parcel's size contradicts the register — the owner's locator is precise but landed in a title far larger (or smaller) than the holding it describes, so the boundary is not trustworthy. Those are kept on the map as leads but excluded from every hectare total and capacity estimate. INDICATIVE either way — the exact title-to-polygon link is HMLR's licensed National Polygon Service.", source: "HM Land Registry CCOD + INSPIRE index polygons © Crown copyright and database right; local authority and Cabinet Office asset registers (OGL); OS Open UPRN © Crown copyright (OGL)" },
   bus_route:          { about: "Every mapped bus route (OpenStreetMap route relations) as lines, with route number and operator on hover. Coverage reflects OSM mapping — dense in urban areas, occasionally patchy on rural services.", source: "OpenStreetMap contributors (ODbL)" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
   grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },
@@ -1395,7 +1400,13 @@ function setOverlayOpacity(key, v) {
   st.opacity = v;
   const def = overlayDef(key);
   if (map.getLayer(`ov-${key}-fill`))
-    map.setPaintProperty(`ov-${key}-fill`, "fill-opacity", v);
+    // Re-apply the provisional fade rather than a flat number: a plain `v` here
+    // would overwrite the case expression and make untrusted geometry look
+    // exactly as solid as verified geometry the moment the slider is touched.
+    map.setPaintProperty(`ov-${key}-fill`, "fill-opacity",
+      def && def.provisional ? ["case", def.provisional, v * 0.28, v] : v);
+  if (map.getLayer(`ov-${key}-line-dashed`))
+    map.setPaintProperty(`ov-${key}-line-dashed`, "line-opacity", Math.min(0.9, v * 2.2));
   if (map.getLayer(`ov-${key}-line`)) {
     const lineAlpha = def && def.render === "line" ? Math.min(1, v * 2.5) : Math.min(0.9, v * 2.2);
     map.setPaintProperty(`ov-${key}-line`, "line-opacity", lineAlpha);
@@ -1598,7 +1609,7 @@ const HEAT_COLOR = ["interpolate", ["linear"], ["heatmap-density"],
 
 function renderOverlay(key, def, fc) {
   const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`,
-        ptId = `ov-${key}-pt`;
+        ptId = `ov-${key}-pt`, dashId = `ov-${key}-line-dashed`;
   if (def.heatPoint) fc = _cellsToPoints(fc);
   if (map.getSource(srcId)) {
     map.getSource(srcId).setData(fc);
@@ -1803,15 +1814,33 @@ function renderOverlay(key, def, fc) {
          ["any", ["in", "grey", waterStatus], ["in", "gray", waterStatus]], "#adb5bd",
          def.color]
       : def.color;
+    // def.provisional marks features whose GEOMETRY is not trusted (as opposed
+    // to unknown attributes). They stay on the map but are drawn faded with a
+    // dashed edge, so a doubtful boundary never reads as a settled one.
+    const prov = def.provisional;
+    const baseOpacity = def.noOutline ? Math.min(0.9, opacity * 1.6) : opacity;
     map.addLayer({ id: fillId, type: "fill", source: srcId,
       paint: { "fill-color": fillColor,
-               "fill-opacity": def.noOutline ? Math.min(0.9, opacity * 1.6) : opacity } }, before);
+               "fill-opacity": prov
+                 ? ["case", prov, baseOpacity * 0.28, baseOpacity]
+                 : baseOpacity } }, before);
     // Heatmap-style grids stay borderless — cell outlines would shout louder
     // than the colour ramp.
-    if (!def.noOutline)
+    if (!def.noOutline) {
       map.addLayer({ id: lineId, type: "line", source: srcId,
+        filter: prov ? ["!", prov] : ["literal", true],
         paint: { "line-color": def.color, "line-width": 1,
                  "line-opacity": Math.min(0.9, opacity * 2.2) } }, before);
+      // A separate layer, because line-dasharray is not data-driven in MapLibre:
+      // a "case" expression on it is ignored without error, which would leave
+      // these looking exactly like the trusted ones.
+      if (prov)
+        map.addLayer({ id: dashId, type: "line", source: srcId,
+          filter: prov,
+          paint: { "line-color": def.color, "line-width": 1,
+                   "line-dasharray": [2, 2],
+                   "line-opacity": Math.min(0.9, opacity * 2.2) } }, before);
+    }
   }
   updateOverlayAttribution();
 }
@@ -1901,9 +1930,9 @@ function updateOverlayAttribution() {
 let _osmPowerAttributionShown = false;
 
 function removeOverlayLayers(key) {
-  for (const id of [`ov-${key}-fill`, `ov-${key}-line`, `ov-${key}-pt`,
-                    `ov-${key}-icon`, `ov-${key}-lbl`, `ov-${key}-heat`,
-                    `ov-${key}-name`])
+  for (const id of [`ov-${key}-fill`, `ov-${key}-line`, `ov-${key}-line-dashed`,
+                    `ov-${key}-pt`, `ov-${key}-icon`, `ov-${key}-lbl`,
+                    `ov-${key}-heat`, `ov-${key}-name`])
     if (map.getLayer(id)) map.removeLayer(id);
   const srcId = `ov-${key}-src`;
   if (map.getSource(srcId)) map.removeSource(srcId);
@@ -6123,14 +6152,33 @@ function renderPublicLandLayer() {
   const fc = pl && pl.parcels_geojson;
   if (!deep.publicLandVisible || !fc || !(fc.features || []).length) return;
   map.addSource("publicland-src", { type: "geojson", data: fc });
+  // Disputed parcels stay on the map — they are still real leads — but must
+  // never read as settled: a register point can land in a title far bigger than
+  // the holding, and 43% of this layer's hectares sit on parcels whose size
+  // contradicts the register. Faded fill + dashed edge says "provisional"
+  // before anything is clicked, and they are excluded from every total.
+  const DISPUTED = ["==", ["to-boolean", ["get", "disputed"]], true];
   map.addLayer({
     id: "publicland-fill", type: "fill", source: "publicland-src",
-    paint: { "fill-color": PUBLIC_LAND_COLOR, "fill-opacity": 0.5 },
+    paint: {
+      "fill-color": PUBLIC_LAND_COLOR,
+      "fill-opacity": ["case", DISPUTED, 0.14, 0.5],
+    },
   });
   map.addLayer({
     id: "publicland-line", type: "line", source: "publicland-src",
+    filter: ["!", DISPUTED],
     paint: { "line-color": PUBLIC_LAND_COLOR, "line-width": 1.6,
              "line-opacity": 0.95 },
+  });
+  // Separate layer because line-dasharray cannot be data-driven in MapLibre —
+  // a "case" expression on it is silently ignored, which would have left the
+  // disputed parcels looking solid.
+  map.addLayer({
+    id: "publicland-line-disputed", type: "line", source: "publicland-src",
+    filter: DISPUTED,
+    paint: { "line-color": PUBLIC_LAND_COLOR, "line-width": 1.3,
+             "line-opacity": 0.85, "line-dasharray": [2, 2] },
   });
   map.on("mouseenter", "publicland-fill", () => { map.getCanvas().style.cursor = "pointer"; });
   map.on("mouseleave", "publicland-fill", () => { map.getCanvas().style.cursor = ""; });
@@ -6138,7 +6186,7 @@ function renderPublicLandLayer() {
 }
 
 function removePublicLandLayer() {
-  for (const id of ["publicland-fill", "publicland-line"])
+  for (const id of ["publicland-fill", "publicland-line", "publicland-line-disputed"])
     if (map.getLayer(id)) map.removeLayer(id);
   if (map.getSource("publicland-src")) map.removeSource("publicland-src");
 }
@@ -6253,10 +6301,22 @@ function renderPublicLandSummary() {
   if (!el) return;
   const pl = deep.publicLand;
   if (!deep.publicLandVisible || !pl) { el.innerHTML = ""; return; }
+  // total_ha / n_parcels / by_owner are CONFIRMED-only (migration 0040);
+  // disputed parcels are reported separately and never folded in.
   const ha = Number(pl.total_ha) || 0;
   const n = Number(pl.n_parcels) || 0;
+  const nDisputed = Number(pl.n_disputed) || 0;
+  const disputedHa = Number(pl.disputed_ha) || 0;
   if (!n) {
-    el.innerHTML = `<p class="hint" style="margin-top:6px">No publicly-owned parcels matched inside this catchment.</p>`;
+    // "None matched" would be a lie when the catchment holds only parcels we
+    // set aside — the land is there, its boundary is what we do not trust.
+    el.innerHTML = nDisputed > 0
+      ? `<p class="hint" style="margin-top:6px">No parcel here has a boundary we ` +
+        `trust. ${nDisputed} parcel${nDisputed === 1 ? " was" : "s were"} set aside ` +
+        `(${disputedHa.toFixed(2)} ha, shown dashed): the owner's published locator ` +
+        `landed in a title far larger than the holding it describes, so the area ` +
+        `cannot be relied on.</p>`
+      : `<p class="hint" style="margin-top:6px">No publicly-owned parcels matched inside this catchment.</p>`;
     return;
   }
   const byOwner = pl.by_owner || {};
@@ -6268,13 +6328,13 @@ function renderPublicLandSummary() {
   // this needs no RPC change. A headline hectare figure that mixes a published
   // asset register with a postcode centroid rescued from 30 m away reads as one
   // number of equal quality, and it is not — so show the split.
+  // Disputed parcels are counted for display but excluded from every total by
+  // the RPC (migration 0040), so this only needs to say how many there are.
   const byMatch = {};
-  let flaggedHa = 0;
   for (const f of ((pl.parcels_geojson || {}).features || [])) {
     const pr = f.properties || {};
-    const k = pr.match || "unknown";
-    byMatch[k] = (byMatch[k] || 0) + 1;
-    if (pr.area_mismatch) flaggedHa += Number(pr.clipped_ha) || 0;
+    if (pr.disputed) continue;      // shown separately, not mixed into the split
+    byMatch[pr.match || "unknown"] = (byMatch[pr.match || "unknown"] || 0) + 1;
   }
   const matchRows = Object.entries(byMatch)
     .sort((a, b) => (PARCEL_MATCH[a[0]]?.rank ?? 9) - (PARCEL_MATCH[b[0]]?.rank ?? 9))
@@ -6299,13 +6359,20 @@ function renderPublicLandSummary() {
     `<div class="dd-pl-row"><span>capacity at ${_esc(regime)} density</span><span>~${cap.toLocaleString()} homes</span></div>` +
     (matchRows ? `<div class="dd-pl-sub">how attributed</div>` +
                  `<div class="dd-pl-rows">${matchRows}</div>` : "") +
-    // The headline hectares and the capacity estimate derived from them are
-    // only as good as the parcels behind them. A register point can land in a
-    // title far bigger than the holding, so say how much of this total rests on
-    // a parcel whose size contradicts the register instead of burying it.
-    (flaggedHa > 0.005
-      ? `<div class="dd-pl-row" style="color:#c92a2a"><span>⚠ of which size disputed</span>` +
-        `<span>${flaggedHa.toFixed(2)} ha (${Math.round(100 * flaggedHa / (ha || 1))}%)</span></div>`
+    // Set aside, not deleted. The disputed parcels are drawn faded and dashed
+    // on the map and excluded from every figure above; saying so is the point,
+    // because a total that silently shrank would be just as misleading as one
+    // that was silently inflated.
+    (nDisputed > 0
+      ? `<div class="dd-pl-sub">set aside</div>` +
+        `<div class="dd-pl-row" style="color:#c92a2a">` +
+        `<span>⚠ ${nDisputed} parcel${nDisputed === 1 ? "" : "s"} whose size ` +
+        `contradicts the register</span>` +
+        `<span>${disputedHa.toFixed(2)} ha</span></div>` +
+        `<p class="hint" style="margin-top:4px">Shown dashed and faded. Excluded ` +
+        `from the totals and the capacity estimate above — the owner's locator ` +
+        `is precise, but it landed in a title far larger than the holding it ` +
+        `describes, so the boundary is not trustworthy.</p>`
       : "") +
     `<p class="hint" style="margin-top:6px">Indicative. Parcels marked as a published coordinate or UPRN come from the owner's own asset register; the rest are CCOD postcode centroids matched to INSPIRE parcels by location (individual flats excluded), which can stand for only one parcel per postcode. Verify title-by-title before relying on it.</p>`;
 }
@@ -6316,8 +6383,13 @@ function renderPublicLandSummary() {
 function renderDeepDiveLegend() {
   let el = document.getElementById("dd-legend");
   const showDev = !!(deep.active && deep.developableVisible && deep.developableResult);
+  // n_parcels counts CONFIRMED parcels only, so a catchment holding nothing but
+  // set-aside parcels still draws them — the legend has to explain them.
   const showPub = !!(deep.active && deep.publicLandVisible && deep.publicLand
-                     && Number(deep.publicLand.n_parcels) > 0);
+                     && (Number(deep.publicLand.n_parcels) > 0
+                         || Number(deep.publicLand.n_disputed) > 0));
+  const showDisputed = !!(deep.active && deep.publicLandVisible && deep.publicLand
+                          && Number(deep.publicLand.n_disputed) > 0);
   if (!showDev && !showPub) { if (el) el.hidden = true; return; }
   if (!el) {
     el = document.createElement("div");
@@ -6338,6 +6410,10 @@ function renderDeepDiveLegend() {
   }
   if (showPub) {
     items.push(`<span class="ddl-item">${sw(PUBLIC_LAND_COLOR, 0.75)}Publicly owned land</span>`);
+  }
+  if (showDisputed) {
+    items.push(`<span class="ddl-item"><i class="ddl-sw ddl-sw-dashed" ` +
+      `style="border-color:${PUBLIC_LAND_COLOR}"></i>Boundary disputed — not counted</span>`);
   }
   el.innerHTML = `<div class="ddl-items">${items.join("")}</div>` +
     (showDev ? `<div class="ddl-note">Click any green plot for its own area, constraints and capacity.</div>` : "");
