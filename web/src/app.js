@@ -1085,6 +1085,10 @@ const MAP_OVERLAYS = [
   // CCOD sweep now keeps EVERY public body (owner_class prop from the
   // pipeline); dots colour by class at wide zooms, the town glyph takes over
   // close in.
+  // NOTE: OWNER_CLASS_LABELS / PARCEL_MATCH below are the single source of
+  // truth for how a public parcel is described — they were three near-identical
+  // copies that had already drifted ("Central government" vs "Central
+  // government & agencies").
   { key: "public_parcel",         group: "land", label: "Public land parcels (CCOD x INSPIRE)", color: "#4c6ef5", dataset: "public_parcel", minZoom: 11, lim: 6000 },
   { key: "la_property",           group: "land", label: "Public-authority property (CCOD)", color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000, icon: "town",
     cap: { color: ["match", ["to-string", ["get", "owner_class"]],
@@ -1209,6 +1213,45 @@ const MAP_OVERLAYS = [
   // (setBuildingsVisible) because 1.5M polygons can't come from a bbox RPC.
   // The building_height POINT dataset stays in map_features, currently unused.
 ];
+
+// How a public body is described. One copy: this existed three times over
+// (two popup builders and the deep-dive card) and had already drifted —
+// "Central government" in two of them, "Central government & agencies" in the
+// third — so the same parcel read differently depending on where you clicked.
+const OWNER_CLASS_LABELS = {
+  local_authority: "Local authority", parish: "Parish / town council",
+  combined_authority: "Combined authority", nhs: "NHS",
+  university: "University", police_fire: "Police / fire",
+  government: "Central government & agencies",
+  // Rows joined from a published asset register rather than swept from CCOD.
+  public_asset_register: "Public body (asset register)",
+};
+
+// HOW a parcel was attributed to its owner, and how much that is worth.
+// These are NOT equally certain and the map must not imply they are:
+//   uprn/coord  the owner itself published a locator for this specific holding
+//   contains    a CCOD postcode CENTROID happened to fall inside the parcel
+//   nearest     the centroid missed everything and was rescued within 30 m
+// A postcode centroid is one point for every title at that postcode, so it can
+// stand for at most one parcel however many the body owns there; an asset
+// register gives one locator per holding. Ranked so a legend can order them.
+const PARCEL_MATCH = {
+  coord:    { rank: 0, label: "coordinate published by the owner", tier: "high" },
+  uprn:     { rank: 1, label: "UPRN from the owner's asset register", tier: "high" },
+  contains: { rank: 2, label: "postcode centroid inside this parcel", tier: "medium" },
+  nearest:  { rank: 3, label: "nearest parcel within 30 m of a postcode centroid", tier: "low" },
+};
+const PARCEL_MATCH_TIER_COLOR = { high: "#2b8a3e", medium: "#f08c00", low: "#c92a2a" };
+
+// "how we know" line for a parcel popup. Unknown match values fall back to the
+// old wording rather than rendering a raw enum at the user.
+function parcelMatchHTML(match) {
+  const m = PARCEL_MATCH[match];
+  if (!m) return `Indicative — ownership point matched to parcel.`;
+  const c = PARCEL_MATCH_TIER_COLOR[m.tier];
+  return `<span style="color:${c}">●</span> ${_esc(m.tier)} confidence — ${_esc(m.label)}.`;
+}
+
 // Layers persist when zooming OUT now: the bbox RPCs take a p_zoom argument
 // and simplify geometry to ~1 screen pixel server-side (dropping sub-pixel
 // features), so a region-wide fetch stays small. Each layer still has a floor
@@ -1236,7 +1279,7 @@ const LAYER_INFO = {
   student_accom:      { about: "Existing purpose-built student accommodation and dormitories mapped in OpenStreetMap — the PBSA competition map. Coverage reflects OSM mapping quality.", source: "OpenStreetMap contributors (ODbL)" },
   slope_grid:         { about: "Mean ground slope per 1 km cell from OS Terrain 50 (hover shows the steepest 50 m within the cell). Green = flat, red = steep — the data-centre construction-feasibility screen.", source: "OS Terrain 50 © Crown copyright (OGL)" },
   building_height:    { about: "Every building in OpenStreetMap, drawn as its actual footprint, on a cool-to-warm ramp: blue for single-storey through yellow and orange to dark red for towers. Streams nationwide from z13. Height itself is a SAMPLE, not a survey — excellent for landmarks and city centres, patchy across suburbia — so a building OSM has not given a height is drawn in neutral grey rather than left out or guessed at as low rise. Hover to see which.", source: "OpenStreetMap contributors (ODbL)" },
-  public_parcel:      { about: "Land parcels in public ownership: CCOD ownership records matched to HMLR INSPIRE parcel boundaries by location, with individual flats excluded so a single ex-right-to-buy flat can't claim a whole block. INDICATIVE — the exact title-to-polygon link is HMLR's licensed National Polygon Service.", source: "HM Land Registry CCOD + INSPIRE index polygons © Crown copyright and database right" },
+  public_parcel:      { about: "Land parcels in public ownership, from two sources of differing certainty — click a parcel to see which. BEST: a coordinate or UPRN the owner published in its own asset register, which gives one locator per holding. WEAKER: a CCOD ownership record matched to an HMLR INSPIRE parcel by postcode centroid, which can stand for only one parcel per postcode however many the body owns there, with individual flats excluded so a single ex-right-to-buy flat can't claim a whole block. INDICATIVE either way — the exact title-to-polygon link is HMLR's licensed National Polygon Service.", source: "HM Land Registry CCOD + INSPIRE index polygons © Crown copyright and database right; local authority and Cabinet Office asset registers (OGL); OS Open UPRN © Crown copyright (OGL)" },
   bus_route:          { about: "Every mapped bus route (OpenStreetMap route relations) as lines, with route number and operator on hover. Coverage reflects OSM mapping — dense in urban areas, occasionally patchy on rural services.", source: "OpenStreetMap contributors (ODbL)" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
   grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },
@@ -3075,11 +3118,6 @@ function hoverContentForOverlay(def, p) {
   } else if (d === "uni_campus_site" || d === "uni_building") {
     title = p.name || p.operator || def.label;
   } else if (d === "la_property") {
-    const OWNER_CLASS_LABELS = {
-      local_authority: "Local authority", parish: "Parish / town council",
-      combined_authority: "Combined authority", nhs: "NHS",
-      university: "University", police_fire: "Police / fire",
-      government: "Central government & agencies" };
     title = p.name || "Public-authority property";
     rows = [row(OWNER_CLASS_LABELS[p.owner_class] || p.category || null, "owner type"),
             row(p.titles ? `${p.titles} title${p.titles > 1 ? "s" : ""}` : null, "registered")];
@@ -3152,15 +3190,16 @@ function hoverContentForOverlay(def, p) {
     kind = "Ground slope — 1 km cell";
     rows = [row(p.max_slope != null ? `${p.max_slope}°` : null, "steepest 50 m")];
   } else if (d === "public_parcel") {
-    const OWNER_LABELS = { local_authority: "Local authority", parish: "Parish / town council",
-      combined_authority: "Combined authority", nhs: "NHS", university: "University",
-      police_fire: "Police / fire", government: "Central government" };
+    const m = PARCEL_MATCH[p.match];
     title = p.owner || p.name || "Public land";
     kind = "Publicly owned parcel";
-    rows = [row(OWNER_LABELS[p.owner_class] || p.owner_class, "owner type"),
+    rows = [row(OWNER_CLASS_LABELS[p.owner_class] || p.owner_class, "owner type"),
             row(p.area_m2 != null ? `${(Number(p.area_m2) / 10000).toFixed(2)} ha` : null, "parcel area"),
             row(p.titles_land != null ? `${p.titles_land} land title${p.titles_land == 1 ? "" : "s"}` : null, "registered"),
-            row(p.match === "nearest" ? "nearest parcel (30 m)" : "point inside parcel", "match")];
+            row(p.assets != null && p.assets > 1 ? `${p.assets} holdings here` : null, "asset register"),
+            row(p.stated_ha != null ? `${Number(p.stated_ha).toFixed(2)} ha stated` +
+                (p.area_mismatch ? " ⚠ disagrees with the parcel" : "") : null, "register says"),
+            row(m ? `${m.tier} — ${m.label}` : (p.match || null), "how we know")];
   } else if (d === "bus_route") {
     title = p.ref ? `Bus ${p.ref}` : (p.name || "Bus route");
     kind = p.name && p.ref ? p.name : "Bus route";
@@ -6089,26 +6128,24 @@ function removePublicLandLayer() {
 // Popup for a tapped public parcel: who owns it, how much land, and the
 // honest caveat about title counts at the postcode.
 function publicLandPopupHTML(pr) {
-  const OWNER_LABELS = {
-    local_authority: "Local authority", parish: "Parish / town council",
-    combined_authority: "Combined authority", nhs: "NHS",
-    university: "University", police_fire: "Police / fire",
-    government: "Central government",
-  };
   const ha = pr.clipped_ha != null ? Number(pr.clipped_ha) : null;
   const rows = [
-    ["owner type", OWNER_LABELS[pr.owner_class] || pr.owner_class || "Public body"],
+    ["owner type", OWNER_CLASS_LABELS[pr.owner_class] || pr.owner_class || "Public body"],
     ["parcel area", ha != null ? `${ha.toFixed(2)} ha (${(ha * 2.471).toFixed(2)} ac)` : null],
     ["titles here", pr.titles_land != null
       ? `${pr.titles_land} land title${pr.titles_land == 1 ? "" : "s"}` +
         (pr.titles_flat ? ` · ${pr.titles_flat} flat${pr.titles_flat == 1 ? "" : "s"} excluded` : "")
       : null],
+    ["asset register", pr.assets != null && pr.assets > 1
+      ? `${pr.assets} holdings here` : null],
+    ["register says", pr.stated_ha != null
+      ? `${Number(pr.stated_ha).toFixed(2)} ha` +
+        (pr.area_mismatch ? " ⚠ disagrees with the parcel" : "") : null],
     ["address", pr.address || null],
   ].filter(r => r[1]);
   return `<strong>${_esc(pr.owner || "Public land")}</strong>` +
     rows.map(([k, v]) => `<br><span style="font-size:11px">${_esc(k)}: ${_esc(String(v))}</span>`).join("") +
-    `<br><span style="font-size:10px;opacity:.7">Indicative — ownership point matched to parcel` +
-    (pr.match === "nearest" ? " (nearest within 30 m)" : "") + `.</span>`;
+    `<br><span style="font-size:10px;opacity:.7">${parcelMatchHTML(pr.match)}</span>`;
 }
 
 // Flip the footer attribution flag and refresh the datasource note.
@@ -6204,17 +6241,28 @@ function renderPublicLandSummary() {
     el.innerHTML = `<p class="hint" style="margin-top:6px">No publicly-owned parcels matched inside this catchment.</p>`;
     return;
   }
-  const OWNER_LABELS = {
-    local_authority: "Local authority", parish: "Parish / town",
-    combined_authority: "Combined authority", nhs: "NHS",
-    university: "University", police_fire: "Police / fire",
-    government: "Government", other: "Other public",
-  };
   const byOwner = pl.by_owner || {};
   const rows = Object.entries(byOwner)
     .sort((a, b) => b[1] - a[1])
-    .map(([k, v]) => `<div class="dd-pl-row"><span>${_esc(OWNER_LABELS[k] || k)}</span>` +
+    .map(([k, v]) => `<div class="dd-pl-row"><span>${_esc(OWNER_CLASS_LABELS[k] || k)}</span>` +
       `<span>${Number(v).toFixed(2)} ha</span></div>`).join("");
+  // How the parcels were attributed, counted off the features themselves so
+  // this needs no RPC change. A headline hectare figure that mixes a published
+  // asset register with a postcode centroid rescued from 30 m away reads as one
+  // number of equal quality, and it is not — so show the split.
+  const byMatch = {};
+  for (const f of ((pl.parcels_geojson || {}).features || [])) {
+    const k = (f.properties || {}).match || "unknown";
+    byMatch[k] = (byMatch[k] || 0) + 1;
+  }
+  const matchRows = Object.entries(byMatch)
+    .sort((a, b) => (PARCEL_MATCH[a[0]]?.rank ?? 9) - (PARCEL_MATCH[b[0]]?.rank ?? 9))
+    .map(([k, v]) => {
+      const m = PARCEL_MATCH[k];
+      const c = m ? PARCEL_MATCH_TIER_COLOR[m.tier] : "#868e96";
+      return `<div class="dd-pl-row"><span><span style="color:${c}">●</span> ` +
+        `${_esc(m ? m.label : k)}</span><span>${v}</span></div>`;
+    }).join("");
   const innerHa = Number(pl.inner_ha) || 0;
   // Rough capacity of the public holding at the active regime's rates.
   const dph = deep.developableDph || DPH_DEFAULTS;
@@ -6228,7 +6276,9 @@ function renderPublicLandSummary() {
     `<div class="dd-pl-rows">${rows}</div>` +
     (innerHa > 0 ? `<div class="dd-pl-row"><span>within ${deep.developable.inner_radius_m} m of the station</span><span>${innerHa.toFixed(2)} ha</span></div>` : "") +
     `<div class="dd-pl-row"><span>capacity at ${_esc(regime)} density</span><span>~${cap.toLocaleString()} homes</span></div>` +
-    `<p class="hint" style="margin-top:6px">Indicative: CCOD ownership points matched to INSPIRE parcels by location (individual flats excluded). Verify title-by-title before relying on it.</p>`;
+    (matchRows ? `<div class="dd-pl-sub">how attributed</div>` +
+                 `<div class="dd-pl-rows">${matchRows}</div>` : "") +
+    `<p class="hint" style="margin-top:6px">Indicative. Parcels marked as a published coordinate or UPRN come from the owner's own asset register; the rest are CCOD postcode centroids matched to INSPIRE parcels by location (individual flats excluded), which can stand for only one parcel per postcode. Verify title-by-title before relying on it.</p>`;
 }
 
 // Map legend for the deep dive — explains every colour currently painted.
