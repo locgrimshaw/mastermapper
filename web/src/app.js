@@ -1243,13 +1243,31 @@ const PARCEL_MATCH = {
 };
 const PARCEL_MATCH_TIER_COLOR = { high: "#2b8a3e", medium: "#f08c00", low: "#c92a2a" };
 
+// A PRECISE LOCATOR IS NOT THE SAME AS A CORRECT PARCEL. The register publishes
+// a point; the point falls inside whichever INSPIRE title happens to contain it,
+// and a title can be far larger than the holding. Measured on the real join:
+// of the 16,120 rows whose register states an area, 43.6% disagree with the
+// parcel by more than 5x, and one 0.027 ha holding landed inside a 4,118 ha
+// parcel. The 3,164 worst rows are under 10% of the layer but 43% of its area.
+// So a flagged row must never show as "high confidence" merely because the
+// locator was precise — the locator was; the parcel is the doubtful part.
+function parcelConfidence(pr) {
+  const m = PARCEL_MATCH[(pr || {}).match];
+  if (!m) return null;
+  if (pr && pr.area_mismatch) {
+    return { tier: "low", color: PARCEL_MATCH_TIER_COLOR.low,
+             label: m.label + ", but the parcel's size disagrees with the "
+                  + "register — the point may have landed in a larger title" };
+  }
+  return { tier: m.tier, color: PARCEL_MATCH_TIER_COLOR[m.tier], label: m.label };
+}
+
 // "how we know" line for a parcel popup. Unknown match values fall back to the
 // old wording rather than rendering a raw enum at the user.
-function parcelMatchHTML(match) {
-  const m = PARCEL_MATCH[match];
-  if (!m) return `Indicative — ownership point matched to parcel.`;
-  const c = PARCEL_MATCH_TIER_COLOR[m.tier];
-  return `<span style="color:${c}">●</span> ${_esc(m.tier)} confidence — ${_esc(m.label)}.`;
+function parcelMatchHTML(pr) {
+  const c = parcelConfidence(pr);
+  if (!c) return `Indicative — ownership point matched to parcel.`;
+  return `<span style="color:${c.color}">●</span> ${_esc(c.tier)} confidence — ${_esc(c.label)}.`;
 }
 
 // Layers persist when zooming OUT now: the bbox RPCs take a p_zoom argument
@@ -3190,7 +3208,7 @@ function hoverContentForOverlay(def, p) {
     kind = "Ground slope — 1 km cell";
     rows = [row(p.max_slope != null ? `${p.max_slope}°` : null, "steepest 50 m")];
   } else if (d === "public_parcel") {
-    const m = PARCEL_MATCH[p.match];
+    const m = parcelConfidence(p);
     title = p.owner || p.name || "Public land";
     kind = "Publicly owned parcel";
     rows = [row(OWNER_CLASS_LABELS[p.owner_class] || p.owner_class, "owner type"),
@@ -6145,7 +6163,7 @@ function publicLandPopupHTML(pr) {
   ].filter(r => r[1]);
   return `<strong>${_esc(pr.owner || "Public land")}</strong>` +
     rows.map(([k, v]) => `<br><span style="font-size:11px">${_esc(k)}: ${_esc(String(v))}</span>`).join("") +
-    `<br><span style="font-size:10px;opacity:.7">${parcelMatchHTML(pr.match)}</span>`;
+    `<br><span style="font-size:10px;opacity:.7">${parcelMatchHTML(pr)}</span>`;
 }
 
 // Flip the footer attribution flag and refresh the datasource note.
@@ -6251,9 +6269,12 @@ function renderPublicLandSummary() {
   // asset register with a postcode centroid rescued from 30 m away reads as one
   // number of equal quality, and it is not — so show the split.
   const byMatch = {};
+  let flaggedHa = 0;
   for (const f of ((pl.parcels_geojson || {}).features || [])) {
-    const k = (f.properties || {}).match || "unknown";
+    const pr = f.properties || {};
+    const k = pr.match || "unknown";
     byMatch[k] = (byMatch[k] || 0) + 1;
+    if (pr.area_mismatch) flaggedHa += Number(pr.clipped_ha) || 0;
   }
   const matchRows = Object.entries(byMatch)
     .sort((a, b) => (PARCEL_MATCH[a[0]]?.rank ?? 9) - (PARCEL_MATCH[b[0]]?.rank ?? 9))
@@ -6278,6 +6299,14 @@ function renderPublicLandSummary() {
     `<div class="dd-pl-row"><span>capacity at ${_esc(regime)} density</span><span>~${cap.toLocaleString()} homes</span></div>` +
     (matchRows ? `<div class="dd-pl-sub">how attributed</div>` +
                  `<div class="dd-pl-rows">${matchRows}</div>` : "") +
+    // The headline hectares and the capacity estimate derived from them are
+    // only as good as the parcels behind them. A register point can land in a
+    // title far bigger than the holding, so say how much of this total rests on
+    // a parcel whose size contradicts the register instead of burying it.
+    (flaggedHa > 0.005
+      ? `<div class="dd-pl-row" style="color:#c92a2a"><span>⚠ of which size disputed</span>` +
+        `<span>${flaggedHa.toFixed(2)} ha (${Math.round(100 * flaggedHa / (ha || 1))}%)</span></div>`
+      : "") +
     `<p class="hint" style="margin-top:6px">Indicative. Parcels marked as a published coordinate or UPRN come from the owner's own asset register; the rest are CCOD postcode centroids matched to INSPIRE parcels by location (individual flats excluded), which can stand for only one parcel per postcode. Verify title-by-title before relying on it.</p>`;
 }
 
