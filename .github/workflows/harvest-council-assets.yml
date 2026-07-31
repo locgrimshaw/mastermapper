@@ -52,15 +52,32 @@ jobs:
 
       - name: Summarise what landed
         if: always()
+        # Counted in Python, not awk. The previous shell one-liner nested double
+        # quotes inside a YAML double-quoted string, so awk received an empty
+        # pattern and reported "0 rows with a coordinate" while the harvester
+        # had in fact written 283,764 — a summary that contradicted the run it
+        # was summarising.
         run: |
-          if [ -f data/raw/council_assets.csv ]; then
-            echo "rows (incl. header): $(wc -l < data/raw/council_assets.csv)"
-            echo "distinct councils:   $(tail -n +2 data/raw/council_assets.csv | cut -d, -f1 | sort -u | wc -l)"
-            echo "rows with a coordinate: $(tail -n +2 data/raw/council_assets.csv | awk -F, "$3 != \"\"" | wc -l)"
-            head -5 data/raw/council_assets.csv
-          else
-            echo "::warning::no council_assets.csv produced"
-          fi
+          python - <<'PY'
+          import csv, collections, pathlib, sys
+          p = pathlib.Path("data/raw/council_assets.csv")
+          if not p.exists():
+              print("::warning::no council_assets.csv produced"); sys.exit(0)
+          n = coord = uprn = 0
+          per = collections.Counter()
+          with p.open(newline="", encoding="utf-8") as fh:
+              for r in csv.DictReader(fh):
+                  n += 1
+                  per[r["council"]] += 1
+                  if r.get("lng"):
+                      coord += 1
+                  elif r.get("uprn"):
+                      uprn += 1
+          print(f"rows: {n:,}   distinct councils: {len(per):,}")
+          print(f"located by coordinate: {coord:,}   by UPRN only: {uprn:,}")
+          for c, k in per.most_common(20):
+              print(f"  {k:>8,}  {c}")
+          PY
 
       - uses: actions/upload-artifact@v4
         if: always()

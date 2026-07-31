@@ -76,6 +76,30 @@ SLEEP_BETWEEN = float(os.environ.get("SLEEP_BETWEEN") or 0.4)
 UA = ("Mozilla/5.0 (compatible; MasterMapper/1.0; "
       "+public-land-asset-register-harvest)")
 
+# NOT EVERY DATASET A COUNCIL PUBLISHES IS A LAND HOLDING. The search phrases
+# are deliberately broad, so they also drag in transparency-code datasets that
+# happen to carry a UPRN or a coordinate. Two from the first coordinate-enabled
+# run show why this matters:
+#   Durham CC "Public street lighting" — 83,134 rows, one per lighting column.
+#       A street light standing in a parcel does not make the council the owner
+#       of that parcel.
+#   Cambridgeshire "Empty homes" — 574 rows of PRIVATELY owned houses. Joining
+#       those would attribute private homes to the council: the exact opposite
+#       of the truth, and invisible once it is a coloured polygon on a map.
+# Left unfiltered these would have been 28% of the harvest. Excluded here, at
+# discovery, so the file is never even downloaded — and reported, because a
+# silent denylist is how you lose a real register without noticing.
+TITLE_DENY = re.compile(
+    r"street\s*light|lighting\s*column|\bempty\s*(home|propert)|"
+    r"bus\s*stop|grit\s*bin|salt\s*bin|\bgull(y|ies)\b|road\s*sign|"
+    r"traffic\s*(signal|count|flow)|defibrillator|\bbench(es)?\b|"
+    r"\bcctv\b|litter\s*bin|waste\s*container|\btree(s)?\s*(survey|preservation)|"
+    r"planning\s*application|energy\s*performance|\bepc\b|business\s*rate|"
+    r"licen[cs]|food\s*hygiene|electoral|senior\s*salar|organisation\s*chart|"
+    r"trade\s*union|expenditure|payments?\s*to\s*suppliers|procurement|"
+    r"contract(s)?\s*register|parking\s*(fine|ticket|penalty)|\bpcn\b",
+    re.I)
+
 # A UPRN is a 1-12 digit number. Anything outside that is a mis-detected column.
 UPRN_RE = re.compile(r"^\d{1,12}$")
 UPRN_COL = re.compile(r"\buprn\b|unique\s*property\s*reference", re.I)
@@ -112,12 +136,34 @@ def _get(url, timeout=HTTP_TIMEOUT):
         return r.read(MAX_RESOURCE_BYTES + 1)
 
 
+def _get_retry(url, attempts=2):
+    """_get with one retry, but only for failures that might not repeat.
+
+    402 of 1,291 resources failed to fetch on the last run — 31%, and these are
+    small council web servers, so a slice of that is load rather than a dead
+    URL. A 404 or 403 will never succeed on a retry, so retrying those would
+    only add an hour to the crawl for nothing."""
+    last = None
+    for n in range(attempts):
+        try:
+            return _get(url)
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 and exc.code != 429:
+                raise                      # gone or forbidden: retrying is waste
+            last = exc
+        except Exception as exc:           # timeout, reset, DNS, bad TLS
+            last = exc
+        if n + 1 < attempts:
+            time.sleep(3.0)
+    raise last
+
+
 def discover():
     """Ask data.gov.uk for candidate asset-register datasets.
 
     Returns [(council, title, resource_url, fmt)]. Dedupes by resource URL so
     a dataset matching several queries is only fetched once."""
-    seen, found = set(), []
+    seen, found, denied = set(), [], []
     for q in QUERIES:
         start, page = 0, 200
         while True:
@@ -135,6 +181,11 @@ def discover():
             for p in pkgs:
                 org = ((p.get("organization") or {}).get("title")
                        or p.get("author") or "unknown")
+                ptitle = p.get("title") or ""
+                if TITLE_DENY.search(ptitle):
+                    if ptitle not in {d[1] for d in denied}:
+                        denied.append((org, ptitle))
+                    continue
                 for res in (p.get("resources") or []):
                     fmt = (res.get("format") or "").strip().lower()
                     href = (res.get("url") or "").strip()
@@ -149,6 +200,15 @@ def discover():
                 break
     print(f"[assets] {len(found)} candidate resource(s) across "
           f"{len({f[0] for f in found})} publisher(s)")
+    if denied:
+        # Printed in full, not counted. If a real asset register ever matches
+        # the denylist it has to be visible here, otherwise the harvest silently
+        # shrinks and the coverage report still looks healthy.
+        print(f"[assets] {len(denied)} dataset(s) excluded as not-a-land-holding:")
+        for org, t in sorted(denied)[:40]:
+            print(f"    - {org} — {t[:70]}")
+        if len(denied) > 40:
+            print(f"    ... and {len(denied) - 40} more")
     return found
 
 
@@ -246,7 +306,7 @@ def harvest(found):
         w.writeheader()
         for i, (council, title, href, fmt) in enumerate(found, 1):
             try:
-                blob = _get(href)
+                blob = _get_retry(href)
             except Exception as exc:
                 per_source.append((council, title, "fetch failed", 0))
                 continue
