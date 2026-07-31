@@ -34,6 +34,7 @@ publishing authorities, OGL.
 import csv
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -52,6 +53,32 @@ AREA_HI = float(os.environ.get("AREA_RATIO_HI") or "5.0")
 
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
+# Publishers whose rows are not land HOLDINGS even though the dataset passed the
+# harvester's title filter. The Joint Nature Conservation Committee's "Species
+# point records from 1987 OPRU HRE Newtown and Bembridge" is the case in point:
+# 451 rows of biological survey sightings, each with a grid reference. Joining
+# those would label a parcel as OWNED BY the JNCC because somebody once recorded
+# a bird standing on it.
+PUBLISHER_DENY = re.compile(r"joint\s*nature\s*conservation", re.I)
+# Northern Ireland: INSPIRE index polygons cover England and Wales only, so
+# these can never match. Dropped up front so they do not read as a join failure.
+NI_PUBLISHER = re.compile(r"opendatani|\bnorthern\s*ireland\b", re.I)
+
+
+def _dedupe_key(r):
+    """Identify the same holding across repeated snapshots of one register.
+
+    The Cabinet Office estate is published as several overlapping extracts —
+    79,416 + 65,630 + 52,994 + 880 + 418 rows of the same estate, 92% of the
+    whole harvest. A UPRN identifies a holding directly; otherwise the published
+    coordinate does, at 6dp (~0.1 m), which is far finer than any of these
+    registers actually locate a plot."""
+    u = (r.get("uprn") or "").strip()
+    c = (r.get("council") or "").strip().lower()
+    if u:
+        return (c, "u", u)
+    return (c, "c", round(r["_lng"], 6), round(r["_lat"], 6))
+
 
 def read_assets():
     """Asset rows that carry a usable locator, plus the set of UPRNs to resolve."""
@@ -60,8 +87,18 @@ def read_assets():
               "download the council_assets_csv artifact.", file=sys.stderr)
         return None, None
     rows, need = [], set()
+    seen = set()
+    n_read = n_dup = n_denied = n_ni = 0
     with ASSETS.open(newline="", encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
+            n_read += 1
+            council = r.get("council") or ""
+            if PUBLISHER_DENY.search(council):
+                n_denied += 1
+                continue
+            if NI_PUBLISHER.search(council):
+                n_ni += 1
+                continue
             lng, lat = r.get("lng") or "", r.get("lat") or ""
             uprn = (r.get("uprn") or "").strip()
             if lng and lat:
@@ -71,12 +108,26 @@ def read_assets():
                     continue
             elif uprn:
                 r["_lng"] = r["_lat"] = None
-                need.add(uprn)
             else:
                 continue
+            # Dedupe BEFORE the UPRN lookup: otherwise five snapshots of one
+            # estate inflate props.assets to "5 holdings here" for a parcel that
+            # holds one, and the popup states that as fact.
+            k = _dedupe_key(r)
+            if k in seen:
+                n_dup += 1
+                continue
+            seen.add(k)
+            if r["_lng"] is None:
+                need.add(uprn)
             rows.append(r)
-    print(f"[uprn] {len(rows):,} asset row(s); {len(need):,} need an OS Open "
-          f"UPRN lookup, {len(rows) - len(need):,} already carry a coordinate")
+    print(f"[uprn] {n_read:,} row(s) read -> {len(rows):,} distinct holding(s) "
+          f"({n_dup:,} duplicate row(s) across repeated register snapshots"
+          + (f", {n_denied:,} non-holding publisher" if n_denied else "")
+          + (f", {n_ni:,} Northern Ireland (no INSPIRE cover)" if n_ni else "")
+          + ")")
+    print(f"[uprn] {len(need):,} need an OS Open UPRN lookup, "
+          f"{len(rows) - len(need):,} already carry a coordinate")
     return rows, need
 
 

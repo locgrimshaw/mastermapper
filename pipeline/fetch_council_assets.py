@@ -112,7 +112,13 @@ TITLE_DENY = re.compile(
     r"planning\s*application|energy\s*performance|\bepc\b|business\s*rate|"
     r"licen[cs]|food\s*hygiene|electoral|senior\s*salar|organisation\s*chart|"
     r"trade\s*union|expenditure|payments?\s*to\s*suppliers|procurement|"
-    r"contract(s)?\s*register|parking\s*(fine|ticket|penalty)|\bpcn\b",
+    r"contract(s)?\s*register|parking\s*(fine|ticket|penalty)|\bpcn\b|"
+    # Biological survey records. The JNCC's "Species point records from 1987
+    # OPRU HRE Newtown and Bembridge" got through the first denylist: 451 rows
+    # of sightings, each with a grid reference, which would have made a parcel
+    # "owned by" the JNCC because a bird was once recorded standing on it.
+    r"species|biological\s*record|wildlife\s*(record|site)|habitat\s*survey|"
+    r"bird\s*(survey|count)|\bflora\b|\bfauna\b",
     re.I)
 
 # A UPRN is a 1-12 digit number. Anything outside that is a mis-detected column.
