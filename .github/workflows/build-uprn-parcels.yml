@@ -1,0 +1,118 @@
+name: Build precise public parcels (asset registers)
+
+# Attribute land parcels to public bodies using a PRECISE locator from their
+# published asset register — a UPRN or a coordinate — rather than a postcode
+# centroid.
+#
+# This ADDS to the existing public_parcel layer, it does not replace it:
+# LOAD_MODE=append skips the loader's dataset-wide delete, and the rows carry
+# their own 'ar-' source_id namespace so they can never collide with the
+# postcode-centroid rows (a lesson from the listed-building ingest, where a
+# shared id silently overwrote 51,000 better rows). Each row records match=
+# 'uprn' or 'coord' next to the existing 'contains'/'nearest', so the map can
+# show HOW a parcel was attributed instead of implying equal certainty.
+#
+# Reuses artifacts so nothing large is re-downloaded:
+#   assets_run_id  -> council_assets_csv from harvest-council-assets.yml
+#   parcels_run_id -> parcels-shard-* from build-parcel-tiles.yml
+# OS Open UPRN comes from the OS Data Hub downloads API (free, OGL, no key).
+
+on:
+  workflow_dispatch:
+    inputs:
+      assets_run_id:
+        description: "Run ID of the harvest-council-assets run to use"
+        required: true
+      parcels_run_id:
+        description: "Run ID of the build-parcel-tiles run whose shards to scan"
+        required: false
+        default: "30136665316"
+      load:
+        description: "Load into Supabase after building (false = build + artifact only)"
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install shapely pyproj
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: council_assets_csv
+          path: data/raw
+          run-id: ${{ inputs.assets_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Fetch OS Open UPRN
+        run: |
+          mkdir -p data/raw
+          # Only needed for registers that publish a UPRN rather than a
+          # coordinate. Best effort: if it fails, coordinate-bearing registers
+          # still load and the script says how many rows it dropped.
+          if curl -fL --retry 3 --retry-delay 10 -o data/raw/osuprn.zip \
+               "https://api.os.uk/downloads/v1/products/OpenUPRN/downloads?area=GB&format=CSV&redirect"; then
+            unzip -o -q data/raw/osuprn.zip -d data/raw/osuprn || true
+            f=$(find data/raw/osuprn -iname '*.csv' | head -1)
+            if [ -n "$f" ]; then mv "$f" data/raw/osopenuprn.csv; fi
+            rm -rf data/raw/osuprn data/raw/osuprn.zip
+            ls -la data/raw/osopenuprn.csv || echo "::warning::no CSV inside OpenUPRN.zip"
+          else
+            echo "::warning::OS Open UPRN download failed — UPRN-only rows will be skipped"
+          fi
+          df -h /
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: parcels-shard-*
+          merge-multiple: true
+          path: parcels
+          run-id: ${{ inputs.parcels_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Unpack the parcel shards
+        run: |
+          gunzip parcels/parcels-*.jsonl.gz
+          wc -l parcels/*.jsonl | tail -1
+          df -h /
+
+      - name: Join assets to parcels
+        env:
+          PARCEL_DIR: parcels
+          PYTHONUNBUFFERED: "1"
+        run: python pipeline/build_uprn_parcels.py
+
+      # Artifact BEFORE the load, so a failed load never costs the scan.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uprn_parcels_csv
+          path: supabase/datasets_import.csv
+          if-no-files-found: error
+
+      - name: Load into Supabase (append)
+        if: ${{ inputs.load != 'false' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: public_parcel
+          # CRITICAL: append, not replace. The default would DELETE all 112,650
+          # existing postcode-centroid public_parcel rows before upserting these.
+          LOAD_MODE: append
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."; exit 1
+          fi
+          python supabase/loaders/load_datasets.py
