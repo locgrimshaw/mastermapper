@@ -1212,7 +1212,12 @@ const MAP_OVERLAYS = [
   { key: "alc",                group: "sitefactors", label: "Agricultural land grades (ALC)", color: "#94d82d", dataset: "alc",                minZoom: 7 },
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
   { key: "ofcom_fibre",        group: "sitefactors", label: "Full-fibre availability (Ofcom)", color: "#1971c2", dataset: "ofcom_fibre",       minZoom: 5 },
-  { key: "slope_grid",         group: "sitefactors", label: "Ground slope (1 km cells)",       color: "#e8590c", dataset: "slope_grid",        minZoom: 8, lim: 8000, noOutline: true },
+  // gridAgg: a continuous 1 km value grid, so it is aggregated to the zoom
+  // (grid_in_bbox, migration 0042) rather than row-capped. Capping cut it along
+  // a latitude line, because the generic RPC orders by degree-area and a 1 km
+  // cell covers more longitude the further north it is.
+  { key: "slope_grid",         group: "sitefactors", label: "Ground slope (1 km cells)",       color: "#e8590c", dataset: "slope_grid",        minZoom: 8, lim: 8000, noOutline: true,
+    gridAgg: { avgKey: "slope", maxKey: "max_slope" } },
   // Built form is NOT here: a dot per building said nothing about the shape of
   // a place. It is now a footprint layer shaded by height, served from PMTiles
   // (setBuildingsVisible) because 1.5M polygons can't come from a bbox RPC.
@@ -1501,6 +1506,16 @@ async function _fetchMapOverlayNow(key, attempt = 0) {
       ? await sb.rpc("brownfield_in_bbox", { w, s, e, n, p_zoom })
       : def.ownership
       ? await sb.rpc("land_ownership_in_bbox", { p_bodies: def.bodies || null, w, s, e, n, p_zoom })
+      // Regular value grids aggregate to the zoom instead of being row-capped.
+      // features_in_bbox ends with `order by size_metric desc limit`, and
+      // size_metric is area in SQUARE degrees — which grows with latitude, so
+      // on a uniform metric grid that ordering is "northernmost first" and the
+      // cap sliced the layer along a horizontal line.
+      : def.gridAgg && ds
+      ? await sb.rpc("grid_in_bbox", { p_dataset: ds, w, s, e, n, p_zoom,
+          lim: def.lim || 8000,
+          p_avg_key: def.gridAgg.avgKey || null,
+          p_max_key: def.gridAgg.maxKey || null })
       : ds
       ? await sb.rpc("features_in_bbox", { p_dataset: ds, w, s, e, n, p_zoom,
           lim: def.lim || 4000,
@@ -3234,8 +3249,14 @@ function hoverContentForOverlay(def, p) {
     rows = [row(p.operator, "operator")];
   } else if (d === "slope_grid") {
     title = p.slope != null ? `${p.slope}° mean slope` : "Slope cell";
-    kind = "Ground slope — 1 km cell";
-    rows = [row(p.max_slope != null ? `${p.max_slope}°` : null, "steepest 50 m")];
+    // Cells merge as you zoom out (grid_in_bbox), so say what this square
+    // actually represents rather than always claiming a single 1 km cell.
+    const nCells = Number(p.cells) || 1;
+    kind = nCells > 1
+      ? `Ground slope — mean of ${nCells.toLocaleString()} × 1 km cells`
+      : "Ground slope — 1 km cell";
+    rows = [row(p.max_slope != null ? `${p.max_slope}°` : null,
+                nCells > 1 ? "steepest 50 m in group" : "steepest 50 m")];
   } else if (d === "public_parcel") {
     const m = parcelConfidence(p);
     title = p.owner || p.name || "Public land";
