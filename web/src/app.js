@@ -1122,7 +1122,22 @@ const MAP_OVERLAYS = [
   { key: "student_accom",   group: "students", label: "Existing PBSA stock (OSM)",  color: "#c2255c", dataset: "student_accom", render: "point", minZoom: 8, lim: 6000,
     radius: ["interpolate", ["linear"], ["zoom"], 7, 2.5, 11, 4.5, 15, 7] },
   { key: "uni_building",    group: "students", label: "University buildings (OSM)", color: "#5f3dc4", dataset: "uni_building", minZoom: 11 },
-  { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 11, lim: 8000 },
+  // PTAL is a 100 m grid over London — 159,451 cells — and the point of it is
+  // completeness, so the cap is set to return EVERY cell in view rather than a
+  // sample. The binding constraint is not the cap, though; it is what the bbox
+  // RPC costs to build. Measured with the 30% fetch margin actually applied:
+  //     z12   52,301 cells   14 MB   20.8 s   <- unusable
+  //     z13   13,286 cells  3.6 MB    1.4 s   <- fine
+  // ~400 us per feature goes on assembling the JSON document, and it is not the
+  // simplification: the same query with no simplify takes the same 20.8 s. So
+  // no cap or tuning makes z12 work through this RPC.
+  //
+  // minZoom 13 is therefore the honest floor, and it is not a regression: at
+  // z11 the RPC's sub-pixel filter already discarded these cells before the cap
+  // was reached (a 100 m cell is 1.3e-6 deg², the z11 threshold 1.9e-6 —
+  // asking for 200,000 returned TWO features), and z12 showed 8,000 of 52,301.
+  // A London-wide PTAL view needs PMTiles, like buildings and parcels.
+  { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 13, lim: 20000 },
   // Market & boundaries
   { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
   // Sold-price heatmaps: one server-side grid dataset at four resolutions
@@ -1334,7 +1349,7 @@ const LAYER_INFO = {
   uni_campus:          { about: "One dot per registered HE provider (the HQ). Click a dot for the PBSA deep-dive card: student numbers, international share and the term-time accommodation mix (private halls vs HMO vs living at home).", source: "UKRLP locations; HESA DT051 Tables 1 & 57, 2024/25 (CC-BY 4.0)" },
   uni_campus_site:     { about: "University campus grounds — the actual site extents, so multi-campus institutions show every campus, not just the HQ dot.", source: "© OpenStreetMap contributors (ODbL)" },
   uni_building:        { about: "Individual university building footprints. Zoom in close — these are dense.", source: "© OpenStreetMap contributors (ODbL)" },
-  ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only; zoom to city scale.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
+  ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only. Every cell in view is drawn — no sampling — which is why it needs a close zoom: the full 100 m grid is 159,451 cells and a wider view cannot be served from the database fast enough.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
   la_rents:            { about: "Average monthly private rents by local authority, shaded light (cheapest, ~£500) to deep teal (most expensive, £3,000+). Hover a district for its figure and annual change.", source: "ONS Price Index of Private Rents (OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
   power_line:          { about: "High-voltage lines, coloured and weight-scaled by voltage — deep red is the 275/400 kV transmission backbone, orange 90–200 kV, amber below. Wide zooms show the backbone; zoom in for the rest. Click a line for its details.", source: "© OpenStreetMap contributors (ODbL)" },
