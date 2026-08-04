@@ -36,9 +36,14 @@ on:
         description: "Which datasets to build (comma-separated, blank = all): lpa_boundary, local_plan_boundary, article4, tpo_zone, design_code_area, uni_campus, ptal, power_line, power_substation, gsp_boundary, tec_register, lad_boundary, la_rents, alc, water_availability"
         type: string
         default: ""
+      reload_run_id:
+        description: "RECOVERY: reload from a previous run's datasets_import_csv artifact instead of rebuilding (skips the 1.8 GB OSM download). Combine with 'datasets' to reload a subset."
+        type: string
+        default: ""
 
 permissions:
   contents: read
+  actions: read      # reading another run's artifact for the recovery path
 
 jobs:
   load:
@@ -62,7 +67,7 @@ jobs:
       # "all", which counts as requested. Best-effort throughout: any failure
       # emits a ::warning and the builder simply skips the power datasets.
       - name: Extract OSM power + university features (osmium)
-        if: ${{ inputs.datasets == '' || contains(inputs.datasets, 'power') || contains(inputs.datasets, 'tec') || contains(inputs.datasets, 'uni') || contains(inputs.datasets, 'bus_route') || contains(inputs.datasets, 'student_accom') || contains(inputs.datasets, 'building_height') }}
+        if: ${{ inputs.reload_run_id == '' && (inputs.datasets == '' || contains(inputs.datasets, 'power') || contains(inputs.datasets, 'tec') || contains(inputs.datasets, 'uni') || contains(inputs.datasets, 'bus_route') || contains(inputs.datasets, 'student_accom') || contains(inputs.datasets, 'building_height')) }}
         env:
           OSM_PBF_SRC: ${{ vars.OSM_PBF_SRC }}
           DATASETS_INPUT: ${{ inputs.datasets }}
@@ -210,7 +215,23 @@ jobs:
           rm -f data/raw/uk.osm.pbf data/raw/power.osm.pbf data/raw/university.osm.pbf data/raw/bus.osm.pbf data/raw/stuacc.osm.pbf data/raw/bld.osm.pbf
           ls -lh data/raw || true
 
+      # RECOVERY PATH. The load of 2026-08-01 cleared 22 datasets and then
+      # aborted, leaving them empty; its import CSV was still sitting in the
+      # run's artifacts, fully built. The loader's own error message told the
+      # operator to "re-run the load against the import CSV artifact" but
+      # there was no way to actually do that — so the only route back was a
+      # two-hour rebuild including a 1.8 GB OSM download. Now there is.
+      - name: Reuse a previous run's import CSV
+        if: ${{ inputs.reload_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: datasets_import_csv
+          path: supabase
+          run-id: ${{ inputs.reload_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Build the datasets import CSV
+        if: ${{ inputs.reload_run_id == '' }}
         env:
           DATASETS: ${{ inputs.datasets }}
           SIMPLIFY_M: "10"
@@ -248,6 +269,7 @@ jobs:
           python pipeline/build_datasets.py
 
       - name: Upload import CSV as a downloadable artifact
+        if: ${{ inputs.reload_run_id == '' }}
         uses: actions/upload-artifact@v4
         with:
           name: datasets_import_csv
@@ -267,6 +289,7 @@ jobs:
             echo "::error::under Settings > Secrets and variables > Actions, then re-run."
             exit 1
           fi
+          echo "import CSV: $(wc -l < supabase/datasets_import.csv) line(s)"
           python supabase/loaders/load_datasets.py
 
       - name: Re-aggregate the connection queue by Grid Supply Point
