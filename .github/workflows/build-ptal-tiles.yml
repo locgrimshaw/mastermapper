@@ -1,0 +1,135 @@
+name: Build PTAL tiles
+
+# PTAL (Public Transport Accessibility Level) as a single PMTiles file on
+# Supabase Storage — the same architecture as the parcel and building tiles,
+# and for the same reason.
+#
+# PTAL is a 100 m grid over Greater London: 159,451 cells. The per-viewport
+# bbox RPC cannot serve that at a London-wide zoom. Measured, with the
+# frontend's 30% fetch margin applied:
+#     z12   52,301 cells   14 MB   20.8 s     <- unusable
+#     z13   13,286 cells  3.6 MB    1.4 s
+# Raising the row cap does not help: the cost is ~400 us per feature spent
+# assembling the JSON document, not the geometry simplification (the identical
+# query with simplification removed takes the same 20.8 s). And below z12 the
+# cells were never reaching the cap anyway — the RPC discards geometry smaller
+# than a pixel, and a 100 m cell is under that threshold at z11, so asking for
+# 200,000 features returned two.
+#
+# Tiled once, PTAL costs the database nothing per view and is complete at every
+# zoom. The map_features copy stays: the deep dive and spot summary still query
+# it point-by-point, which is cheap.
+#
+# Runtime is a few minutes — this is a small tileset by this repo's standards.
+#
+# Licence: TfL PTAL 2023 via ArcGIS Hub, Open Government Licence.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "map_features dataset to tile"
+        required: false
+        default: "ptal"
+      props:
+        description: "Properties to keep (comma list). Fewer = better coalescing."
+        required: false
+        default: "ptal"
+      min_zoom:
+        description: "Tileset minimum zoom"
+        required: false
+        default: "8"
+      max_zoom:
+        description: "Tileset maximum zoom"
+        required: false
+        default: "14"
+
+permissions:
+  contents: read
+
+jobs:
+  tiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tippecanoe
+        run: |
+          sudo apt-get update -qq
+          if ! sudo apt-get install -y -qq tippecanoe; then
+            echo "No distro package — building from source."
+            sudo apt-get install -y -qq build-essential libsqlite3-dev zlib1g-dev
+            git clone --depth 1 https://github.com/felt/tippecanoe /tmp/tippecanoe
+            make -j"$(nproc)" -C /tmp/tippecanoe
+            sudo make -C /tmp/tippecanoe install
+          fi
+          tippecanoe --version
+
+      - name: Export the grid from Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TILE_DATASET: ${{ inputs.dataset }}
+          TILE_PROPS: ${{ inputs.props }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."; exit 1
+          fi
+          python pipeline/build_ptal_tiles.py
+          wc -l "data/raw/${{ inputs.dataset }}-tiles.jsonl"
+
+      - name: Tile with tippecanoe
+        env:
+          DS: ${{ inputs.dataset }}
+        run: |
+          # --coalesce merges ADJACENT features that share identical attributes.
+          # That is the whole game for a categorical grid: PTAL has nine grades,
+          # so blocks of same-grade 100 m cells collapse into single polygons and
+          # the low-zoom tiles shrink by an order of magnitude. It only works
+          # because the export drops the per-cell 'ai' float, which is unique per
+          # cell and would make every feature distinct.
+          # --reorder lets tippecanoe group like features so they ARE adjacent.
+          # No --drop-densest-as-needed: this is a continuous surface, and
+          # dropping cells would punch holes in it. Coalescing is what keeps
+          # tiles small here, so there is nothing to drop.
+          tippecanoe -o "$DS.pmtiles" -l "$DS" \
+            --minimum-zoom=${{ inputs.min_zoom }} \
+            --maximum-zoom=${{ inputs.max_zoom }} \
+            --coalesce --reorder \
+            --simplification=4 \
+            --no-tiny-polygon-reduction \
+            --force --read-parallel "data/raw/$DS-tiles.jsonl"
+          ls -la "$DS.pmtiles"
+
+      # Artifact BEFORE the upload, so a rejected upload never costs the build.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ptal-pmtiles
+          path: ${{ inputs.dataset }}.pmtiles
+          compression-level: 0
+
+      - name: Upload to Supabase storage (public tiles bucket)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DS: ${{ inputs.dataset }}
+        run: |
+          code=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' -X POST \
+            "$SUPABASE_URL/storage/v1/object/tiles/$DS.pmtiles" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/octet-stream" \
+            -H "x-upsert: true" \
+            -T "$DS.pmtiles")
+          cat /tmp/resp.txt; echo
+          if [ "$code" != "200" ]; then
+            echo "::error::Upload failed (HTTP $code). If it is a size rejection, raise Project Settings -> Storage -> Upload file size limit, then re-run this step against the ptal-pmtiles artifact."
+            exit 1
+          fi
+          echo "Uploaded: $SUPABASE_URL/storage/v1/object/public/tiles/$DS.pmtiles"

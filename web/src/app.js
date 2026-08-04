@@ -1122,22 +1122,21 @@ const MAP_OVERLAYS = [
   { key: "student_accom",   group: "students", label: "Existing PBSA stock (OSM)",  color: "#c2255c", dataset: "student_accom", render: "point", minZoom: 8, lim: 6000,
     radius: ["interpolate", ["linear"], ["zoom"], 7, 2.5, 11, 4.5, 15, 7] },
   { key: "uni_building",    group: "students", label: "University buildings (OSM)", color: "#5f3dc4", dataset: "uni_building", minZoom: 11 },
-  // PTAL is a 100 m grid over London — 159,451 cells — and the point of it is
-  // completeness, so the cap is set to return EVERY cell in view rather than a
-  // sample. The binding constraint is not the cap, though; it is what the bbox
-  // RPC costs to build. Measured with the 30% fetch margin actually applied:
-  //     z12   52,301 cells   14 MB   20.8 s   <- unusable
-  //     z13   13,286 cells  3.6 MB    1.4 s   <- fine
-  // ~400 us per feature goes on assembling the JSON document, and it is not the
-  // simplification: the same query with no simplify takes the same 20.8 s. So
-  // no cap or tuning makes z12 work through this RPC.
-  //
-  // minZoom 13 is therefore the honest floor, and it is not a regression: at
-  // z11 the RPC's sub-pixel filter already discarded these cells before the cap
-  // was reached (a 100 m cell is 1.3e-6 deg², the z11 threshold 1.9e-6 —
-  // asking for 200,000 returned TWO features), and z12 showed 8,000 of 52,301.
-  // A London-wide PTAL view needs PMTiles, like buildings and parcels.
-  { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 13, lim: 20000 },
+  // PTAL: EVERY cell, every zoom, served from PMTiles rather than the bbox RPC.
+  // The RPC could not do it. A single z12 view is 52,301 cells, 14 MB and
+  // 20.8 s — and it is not the simplification, since removing it changes
+  // nothing; roughly 400 us per feature goes on building the JSON document, so
+  // no row cap or index helps. Below z12 the cells were discarded as sub-pixel
+  // before the cap was even reached: asking for 200,000 features at z11
+  // returned TWO. Tiles have no such ceiling and cost the database nothing.
+  // `dataset` stays for the popup and colour ramp; `tiles` routes the DATA away
+  // from the RPC, reusing the ov-ptal-* layer ids so taps and opacity work.
+  { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 8,
+    tiles: { file: "ptal.pmtiles", sourceLayer: "ptal", minzoom: 8, outlineFromZoom: 15 },
+    cap: { color: ["match", ["to-string", ["get", "ptal"]],
+           "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
+           "3", "#fee391", "4", "#fe9929", "5", "#ec7014",
+           "6a", "#cc4c02", "6b", "#8c2d04", "#f03e3e"] } },
   // Market & boundaries
   { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
   // Sold-price heatmaps: one server-side grid dataset at four resolutions
@@ -1482,6 +1481,11 @@ async function _fetchMapOverlayNow(key, attempt = 0) {
   const st = overlayState[key] || (overlayState[key] = { opacity: OVERLAY_DEFAULT_OPACITY });
   const mySeq = st.reqSeq;
   if (!st.on) return;                    // toggled off while queued
+  // Tile-served layers have no per-viewport fetch at all: MapLibre pulls the
+  // range requests it needs straight from the PMTiles file. They deliberately
+  // reuse the ov-<key>-* layer ids so the tap dispatcher, the opacity slider
+  // and removeOverlayLayers keep working untouched.
+  if (def.tiles) { await ensureOverlayTiles(key, def); return; }
   const zoom = map.getZoom();
   if (zoom < overlayMinZoom(key)) {
     st.fetched = null;
@@ -1636,6 +1640,54 @@ const HEAT_COLOR = ["interpolate", ["linear"], ["heatmap-density"],
   0.87, "#f46d43",
   0.94, "#d73027",
   1, "#a50026"];
+
+// Stand up (or tear down) a PMTiles-backed overlay. Used where a dataset is too
+// large to serve per viewport from Postgres — PTAL is a 100 m grid of 159,451
+// cells, and the bbox RPC needed 20.8 s and 14 MB for a single z12 view because
+// it spends ~400 us per feature building JSON. Tiles cost the database nothing
+// per view and are complete at every zoom.
+//
+// The layer ids are the SAME ov-<key>-fill / -line the geojson path uses, so the
+// tap dispatcher, opacity slider, attribution and teardown all work unchanged.
+async function ensureOverlayTiles(key, def) {
+  const st = overlayState[key] || (overlayState[key] = { opacity: OVERLAY_DEFAULT_OPACITY });
+  const stat = document.getElementById(`ov-stat-${key}`);
+  const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`;
+  const cfg = window.MASTERMAPPER_CONFIG || {};
+  if (!cfg.SUPABASE_URL) { if (stat) stat.textContent = "n/a"; return; }
+  const url = `${cfg.SUPABASE_URL}/storage/v1/object/public/tiles/${def.tiles.file}`;
+  // Probe once. A missing tile file should say so plainly rather than leaving an
+  // enabled layer that silently draws nothing.
+  if (st.tilesAvailable === undefined) {
+    try {
+      const r = await fetch(url, { method: "HEAD" });
+      st.tilesAvailable = r.ok;
+    } catch (_) { st.tilesAvailable = false; }
+  }
+  if (!st.tilesAvailable) {
+    if (stat) stat.textContent = "tiles not built yet";
+    return;
+  }
+  if (!map.getSource(srcId))
+    map.addSource(srcId, { type: "vector", url: "pmtiles://" + url });
+  const opacity = st.opacity ?? OVERLAY_DEFAULT_OPACITY;
+  const before = overlayBeforeId();
+  if (!map.getLayer(fillId))
+    map.addLayer({ id: fillId, type: "fill", source: srcId,
+      "source-layer": def.tiles.sourceLayer || key,
+      paint: { "fill-color": (def.cap && def.cap.color) || def.color,
+               "fill-opacity": opacity } }, before);
+  // Outline only close in: on a dense grid at wide zoom, borders would read as
+  // a mesh rather than a surface.
+  if (!map.getLayer(lineId) && def.tiles.outlineFromZoom != null)
+    map.addLayer({ id: lineId, type: "line", source: srcId,
+      "source-layer": def.tiles.sourceLayer || key,
+      minzoom: def.tiles.outlineFromZoom,
+      paint: { "line-color": "#ffffff", "line-width": 0.3,
+               "line-opacity": 0.35 * opacity } }, before);
+  if (stat) stat.textContent = `streams from z${def.tiles.minzoom ?? 0}`;
+  updateOverlayAttribution();
+}
 
 function renderOverlay(key, def, fc) {
   const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`,
