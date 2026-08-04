@@ -195,6 +195,17 @@ def delete_dataset(dataset: str) -> bool:
     So now: retry, verify the dataset is actually empty afterwards, and return
     False only when it genuinely isn't — main() turns that into a hard failure
     rather than a warning nobody reads."""
+    # CHUNKED, because a single DELETE over a large dataset cannot finish inside
+    # the statement timeout. building_height is 1.5M rows and timed out four
+    # times running on 2026-08-01; the loader then aborted with 22 other
+    # datasets already cleared and none reloaded. delete_dataset_chunk
+    # (migration 0041) bounds each statement so any size clears eventually.
+    if _delete_in_chunks(dataset):
+        print(f"  cleared existing rows for dataset '{dataset}'")
+        return True
+
+    # Fall back to the old unbounded delete if the RPC is unavailable (an older
+    # database that has not had migration 0041 applied).
     url = (f"{SUPABASE_URL}/rest/v1/map_features"
            f"?dataset=eq.{urllib.parse.quote(dataset)}")
     for attempt in range(1, 5):
@@ -219,6 +230,31 @@ def delete_dataset(dataset: str) -> bool:
             print(f"  {left:,} row(s) still present for '{dataset}' after "
                   f"attempt {attempt}")
     return False
+
+
+def _delete_in_chunks(dataset: str, chunk: int = 50000) -> bool:
+    """Clear a dataset via the bounded-delete RPC. True once it is empty."""
+    body = json.dumps({"p_dataset": dataset, "p_limit": chunk}).encode()
+    removed = 0
+    while True:
+        try:
+            req = urllib.request.Request(
+                f"{SUPABASE_URL}/rest/v1/rpc/delete_dataset_chunk",
+                data=body, method="POST",
+                headers={**_headers(), "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                n = int((resp.read() or b"0").decode("utf-8", "replace").strip() or 0)
+        except Exception as exc:
+            if removed:
+                print(f"  chunked delete of '{dataset}' stopped after "
+                      f"{removed:,} row(s): {exc}")
+            return False
+        removed += n
+        if n == 0:
+            return count_dataset(dataset) == 0
+        if removed % 500000 < chunk:
+            print(f"    cleared {removed:,} row(s) of '{dataset}' so far",
+                  flush=True)
 
 
 def _batches(records, max_rows, max_bytes):
@@ -271,12 +307,13 @@ def _post_with_retry(url, body, headers, attempts=5):
     return False, "unreachable"
 
 
-def upsert(records: list):
+def upsert(records: list, label: str = "") -> tuple:
     """Upsert records into Supabase via PostgREST (on_conflict dataset,source_id).
 
     Resilient: if a batch fails, it reports the reason and keeps going, so one
-    hiccup doesn't throw away the whole run. Exits non-zero only if nothing at
-    all loaded."""
+    hiccup doesn't throw away the whole run. Returns (loaded, failed) — the
+    CALLER decides what a total failure means, because for a per-dataset load
+    the other datasets must still get their turn."""
     url = (f"{SUPABASE_URL}/rest/v1/map_features"
            "?on_conflict=dataset,source_id")
     headers = _headers()
@@ -285,17 +322,13 @@ def upsert(records: list):
         ok, why = _post_with_retry(url, body, headers)
         if ok:
             total += len(rows)
-            print(f"  upserted {total} / {len(records)}")
+            print(f"  upserted {total} / {len(records)}{label}")
         else:
             failed += len(rows)
             print(f"  batch starting {i} ({len(rows)} rows, "
                   f"{len(body) / 1e6:.1f} MB) failed: {why}")
             # Keep going — a later batch may be fine, and partial load beats none.
-    if total == 0:
-        print("Nothing loaded — every batch failed. See the error above.")
-        sys.exit(1)
-    print(f"Done: upserted {total} map features"
-          + (f" ({failed} failed)." if failed else "."))
+    return total, failed
 
 
 def main() -> int:
@@ -317,31 +350,68 @@ def main() -> int:
     for dataset in sorted(by_dataset):
         print(f"    {dataset:20s} {by_dataset[dataset]}")
 
-    # Full replace by default: clear each dataset present in the CSV (and the
-    # DATASETS filter) before upserting its fresh rows. LOAD_MODE=append skips
-    # the delete — used for datasets built up incrementally across runs (the
-    # per-LA INSPIRE parcel ingests), where a delete would wipe earlier LAs.
-    if os.environ.get("LOAD_MODE", "replace").strip().lower() == "append":
+    append = os.environ.get("LOAD_MODE", "replace").strip().lower() == "append"
+    if append:
+        # Used by loads built up across runs (the per-LA INSPIRE parcel
+        # ingests), where a delete would wipe earlier LAs.
         print("LOAD_MODE=append — existing rows kept; matching keys refreshed.")
-    else:
-        print("Clearing datasets being reloaded ...")
-        undeleted = [d for d in sorted(by_dataset) if not delete_dataset(d)]
-        if undeleted:
-            # Loading fresh rows on top of rows that should have gone produces
-            # a dataset that looks fine and is partly stale. Refuse: the CSV is
-            # kept as a workflow artifact, so re-loading after clearing by hand
-            # costs nothing, whereas silently-wrong ownership data is expensive.
-            print(f"::error::Could not clear {', '.join(undeleted)} — refusing "
-                  "to upsert on top of rows that should have been replaced. "
-                  "Delete them (in batches if the table is large) and re-run "
-                  "the load against the import CSV artifact.")
-            return 1
 
-    upsert(records)
+    # ONE DATASET AT A TIME: clear it, then immediately load it.
+    #
+    # This used to clear EVERY dataset first and upsert afterwards, and refuse
+    # to upsert at all if any clear had failed. On 2026-08-01 the delete of
+    # building_height (1.5M rows) hit the statement timeout, and that single
+    # failure aborted the run with 22 already-cleared datasets — universities,
+    # substations, PTAL, TPO zones, boundaries — deleted and never reloaded.
+    # The guard was meant to stop a dataset going half-stale; instead it turned
+    # one dataset's timeout into total loss of twenty-two others.
+    #
+    # Per-dataset, a failure can only ever affect its own dataset: the clear
+    # and the load are adjacent, and every other dataset still gets its turn.
+    # Refusing to upsert onto rows that should have gone is still right — that
+    # is what produced a 45%-wrong public_parcel once — but it is now a
+    # per-dataset decision, not a kill switch for the whole run.
+    total_loaded, total_failed = 0, 0
+    skipped, partial = [], []
+    for dataset in sorted(by_dataset):
+        rows = [r for r in records if r["dataset"] == dataset]
+        if not append:
+            if not delete_dataset(dataset):
+                # Left alone deliberately: the OLD rows are still there, so the
+                # layer keeps working with stale data rather than emptying.
+                print(f"::warning::Could not clear '{dataset}' — skipping its "
+                      f"{len(rows):,} new row(s) rather than mixing them into "
+                      "rows that should have been replaced. Its existing data "
+                      "is untouched; other datasets continue.")
+                skipped.append(dataset)
+                continue
+        print(f"  loading {dataset} ({len(rows):,} rows) ...")
+        loaded, failed = upsert(rows, f"  [{dataset}]")
+        total_loaded += loaded
+        total_failed += failed
+        if failed:
+            partial.append(f"{dataset} ({failed:,} row(s) failed)")
+
+    print(f"Done: upserted {total_loaded:,} map features"
+          + (f" ({total_failed:,} failed)." if total_failed else "."))
+    if partial:
+        print(f"::warning::Partially loaded: {', '.join(partial)}")
+    if skipped:
+        print(f"::error::Could not clear, so NOT reloaded: {', '.join(skipped)}. "
+              "Their previous rows are still in place. Re-run the load for just "
+              "those datasets (DATASETS=...) against the import CSV artifact.")
+    if total_loaded == 0:
+        print("::error::Nothing loaded at all.")
+        return 1
 
     # Stamp the freshness ledger (best-effort — a failed stamp never fails
     # the load): dataset -> loaded_at + row count in public.dataset_meta.
-    for dataset in sorted(by_dataset):
+    # SKIPPED datasets are deliberately not stamped: this ledger is the record
+    # used to work out what is stale, and marking a dataset as freshly loaded
+    # when it was not is how a gap stays invisible. (dataset_meta still showing
+    # census_students and student_accom as loaded on 24 July, long after they
+    # were deleted, is what finally identified this bug.)
+    for dataset in sorted(d for d in by_dataset if d not in skipped):
         try:
             import datetime as _dt
             body = json.dumps([{"dataset": dataset,
@@ -359,7 +429,9 @@ def main() -> int:
                 resp.read()
         except Exception as exc:
             print(f"  note: freshness stamp for '{dataset}' failed ({exc})")
-    return 0
+    # Non-zero if anything was skipped, so a partial run is never green — but
+    # only AFTER everything that could load has loaded.
+    return 1 if skipped else 0
 
 
 if __name__ == "__main__":
