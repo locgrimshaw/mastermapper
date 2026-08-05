@@ -1,0 +1,12 @@
+-- 0057: refresh the built-land tiles ONCE per rebuild, not once per batch.
+-- Every A-Z prefix batch TRUNCATE+refilled built_land_bng; 26 rapid churns
+-- invite autovacuum onto the table and the next TRUNCATE's ACCESS EXCLUSIVE
+-- lock then waits past the 8 s lock_timeout (55P03, run 31020269661, from
+-- prefix ~W onward). The tiles derive from the constraint layers, not from
+-- which stations are being rebuilt — refresh on the first batch only
+-- (empty prefix or 'A'); single-prefix manual runs reuse current tiles.
+-- Also carries 0056's geometry alignment: the developable RPC is called
+-- with min_plot_m2 => 4046.856 (1 acre) and min_width_m => 15, matching
+-- defaultDevelopableConfig() in app.js.
+-- (Full function body as applied — see the live definition; identical to
+-- 0056's except the conditional refresh_built_land_bng call.)

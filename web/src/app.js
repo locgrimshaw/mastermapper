@@ -183,13 +183,17 @@ let greenbeltAttributionShown = false;
 function defaultDevelopableConfig() {
   const subtract = {};
   for (const k of DEVELOPABLE_SUBTRACT_KINDS) subtract[k.key] = k.on;
-  // minPlotAc: drop developable plots below this many acres (0 = keep all).
+  // minPlotAc: drop developable plots below this many acres. Default 1 acre —
+  // sub-acre fragments aren't schemes, and the SIFT's precomputed hectares
+  // use the same floor (rebuild_station_assessments passes 1 acre + 15 m), so
+  // the two surfaces describe the same land by default. Changing either
+  // default means changing BOTH, or sift and dive will disagree again.
   // largestOnly: keep only the single largest contiguous developable plot.
   // minWidthM: drop anything narrower than this, wherever it occurs — an AREA
   // test can't catch a 4 m x 300 m ribbon left along a railway or a road verge,
   // which is big enough to pass but impossible to build on. 15 m is about the
   // narrowest strip that takes a single row of housing plus access.
-  return { radius_m: 800, inner_radius_m: 200, subtract, minPlotAc: 0,
+  return { radius_m: 800, inner_radius_m: 200, subtract, minPlotAc: 1,
            largestOnly: false, minWidthM: 15 };
 }
 
@@ -11633,8 +11637,11 @@ async function loadSiftData() {
     // the sift MUST price land from the same published benchmark the deep
     // dive uses, or the two read different verdicts for the same station
     // (Kensal Green: '£160M profit' in the sift, 'unviable' in its dive).
+    // ONE jsonb object, not rows: PostgREST caps set-returning responses at
+    // 1,000 rows and there are 2,007 stations with a value — the row version
+    // silently dropped half the country back onto proxy land.
     const landValuesP = sb.rpc("station_land_values")
-      .then(r => new Map((r.data || []).map(x => [x.crs, Number(x.land_value_ha) || null])))
+      .then(r => new Map(Object.entries(r.data || {}).map(([k, v]) => [k, Number(v) || null])))
       .catch(() => new Map());
     const PAGE = 1000;
     let data = [], from = 0;
