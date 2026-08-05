@@ -7011,6 +7011,8 @@ async function renderDeepDiveViability() {
       <div class="dd-pl-row"><span>GDV</span><span>${money(ap.gdv)}</span></div>
       <div class="dd-pl-row"><span>total cost incl. finance</span><span>${money(ap.totalCost)}</span></div>
       <div class="dd-pl-row"><span>residual land value</span><span>${money(ap.residualLandValue)}</span></div>
+      <div class="dd-pl-row"><span>RLV ÷ benchmark land</span><span>${ap.rlvVsBlv == null ? "n/a" : ap.rlvVsBlv.toFixed(2) + "×"}</span></div>
+      <div class="dd-pl-row"><span>land localisation</span><span>${ap.landScale == null ? "—" : "×" + ap.landScale.toFixed(2) + " (value-linked)"}</span></div>
       <div class="dd-pl-row"><span>peak debt</span><span>${money(ap.peakDebt)}</span></div>
       <div class="dd-pl-row"><span>sales value basis</span><span>${ap.local ? `local £${Math.round((deep.ppm2 || 0)).toLocaleString()}/m²` : "regional fallback"}</span></div>
       <div class="dd-pl-row"><span>build cost index</span><span>${mc && mc.factor ? mc.factor.toFixed(2) + "× (" + (mc.factorRegion || "local") + ")" : "1.00× (national)"}</span></div>
@@ -7938,6 +7940,8 @@ function viabPreviewHTML(r, label) {
     `<div class="viab-kpi"><b>${pct(r.profitOnCost)}</b><span>profit on cost</span></div>` +
     `<div class="viab-kpi"><b>${pct(r.profitOnGdv)}</b><span>profit on GDV</span></div>` +
     `<div class="viab-kpi"><b>${money(r.residualLandValue)}</b><span>residual land value</span></div>` +
+    `<div class="viab-kpi"><b>${r.rlvVsBlv == null ? "n/a" : r.rlvVsBlv.toFixed(2) + "×"}</b><span>RLV ÷ benchmark land</span></div>` +
+    `<div class="viab-kpi"><b>${r.landScale == null ? "—" : "×" + r.landScale.toFixed(2)}</b><span>land localisation</span></div>` +
     `<div class="viab-kpi"><b>${r.irr == null ? "n/a" : pct(r.irr)}</b><span>IRR (equity)</span></div>` +
     `<div class="viab-kpi"><b>${money(r.peakDebt)}</b><span>peak debt</span></div>` +
     `<div class="viab-kpi"><b>${money(r.gdv)}</b><span>GDV</span></div>` +
@@ -8126,14 +8130,18 @@ async function _generateSiteReport() {
     const units = homesFor(totHa, totInner, regime);
 
     // Parallel gather — the report never fails outright on one source; each
-    // section says what it could not get.
+    // section says what it could not get. sb may be null (DB unconfigured):
+    // the report still builds from what the deep dive already holds.
+    const sb = (typeof getSupabase === "function") ? getSupabase() : null;
     const [summary, slope, img] = await Promise.all([
-      sb.rpc("polygon_summary", { p_geojson: JSON.stringify(unionFeat.geometry) })
-        .then(r => r.error ? null : r.data).catch(() => null),
-      sb.rpc("grid_in_bbox", { p_dataset: "slope_grid",
-          w: bbox[0], s: bbox[1], e: bbox[2], n: bbox[3],
-          p_zoom: 13, lim: 2000, p_avg_key: "slope", p_max_key: "max_slope" })
-        .then(r => r.error ? null : r.data).catch(() => null),
+      !sb ? Promise.resolve(null)
+        : sb.rpc("polygon_summary", { p_geojson: JSON.stringify(unionFeat.geometry) })
+            .then(r => r.error ? null : r.data).catch(() => null),
+      !sb ? Promise.resolve(null)
+        : sb.rpc("grid_in_bbox", { p_dataset: "slope_grid",
+              w: bbox[0], s: bbox[1], e: bbox[2], n: bbox[3],
+              p_zoom: 13, lim: 2000, p_avg_key: "slope", p_max_key: "max_slope" })
+            .then(r => r.error ? null : r.data).catch(() => null),
       captureMapImage(bbox),
     ]);
 
@@ -11157,6 +11165,8 @@ const VIAB_SCHEMA = [
     tip: "EUV per hectare (agricultural ≈ £20–30k/ha; industrial and urban uses far higher).", source: "assumption" },
   { key: "euvPremiumPct", group: "land", label: "EUV premium", unit: "%", step: 5, default: 100,
     tip: "Uplift on EUV to incentivise release (PPG: a premium to the landowner).", source: "PPG viability guidance" },
+  { key: "landLocalisePct", group: "land", label: "Localise land to values", unit: "%", step: 10, default: 100,
+    tip: "The benchmark figures above are NATIONAL-average opening positions. This scales them with the scheme's sales value relative to the fallback £/ft² reference — at 100%, a £700/ft² location carries ~2× the land cost of a £350/ft² one; at 0% land is flat everywhere (which makes high-value areas look artificially viable). Land values track sales values; replace with a local land benchmark when you hold one.", source: "model (value-linked)" },
   // Build
   { key: "buildPm2House", group: "build", label: "Build cost — houses", unit: "£/m²", step: 25, default: 1650,
     tip: "New-build houses, GIA. Seeded from a free proxy (ONS construction indices + regional factors), NOT BCIS — paste your own BCIS rate here if you hold a licence.", source: "free proxy" },
@@ -11214,6 +11224,8 @@ const VIAB_SCHEMA = [
     tip: "Education, healthcare, transport, open space heads of terms.", source: "LPA precedent" },
   { key: "bngPerUnit", group: "policy", label: "BNG", unit: "£k/unit", step: 0.5, default: 2,
     tip: "10% biodiversity net gain — cheap where on-site delivery works, £20k+/unit where off-site units must be bought.", source: "assumption" },
+  { key: "policyLocalisePct", group: "policy", label: "Localise CIL/S106 to values", unit: "%", step: 10, default: 100,
+    tip: "CIL charging schedules and S106 asks broadly track local values (London boroughs charge multiples of northern authorities; no free national rates table exists). At 100% the CIL and S106 figures scale with the scheme's sales value vs the £/ft² reference; at 0% they are flat national figures. BNG is NOT scaled — habitat cost isn't value-linked. Pin the real charging-schedule rate and set this to 0 when you know it.", source: "model (value-linked)" },
   // Targets
   { key: "profitTargetPct", group: "targets", label: "Profit target (on cost)", unit: "%", step: 0.5, default: 17.5,
     tip: "The viability threshold: schemes below half this read unviable.", source: "PPG: 15–20% of GDV typical" },
@@ -11337,12 +11349,21 @@ function computeAppraisal(inputs, a, opts) {
   const hardCost = buildBase + abnormals + prepInfra;
   const fees = hardCost * ((a.profFeesPct || 0) / 100);
   const contingency = hardCost * ((a.contingencyPct || 0) / 100);
-  const policyCosts = units * (((a.cilPerUnit || 0) + (a.s106PerUnit || 0)
-                              + (a.bngPerUnit || 0)) * 1000);
-  const salesCosts = gdv * ((a.salesCostPct || 0) / 100);
-  const land = a.landBasis === "euvPlus" && inputs.areaHa > 0
+  // Local-value ratio: this scheme's £/ft² (local Land Registry figure when
+  // loaded, else the regional fallback) over the national reference. Land
+  // values and policy charges both track sales values, so a flat national
+  // £/unit made London land artificially cheap and its schemes artificially
+  // viable. Clamped: sub-Barnsley or super-Mayfair ratios are data noise.
+  const refPsf = a.salesPsf || 350;
+  const valueRatio = Math.min(6, Math.max(0.25, refPsf > 0 ? price / refPsf : 1));
+  const landScale = 1 + (valueRatio - 1) * ((a.landLocalisePct ?? 100) / 100);
+  const policyScale = 1 + (valueRatio - 1) * ((a.policyLocalisePct ?? 100) / 100);
+  const policyCosts = units * (((a.cilPerUnit || 0) + (a.s106PerUnit || 0)) * policyScale
+                              + (a.bngPerUnit || 0)) * 1000;
+  const land = (a.landBasis === "euvPlus" && inputs.areaHa > 0
     ? inputs.areaHa * (a.euvPerHa || 0) * 1000 * (1 + (a.euvPremiumPct || 0) / 100)
-    : units * (a.blvPerUnit || 0) * 1000;
+    : units * (a.blvPerUnit || 0) * 1000) * landScale;
+  const salesCosts = gdv * ((a.salesCostPct || 0) / 100);
 
   // --- Cashflow, finance, IRR ----------------------------------------------
   const months = preCon + build + Math.max(0, sell - overlap) + 1;
@@ -11404,6 +11425,10 @@ function computeAppraisal(inputs, a, opts) {
   // reported beside the fixed-land profit, because clients ask both questions.
   const nonLand = totalCost - land;
   const residualLandValue = gdv - nonLand - gdv * ((a.profitTargetGdvPct || 15) / 100);
+  // The industry viability test in ratio form: RLV ÷ benchmark land value.
+  // ≥1 means the scheme can pay the (localised) benchmark and still hit the
+  // target margin; <1 means the land demands more than the scheme can bear.
+  const rlvVsBlv = land > 0 ? residualLandValue / land : null;
 
   // IRR on the equity cashflow (monthly, bisection, annualised). Null when the
   // flows are degenerate — an "IRR" of a no-equity or loss-making stream is
@@ -11449,7 +11474,7 @@ function computeAppraisal(inputs, a, opts) {
   return {
     profitOnCost: poc, profitOnGdv: pog, rag, score,
     price: Math.round(price), local: localPsf != null,
-    gdv, totalCost, profit, residualLandValue, irr, peakDebt,
+    gdv, totalCost, profit, residualLandValue, rlvVsBlv, valueRatio, landScale, irr, peakDebt,
     cashflow: { out, inn, equityFlow, months, interest, financeFee },
     sensitivity,
     waterfall: [
