@@ -9,6 +9,13 @@ name: Rebuild station assessments
 # MUST be refilled afterwards — the last three calls are not optional.
 # Batched by CRS first letter so each call fits comfortably inside the
 # service_role 20-minute statement budget.
+#
+# KNOWN LIMIT: rebuild_station_socioecon and rebuild_station_prices each run
+# ~125 s — a whisker over the API gateway's ~120 s ceiling — and CANNOT be
+# prefix-batched (socioecon ranks percent_rank() across ALL stations). If
+# they 504 here, finish by running 'select rebuild_station_socioecon();' and
+# 'select rebuild_station_prices();' as direct SQL (e.g. the SQL editor),
+# which has no gateway in the path.
 
 on:
   workflow_dispatch:
