@@ -2532,3 +2532,17 @@ footer {
   width: 10px; height: 10px; border-radius: 2px; flex: none;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
 }
+
+/* Land assembler: basket rows + assemble-mode state. */
+#dd-assemble-toggle.active { background: #f59f00; border-color: #f59f00; color: #1a1a1a; }
+.asm-remove {
+  border: none; background: transparent; color: #c92a2a; cursor: pointer;
+  font-size: 13px; padding: 0 2px; line-height: 1;
+}
+.asm-actions { display: flex; gap: 8px; margin-top: 6px; }
+#dd-assembly-name {
+  width: 100%; margin-top: 8px; padding: 5px 8px; font-size: 12px;
+  border: 1px solid var(--ink-line); border-radius: 6px;
+  background: transparent; color: var(--text);
+}
+.ddl-assemble { color: #f59f00; font-weight: 600; }

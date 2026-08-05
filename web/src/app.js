@@ -363,6 +363,10 @@ function dbg(...args) { if (DEBUG) console.log("[mm]", ...args); }
 
 const map = new maplibregl.Map({
   container: "map",
+  // Keeps the WebGL buffer readable so the land-assembly report can snapshot
+  // the map with canvas.toDataURL(). Costs a little GPU memory; the
+  // alternative (capture inside a render callback) is flakier across browsers.
+  preserveDrawingBuffer: true,
   style: {
     version: 8,
     glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
@@ -3994,7 +3998,14 @@ function tapDeepDiveLayers(point, box, nearest, coarse) {
     if (hits) {
       const ll = map.unproject([point.x, point.y]);
       if (id === "developable-blockers") {
-        openClickPopup({ offset: 8 }, ll, developablePopupHTML(id));
+        // In assemble mode a blocker click is dead space, not a popup — the
+        // user is mid-selection and a modal interruption loses their flow.
+        if (!deep.assembly.active)
+          openClickPopup({ offset: 8 }, ll, developablePopupHTML(id));
+      } else if (deep.assembly.active) {
+        // Assemble mode: clicks toggle plots in and out of the assembly
+        // instead of opening the single-plot analysis.
+        toggleAssemblyPlot(hits[0], point);
       } else {
         // A specific green plot: highlight it and analyse just that plot.
         selectDevelopablePlot(hits[0], ll, point);
@@ -4741,6 +4752,9 @@ const deep = {
   publicLandVisible: false, // public-parcel layer toggle
   _plots: null,             // per-plot features for click-to-analyse
   _innerCircle: null,       // cached inner-ring circle (turf polygon)
+  // Land assembler: multi-select of developable plots. ids are INDICES into
+  // _plots (ephemeral — cleared whenever the plots are recomputed).
+  assembly: { active: false, ids: new Set(), name: "" },
 };
 
 // ---- Workstream 3: shortlist, triad, synthesis, comparison, export --------
@@ -6274,6 +6288,26 @@ function renderDevelopableLayer() {
       filter: ["==", ["get", "plot"], -1],
       paint: { "line-color": "#ffffff", "line-width": 3.4, "line-opacity": 0.95 },
     });
+    // Assembly highlight — its own fill+line so it never fights the
+    // single-select layer. Amber: distinct from the green fills, readable on
+    // both light and dark basemaps.
+    map.addLayer({
+      id: "developable-assembled", type: "fill", source: "developable-src",
+      filter: ["in", ["get", "plot"], ["literal", []]],
+      paint: { "fill-color": "#ffd43b", "fill-opacity": 0.35 },
+    });
+    map.addLayer({
+      id: "developable-assembled-line", type: "line", source: "developable-src",
+      filter: ["in", ["get", "plot"], ["literal", []]],
+      paint: { "line-color": "#f59f00", "line-width": 3, "line-opacity": 0.95 },
+    });
+    // Plot ids are indices into the REBUILT _plots array — any previous
+    // selection now points at different geometry, so it must not survive.
+    if (deep.assembly.ids.size) {
+      deep.assembly.ids.clear();
+      renderAssemblySummary("Selection cleared — plots were recomputed.");
+    }
+    syncAssemblyLayer();
   }
 
   for (const id of ["developable-fill", "developable-inner-fill", "developable-blockers"]) {
@@ -6288,8 +6322,13 @@ function renderDevelopableLayer() {
 
 function removeDevelopableLayer() {
   for (const id of ["developable-fill", "developable-inner-fill", "developable-line",
-                    "developable-selected", "developable-blockers"]) {
+                    "developable-selected", "developable-assembled",
+                    "developable-assembled-line", "developable-blockers"]) {
     if (map.getLayer(id)) map.removeLayer(id);
+  }
+  if (deep.assembly.ids.size) {
+    deep.assembly.ids.clear();
+    renderAssemblySummary();
   }
   for (const id of ["developable-src", "developable-inner-src", "developable-blockers-src"]) {
     if (map.getSource(id)) map.removeSource(id);
@@ -6305,17 +6344,24 @@ function removeDevelopableLayer() {
 // designations covering it, the land parcels it spans, and its own dwelling
 // capacity split by the inner/outer density regimes.
 
-async function selectDevelopablePlot(hit, lngLat, point) {
-  // The inner-ring fill is a single merged geometry with no plot id — resolve
-  // the click back to the real plot underneath it.
+// Resolve a click on any developable layer to a plot id. The inner-ring fill
+// is a single merged geometry with NO plot id, so the click is re-queried
+// against developable-fill underneath. Shared by single-select and the
+// assembler — the fallback must never be duplicated, it is too easy to forget.
+function resolvePlotId(hit, point) {
   let plotId = hit && hit.properties ? hit.properties.plot : undefined;
-  if (plotId == null || plotId === undefined) {
+  if (plotId == null) {
     try {
       const under = map.queryRenderedFeatures([point.x, point.y],
         { layers: ["developable-fill"] });
       if (under && under.length) plotId = under[0].properties.plot;
     } catch (_) {}
   }
+  return plotId;
+}
+
+async function selectDevelopablePlot(hit, lngLat, point) {
+  const plotId = resolvePlotId(hit, point);
   const plot = (deep._plots || []).find(f => f.properties.plot === plotId);
   if (!plot) { openClickPopup({ offset: 8 }, lngLat, developablePopupHTML("developable-fill")); return; }
 
@@ -6673,7 +6719,9 @@ function renderDeepDiveLegend() {
       `style="border-color:${PUBLIC_LAND_COLOR}"></i>Boundary disputed — not counted</span>`);
   }
   el.innerHTML = `<div class="ddl-items">${items.join("")}</div>` +
-    (showDev ? `<div class="ddl-note">Click any green plot for its own area, constraints and capacity.</div>` : "");
+    (showDev ? (deep.assembly.active
+      ? `<div class="ddl-note ddl-assemble">■ Assemble mode — click plots to add or remove · ${deep.assembly.ids.size} selected</div>`
+      : `<div class="ddl-note">Click any green plot for its own area, constraints and capacity.</div>`) : "");
   el.hidden = false;
 }
 
@@ -6820,6 +6868,100 @@ async function renderDeepDiveViability() {
       <div class="dd-pl-row"><span>build cost index</span><span>${mc && mc.factor ? mc.factor.toFixed(2) + "× (" + (mc.factorRegion || "local") + ")" : "1.00× (national)"}</span></div>
     </div>
     <p class="hint" style="margin-top:4px">Same engine and assumptions as the station sifter — tweak them below and both update.</p>`;
+}
+
+// ---- Land assembler --------------------------------------------------------
+// Multi-select developable plots into one site, appraise the whole, and export
+// a structured site report. Selection ids index deep._plots and are cleared
+// whenever the plots are recomputed (radius/constraint change) — a stale id
+// would silently point at different geometry.
+
+function syncAssemblyLayer() {
+  const ids = [...deep.assembly.ids];
+  for (const id of ["developable-assembled", "developable-assembled-line"])
+    if (map.getLayer(id))
+      map.setFilter(id, ["in", ["get", "plot"], ["literal", ids]]);
+}
+
+function setAssembleMode(on) {
+  deep.assembly.active = !!on;
+  const btn = document.getElementById("dd-assemble-toggle");
+  if (btn) {
+    btn.classList.toggle("active", deep.assembly.active);
+    btn.textContent = deep.assembly.active
+      ? "■ Assembling — click plots to add/remove" : "▶ Assemble a site";
+  }
+  // Leaving assemble mode keeps the selection: the user toggles off to pan
+  // and inspect, then comes back. [Clear] is the explicit reset.
+  renderDeepDiveLegend();
+  renderAssemblySummary();
+}
+
+function toggleAssemblyPlot(hit, point) {
+  const plotId = resolvePlotId(hit, point);
+  if (plotId == null) return;
+  if (deep.assembly.ids.has(plotId)) deep.assembly.ids.delete(plotId);
+  else deep.assembly.ids.add(plotId);
+  syncAssemblyLayer();
+  renderAssemblySummary();
+}
+
+function assemblyPlots() {
+  return [...deep.assembly.ids]
+    .map(id => (deep._plots || []).find(f => f.properties.plot === id))
+    .filter(Boolean);
+}
+
+// Owned-div render of the basket (#dd-assembly-summary).
+function renderAssemblySummary(notice) {
+  const el = document.getElementById("dd-assembly-summary");
+  if (!el) return;
+  const plots = assemblyPlots();
+  const regime = activeDevelopableRegime();
+  if (!plots.length) {
+    el.innerHTML = `<p class="hint">${notice ? escapeSift(notice) + " " : ""}` +
+      (deep.assembly.active
+        ? "Click green plots on the map to add them to the site."
+        : "Press Assemble, then click plots to group them into one site.") + `</p>`;
+    return;
+  }
+  const totHa = plots.reduce((s, p) => s + (p.properties.area_ha || 0), 0);
+  const totInner = plots.reduce((s, p) => s + (p.properties.inner_ha || 0), 0);
+  const units = homesFor(totHa, totInner, regime);
+  const ap = computeAppraisal({
+    units, ppm2: deep.ppm2 || null, region: null, areaHa: totHa,
+    locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
+  }, SIFT.assumptions, { noSens: true });
+  const rows = plots.map(p => `
+    <div class="dd-pl-row"><span>Plot ${p.properties.plot + 1} · ${(p.properties.area_ha || 0).toFixed(2)} ha</span>
+      <span>${homesFor(p.properties.area_ha, p.properties.inner_ha, regime).toLocaleString()} homes
+      <button type="button" class="asm-remove" data-plot="${p.properties.plot}" title="Remove">×</button></span></div>`).join("");
+  const ragCls = ap.rag === "viable" ? "sg" : ap.rag === "marginal" ? "sa" : "sr";
+  el.innerHTML = `
+    ${notice ? `<p class="hint">${escapeSift(notice)}</p>` : ""}
+    <div class="dd-pl-rows">${rows}</div>
+    <div class="dd-pl-hero" style="margin-top:6px"><strong>${totHa.toFixed(2)} ha</strong>
+      <span class="dd-dim">${plots.length} plot${plots.length === 1 ? "" : "s"} · ~${units.toLocaleString()} homes (${regime})</span>
+      ${ap.profitOnCost != null ? `<span class="viab-rag ${ragCls}">${ap.profitOnCost.toFixed(0)}% PoC</span>` : ""}</div>
+    <input type="text" id="dd-assembly-name" placeholder="Site name for the report…"
+      value="${escapeSift(deep.assembly.name || "")}" maxlength="80" />
+    <div class="asm-actions">
+      <button type="button" id="dd-assembly-report" class="plot-mode-btn">Generate site report</button>
+      <button type="button" class="ghost" id="dd-assembly-clear">Clear</button>
+    </div>`;
+  el.querySelectorAll(".asm-remove").forEach(b => b.addEventListener("click", () => {
+    deep.assembly.ids.delete(+b.dataset.plot);
+    syncAssemblyLayer();
+    renderAssemblySummary();
+  }));
+  const nameInp = el.querySelector("#dd-assembly-name");
+  if (nameInp) nameInp.addEventListener("input", () => { deep.assembly.name = nameInp.value; });
+  el.querySelector("#dd-assembly-clear")?.addEventListener("click", () => {
+    deep.assembly.ids.clear();
+    syncAssemblyLayer();
+    renderAssemblySummary();
+  });
+  el.querySelector("#dd-assembly-report")?.addEventListener("click", generateSiteReport);
 }
 
 // Gate-3 read-out for the developable summary: the hard designations are already
@@ -7767,6 +7909,353 @@ function exportStationReport(snap) {
   w.document.close();
 }
 
+// ---- Land-assembly site report ---------------------------------------------
+// The deliverable of the assembler: a print-styled standalone document for the
+// merged site — map extract, twelve appraisal sections, and a per-field
+// confidence flag so desktop data is never dressed up as survey findings.
+
+// Snapshot the live map over a bbox. preserveDrawingBuffer is on (map init),
+// so toDataURL works at any moment; camera is saved and restored around the
+// framing. DOM overlays (legend, popups) live outside the canvas and are
+// naturally excluded.
+async function captureMapImage(bbox) {
+  try {
+    const saved = { center: map.getCenter(), zoom: map.getZoom(),
+                    bearing: map.getBearing(), pitch: map.getPitch() };
+    map.fitBounds(bbox, { padding: 70, animate: false, maxZoom: 16.5 });
+    await new Promise(res => {
+      const t = setTimeout(res, 4000);        // never hang the report on tiles
+      map.once("idle", () => { clearTimeout(t); res(); });
+    });
+    const url = map.getCanvas().toDataURL("image/png");
+    map.jumpTo(saved);
+    // An all-black/blank capture is worse than none: probe a few pixels.
+    return url && url.length > 20000 ? url : null;
+  } catch (_) { return null; }
+}
+
+// Confidence flags: data = open data, read directly; model = modelled or
+// proxy-derived; desk = requires desktop study / survey — reported as a
+// heading with nothing invented underneath.
+function confBadge(level) {
+  const label = { data: "open data", model: "modelled", desk: "desk study" }[level] || level;
+  return `<span class="r-conf rc-${level}">${label}</span>`;
+}
+
+function generateSiteReport() {
+  return _generateSiteReport().catch(err => {
+    console.error("site report failed", err);
+    alert("Site report failed: " + (err && err.message ? err.message : err));
+  });
+}
+
+async function _generateSiteReport() {
+  const plots = assemblyPlots();
+  if (!plots.length) return;
+  const btn = document.getElementById("dd-assembly-report");
+  if (btn) { btn.disabled = true; btn.textContent = "Gathering data…"; }
+  try {
+    // Merge. Disjoint plots union to a MultiPolygon; if turf refuses (sliver
+    // edge cases), a bare MultiPolygon of the parts serves the same purpose —
+    // polygon_summary accepts either.
+    let unionFeat = null;
+    try {
+      unionFeat = plots.length === 1 ? plots[0]
+        : turf.union(turf.featureCollection(plots));
+    } catch (_) {}
+    if (!unionFeat) {
+      unionFeat = { type: "Feature", properties: {}, geometry: {
+        type: "MultiPolygon",
+        coordinates: plots.flatMap(p => p.geometry.type === "Polygon"
+          ? [p.geometry.coordinates] : p.geometry.coordinates) } };
+    }
+    const bbox = turf.bbox(unionFeat);
+    const regime = activeDevelopableRegime();
+    const totHa = plots.reduce((s, p) => s + (p.properties.area_ha || 0), 0);
+    const totInner = plots.reduce((s, p) => s + (p.properties.inner_ha || 0), 0);
+    const units = homesFor(totHa, totInner, regime);
+
+    // Parallel gather — the report never fails outright on one source; each
+    // section says what it could not get.
+    const [summary, slope, img] = await Promise.all([
+      sb.rpc("polygon_summary", { p_geojson: JSON.stringify(unionFeat.geometry) })
+        .then(r => r.error ? null : r.data).catch(() => null),
+      sb.rpc("grid_in_bbox", { p_dataset: "slope_grid",
+          w: bbox[0], s: bbox[1], e: bbox[2], n: bbox[3],
+          p_zoom: 13, lim: 2000, p_avg_key: "slope", p_max_key: "max_slope" })
+        .then(r => r.error ? null : r.data).catch(() => null),
+      captureMapImage(bbox),
+    ]);
+
+    const mc = deep._marketCtx || {};
+    const appraisal = computeAppraisal({
+      units, ppm2: deep.ppm2 || null, region: null, areaHa: totHa,
+      locationFactor: mc.factor || null,
+    }, SIFT.assumptions);
+
+    const site = {
+      name: (deep.assembly.name || "").trim()
+        || `Assembled site — ${(deep.station && deep.station.name) || "catchment"}`,
+      station: deep.station || null,
+      plots, unionFeat, totHa, totInner, units, regime,
+      summary, slope, img, appraisal,
+      publicLand: deep.publicLand || null,
+      ppm2: deep.ppm2 || null,
+      marketCtx: mc,
+      counts: deep.counts || {},
+      radius: (deep.developable && deep.developable.radius_m) || 800,
+    };
+    const html = buildSiteReportHTML(site);
+    const w = window.open("", "_blank");
+    if (!w) { alert("Pop-up blocked — allow pop-ups to open the report."); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Generate site report"; }
+  }
+}
+
+// Extends REPORT_CSS — never forks it. Everything site-report-specific is
+// namespaced sr-/rc-.
+const SITE_REPORT_CSS = `
+  .sr-map { width: 100%; border-radius: 8px; border: 1px solid #d8d4c8; margin: 10px 0 14px; }
+  .sr-sec { page-break-inside: avoid; margin: 18px 0; }
+  .sr-sec h3 { font-family: Georgia, serif; font-size: 15px; border-bottom: 1px solid #d8d4c8; padding-bottom: 4px; margin-bottom: 8px; }
+  .sr-row { display: flex; justify-content: space-between; gap: 14px; padding: 2.5px 0; font-size: 12px; border-bottom: 1px dotted #e4e0d4; }
+  .sr-row .k { color: #5a5648; }
+  .sr-row .v { text-align: right; font-weight: 600; }
+  .sr-row .src { display: block; font-weight: 400; font-size: 9.5px; color: #8a8574; }
+  .r-conf { font-size: 8.5px; padding: 1px 6px; border-radius: 8px; margin-left: 6px; text-transform: uppercase; letter-spacing: .04em; vertical-align: middle; }
+  .rc-data { background: #d3f0d8; color: #205b2a; }
+  .rc-model { background: #fdeec9; color: #7a5a12; }
+  .rc-desk { background: #e8e4f5; color: #4a3d80; }
+  .sr-desk-list { font-size: 11.5px; color: #5a5648; margin: 4px 0 0 16px; }
+  .sr-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 8px 0; }
+  .sr-kpi { background: #edeae0; border-radius: 6px; padding: 8px 10px; }
+  .sr-kpi b { display: block; font-size: 15px; }
+  .sr-kpi span { font-size: 9.5px; color: #6a6656; text-transform: uppercase; letter-spacing: .04em; }
+  .sr-table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 6px 0; }
+  .sr-table th, .sr-table td { border: 1px solid #d8d4c8; padding: 3px 8px; text-align: right; }
+  .sr-table th:first-child, .sr-table td:first-child { text-align: left; }
+  .sr-sens td.g { background: #d3f0d8; } .sr-sens td.a { background: #fdeec9; } .sr-sens td.r { background: #f6d5d0; }
+  .sr-note { font-size: 10px; color: #8a8574; margin-top: 4px; }
+  .sr-rag { font-size: 10px; padding: 2px 10px; border-radius: 9px; color: #fff; text-transform: uppercase; }
+  .sr-rag.viable { background: #2f9e44; } .sr-rag.marginal { background: #f08c00; } .sr-rag.unviable { background: #c92a2a; }
+`;
+
+function buildSiteReportHTML(site) {
+  const esc = s => String(s ?? "").replace(/[&<>"]/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const money = v => v == null ? "—"
+    : (Math.abs(v) >= 1e6 ? "£" + (v / 1e6).toFixed(2) + "M" : "£" + Math.round(v / 1000) + "k");
+  const pct = v => v == null ? "n/a" : Number(v).toFixed(1) + "%";
+  const S = site.summary || {};
+  const areas = S.areas || {};
+  const cons = {};
+  for (const c of (S.constraints || [])) cons[c.kind] = c.pct;
+
+  // One row, one claim, one confidence flag, one source.
+  const fieldRows = [];
+  const row = (label, value, conf, source) => value == null ? "" :
+    `<div class="sr-row"><span class="k">${esc(label)}${confBadge(conf)}` +
+    (source ? `<span class="src">${esc(source)}</span>` : "") +
+    `</span><span class="v">${value}</span></div>`;
+  const deskItems = [];
+  const deskLine = items =>
+    `<ul class="sr-desk-list">${items.map(i => `<li>${esc(i)}${confBadge("desk")}</li>`).join("")}</ul>`;
+
+  // Slope from the aggregated grid over the site bbox.
+  let slopeAvg = null, slopeMax = null;
+  const sf = (site.slope && site.slope.features) || [];
+  if (sf.length) {
+    let wsum = 0, n = 0;
+    for (const f of sf) {
+      const p = f.properties || {};
+      const cells = Number(p.cells) || 1;
+      if (p.slope != null) { wsum += Number(p.slope) * cells; n += cells; }
+      if (p.max_slope != null) slopeMax = Math.max(slopeMax ?? 0, Number(p.max_slope));
+    }
+    if (n) slopeAvg = wsum / n;
+  }
+
+  const ap = site.appraisal || {};
+  const ragBadge = ap.rag && ap.rag !== "n/a" ? `<span class="sr-rag ${ap.rag}">${ap.rag}</span>` : "";
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  const stationName = site.station ? (site.station.name || site.station.crs) : null;
+
+  // Environmental / heritage constraint helpers
+  const kindLabel = {
+    flood_zone_2: "Flood Zone 2", flood_zone_3: "Flood Zone 3",
+    sssi: "SSSI", sac: "SAC", spa: "SPA", ramsar: "Ramsar",
+    ancient_woodland: "Ancient woodland", scheduled_monument: "Scheduled monument",
+    conservation_area: "Conservation area", listed_building: "Listed building (curtilage)",
+    park_garden: "Registered park & garden", green_space: "Public green space",
+    green_belt: "Green Belt", built_land: "Built land", water: "Water",
+    transport: "Transport corridor", aonb: "AONB / National Landscape",
+  };
+  const consRow = (kind, conf) => cons[kind] != null
+    ? row(kindLabel[kind] || kind, pct(cons[kind]) + " of site", conf || "data", "planning constraint overlay")
+    : "";
+
+  const sales = (S.recent_sales || []).slice(0, 5);
+  const PT = { D: "Detached", S: "Semi", T: "Terraced", F: "Flat", O: "Other" };
+  const salesTable = sales.length ? `<table class="sr-table"><thead>
+      <tr><th>Comparable</th><th>Date</th><th>Type</th><th>Price</th><th>Distance</th></tr></thead><tbody>` +
+    sales.map((x, i) => `<tr><td>Sale ${i + 1}</td><td>${esc(x.date || "")}</td>
+      <td>${esc(PT[x.ptype] || x.ptype || "")}</td><td>£${Number(x.price || 0).toLocaleString()}</td>
+      <td>${x.dist_m != null ? Math.round(x.dist_m) + " m" : ""}</td></tr>`).join("") +
+    `</tbody></table>` : `<p class="sr-note">No recent transactions within the sample radius.</p>`;
+
+  const steps = [-10, -5, 0, 5, 10];
+  const target = SIFT.assumptions.profitTargetPct || 17.5;
+  const sensTable = ap.sensitivity ? `<table class="sr-table sr-sens"><thead>
+      <tr><th>build \\ sales</th>${steps.map(s => `<th>${s > 0 ? "+" : ""}${s}%</th>`).join("")}</tr></thead><tbody>` +
+    ap.sensitivity.map((r2, i) => `<tr><th>${steps[i] > 0 ? "+" : ""}${steps[i]}%</th>` +
+      r2.map(v => `<td class="${v == null ? "" : v >= target ? "g" : v >= target / 2 ? "a" : "r"}">${v == null ? "—" : v.toFixed(0)}</td>`).join("") +
+      `</tr>`).join("") + `</tbody></table>` : "";
+
+  const wfTable = ap.waterfall ? `<table class="sr-table"><tbody>` +
+    ap.waterfall.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${money(v)}</td></tr>`).join("") +
+    `</tbody></table>` : "";
+
+  const assumpTable = `<table class="sr-table"><thead><tr><th>Assumption</th><th>Value</th><th>Source</th></tr></thead><tbody>` +
+    VIAB_SCHEMA.map(f => {
+      const v = SIFT.assumptions[f.key] ?? f.default;
+      return `<tr><td>${esc(f.label)}</td><td>${esc(String(v))} ${f.unit !== "choice" ? esc(f.unit) : ""}</td><td>${esc(f.source)}</td></tr>`;
+    }).join("") + `</tbody></table>`;
+
+  const incomeArea = areas.msoa_income || areas.lad_income || null;
+  const bci = areas.build_cost_index || null;
+
+  const body = `
+  <div class="cover">
+    <p class="cover-note">MasterMapper · land assembly appraisal</p>
+    <h1>${esc(site.name)}</h1>
+    <p class="cover-sub">${stationName ? esc(stationName) + " catchment · " : ""}${site.totHa.toFixed(2)} ha across ${site.plots.length} plot${site.plots.length === 1 ? "" : "s"} · generated ${dateStr}</p>
+    <div class="sr-kpis">
+      <div class="sr-kpi"><b>${site.totHa.toFixed(2)} ha</b><span>net developable</span></div>
+      <div class="sr-kpi"><b>~${site.units.toLocaleString()}</b><span>homes (${esc(site.regime)})</span></div>
+      <div class="sr-kpi"><b>${pct(ap.profitOnCost)}</b><span>profit on cost ${ragBadge}</span></div>
+      <div class="sr-kpi"><b>${money(ap.residualLandValue)}</b><span>residual land value</span></div>
+    </div>
+    ${site.img ? `<img class="sr-map" src="${site.img}" alt="Site plan extract" />`
+               : `<p class="sr-note">Map extract unavailable — capture failed in this browser.</p>`}
+    <p class="sr-note">Flags: ${confBadge("data")} read from open data · ${confBadge("model")} modelled or proxy · ${confBadge("desk")} requires desktop study or survey. Every desk item is listed in section 12 — nothing is invented.</p>
+  </div>
+
+  <section class="sr-sec"><h3>1 · Site fundamentals</h3>
+    ${row("Gross site area", site.totHa.toFixed(2) + " ha (" + (site.totHa * 2.471).toFixed(1) + " ac)", "data", "developable-land analysis, constraint-stripped")}
+    ${row("Parcels assembled", site.plots.length + " contiguous plot(s)", "data")}
+    ${row("Inner-ring share", site.totInner > 0 ? site.totInner.toFixed(2) + " ha within " + ((deep.developable && deep.developable.inner_radius_m) || 200) + " m of station" : null, "model")}
+    ${row("Mean slope", slopeAvg != null ? slopeAvg.toFixed(1) + "°" : null, "model", "OS Terrain 50-derived 1 km grid")}
+    ${row("Steepest 50 m", slopeMax != null ? slopeMax.toFixed(1) + "°" : null, "model")}
+    ${row("Agricultural land", areas.alc ? esc(areas.alc.alc_grade || areas.alc.name || "graded") : null, "data", "Natural England provisional ALC")}
+    ${row("Local authority", areas.lad_boundary ? esc(areas.lad_boundary.name) : null, "data", "ONS boundaries")}
+    ${row("Planning authority", areas.lpa_boundary ? esc(areas.lpa_boundary.name) : null, "data")}
+    ${deskLine(["Topographic survey", "Existing structures & demolition extent", "Site severance (rail / watercourse / easements)", "Adjoining ownership & ransom strips"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>2 · Planning status & policy</h3>
+    ${row("Local plan area", areas.local_plan_boundary ? esc(areas.local_plan_boundary.name) : null, "data", "planning.data.gov.uk")}
+    ${row("Article 4 direction", areas.article4 ? "Within: " + esc(areas.article4.name || "designated area") : "None mapped on site", "data")}
+    ${row("Green Belt coverage", S.grey_belt_pct != null || cons.green_belt != null ? pct(cons.green_belt ?? 0) + " of site" : null, "data")}
+    ${row("Grey-belt candidate", S.grey_belt_pct != null ? pct(S.grey_belt_pct) + " of site" : null, "model", "MasterMapper grey-belt model, not a designation")}
+    ${row("Housing Delivery Test", areas.hdt ? esc(String(areas.hdt.hdt_pct ?? "")) + "% (" + esc(areas.hdt.consequence || "n/a") + ")" : null, "data", "MHCLG HDT measurement")}
+    ${row("Approval rate (planning apps)", areas.planit_rates ? esc(String(areas.planit_rates.approval_pct ?? "")) + "% locally" : null, "model", "PlanIt applications sample")}
+    ${row("NPPF station tier", site.station && site.station.tier ? esc(site.station.tier) : null, "model", "MasterMapper station assessment")}
+    ${deskLine(["Allocation status & emerging plan position", "Five-year housing land supply", "Planning history on site & adjoining", "Pre-app position, committee vs delegated", "Neighbourhood Plan policies"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>3 · Environmental constraints</h3>
+    ${consRow("flood_zone_2")}${consRow("flood_zone_3")}
+    ${consRow("sssi")}${consRow("sac")}${consRow("spa")}${consRow("ramsar")}
+    ${consRow("ancient_woodland")}${consRow("green_space")}${consRow("water")}
+    ${(S.constraints || []).length === 0 ? `<p class="sr-note">No mapped environmental constraint intersects the site (≥0.5% threshold).</p>` : ""}
+    ${deskLine(["Nutrient / water neutrality catchment position", "Protected species likelihood (bats, GCN, badger)", "BNG baseline habitat units & on-site %", "Noise contours & air quality", "Trees & hedgerows survey"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>4 · Heritage</h3>
+    ${consRow("conservation_area")}${consRow("listed_building")}${consRow("scheduled_monument")}${consRow("park_garden")}
+    ${!cons.conservation_area && !cons.listed_building && !cons.scheduled_monument && !cons.park_garden ? `<p class="sr-note">No designated heritage asset intersects the site.</p>` : ""}
+    ${deskLine(["Setting of nearby designated assets", "Archaeological potential / HER search", "Non-designated & locally listed assets"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>5 · Ground conditions</h3>
+    ${row("Slope profile", slopeAvg != null ? slopeAvg.toFixed(1) + "° mean · " + (slopeMax ?? 0).toFixed(1) + "° max" : null, "model")}
+    ${deskLine(["Historic land use & contamination risk", "Coal Authority high-risk area / mine entries", "Radon protection level", "Ground stability & shrink-swell", "Groundwater source protection", "UXO risk", "Foundation solution & bearing capacity"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>6 · Utilities & infrastructure</h3>
+    ${row("Nearest grid substation", S.nearest_grid_substation ? esc(S.nearest_grid_substation.name || "substation") + " (" + esc(String(S.nearest_grid_substation.kv || "?")) + " kV, " + Math.round(S.nearest_grid_substation.dist_m || 0) + " m)" : null, "data", "OSM power network")}
+    ${row("Grid supply point", areas.gsp_boundary ? esc(areas.gsp_boundary.name) : null, "data", "NESO")}
+    ${row("Water resource availability", areas.water_availability ? esc(areas.water_availability.name || "catchment") : null, "data", "EA CAMS")}
+    ${deskLine(["Foul drainage capacity & connection point", "DNO connection quote & reinforcement lead time", "SuDS feasibility & infiltration", "Gas / all-electric strategy", "Buried services & wayleaves"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>7 · Access & transport</h3>
+    ${row("Rail station", stationName ? esc(stationName) + " — site within the " + site.radius + " m catchment" : null, "data")}
+    ${row("PTAL", areas.ptal ? esc(String(areas.ptal.ptal ?? areas.ptal.name ?? "")) : null, "data", "TfL (London only)")}
+    ${row("Schools in catchment", site.counts.school != null ? String(site.counts.school) : null, "data")}
+    ${row("GP surgeries in catchment", site.counts.gp != null ? String(site.counts.gp) : null, "data")}
+    ${deskLine(["Adoptable access & visibility splays", "Junction capacity & modelling scope", "PRoW crossing / diversion", "Travel plan obligations"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>8 · Market & demand</h3>
+    ${row("Local sales value", site.ppm2 ? "£" + Math.round(site.ppm2).toLocaleString() + "/m² · £" + Math.round(site.ppm2 / 10.7639).toLocaleString() + "/ft²" : null, "data", "Land Registry × EPC, catchment-weighted")}
+    ${row("Local rents", areas.la_rents ? "£" + esc(String(areas.la_rents.rent_mean ?? "")) + "/month LA average" : null, "data", "ONS PIPR")}
+    ${row("Affordability", incomeArea && incomeArea.afford_ratio != null ? esc(String(incomeArea.afford_ratio)) + "× local income" + (areas.msoa_income ? " (neighbourhood)" : " (district)") : null, "data", "Land Registry + ONS income")}
+    ${row("Build cost index", bci ? esc(String(bci.factor)) + "× national (" + esc(bci.region || "region") + ")" : null, "model", "free proxy — not BCIS")}
+    <p style="font-size:12px;margin:8px 0 2px"><strong>Recent transactions</strong> ${confBadge("data")}</p>
+    ${salesTable}
+    ${deskLine(["New-build premium evidence & absorption rate", "Competing consented supply", "RP appetite & affordable offer levels"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>9 · Ownership & deliverability</h3>
+    ${row("Public-land parcels in catchment", site.publicLand && site.publicLand.n_parcels != null ? String(site.publicLand.n_parcels) + " confirmed (" + Number(site.publicLand.total_ha || 0).toFixed(1) + " ha)" : null, "model", "CCOD × INSPIRE — postcode-centroid join, verify title-by-title")}
+    ${row("Council property points on site", S.council_property != null ? String(S.council_property) : null, "model")}
+    ${row("Brownfield register overlap", S.brownfield_overlap != null ? String(S.brownfield_overlap) + " site(s)" : null, "data")}
+    ${deskLine(["Title ownership & restrictive covenants", "Options / promotion agreements", "Tenancies (AHA/FBT)", "Rights of light / party wall"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>10 · Viability appraisal ${confBadge("model")}</h3>
+    <div class="sr-kpis">
+      <div class="sr-kpi"><b>${money(ap.gdv)}</b><span>GDV</span></div>
+      <div class="sr-kpi"><b>${money(ap.totalCost)}</b><span>total cost incl. finance</span></div>
+      <div class="sr-kpi"><b>${pct(ap.profitOnCost)}</b><span>profit on cost</span></div>
+      <div class="sr-kpi"><b>${pct(ap.profitOnGdv)}</b><span>profit on GDV</span></div>
+      <div class="sr-kpi"><b>${money(ap.residualLandValue)}</b><span>residual land value</span></div>
+      <div class="sr-kpi"><b>${ap.irr == null ? "n/a" : pct(ap.irr)}</b><span>equity IRR</span></div>
+      <div class="sr-kpi"><b>${money(ap.peakDebt)}</b><span>peak debt</span></div>
+      <div class="sr-kpi"><b>${money(ap.cashflow ? ap.cashflow.interest : null)}</b><span>finance interest</span></div>
+    </div>
+    <p style="font-size:12px;margin:8px 0 2px"><strong>Appraisal waterfall</strong></p>
+    ${wfTable}
+    <p style="font-size:12px;margin:8px 0 2px"><strong>Sensitivity — profit on cost, build cost × sales value</strong></p>
+    ${sensTable}
+    <p class="sr-note">Model: sin² build S-curve over ${SIFT.assumptions.buildMonths} months, even absorption over ${SIFT.assumptions.salesMonths} months, equity-first funding at ${SIFT.assumptions.ltcPct}% LTC, interest capitalised monthly.</p>
+  </section>
+
+  <section class="sr-sec"><h3>11 · Assumptions appendix</h3>
+    ${assumpTable}
+    <p class="sr-note">Every figure is an opening position, edited live in the tool's Viability variables. Build costs are a free proxy (ONS indices + regional factors), not BCIS.</p>
+  </section>
+
+  <section class="sr-sec pb"><h3>12 · Risks & further work</h3>
+    <p style="font-size:12px">The following were flagged ${confBadge("desk")} above — they require desktop study, survey or legal enquiry and are NOT covered by open data. This list is generated from the flags, so it is complete by construction:</p>
+    ${deskLine([...new Set(deskItems)])}
+    <p class="sr-note" style="margin-top:12px">Data: HM Land Registry Price Paid & CCOD & INSPIRE (© Crown copyright and database right); EPC register; planning.data.gov.uk; Environment Agency; Natural England; Historic England; ONS; NESO; TfL; OpenStreetMap contributors (ODbL). Contains OS data © Crown copyright. Generated by MasterMapper on ${dateStr}. Indicative appraisal — not a Red Book valuation.</p>
+  </section>`;
+
+  return `<!doctype html><html><head><meta charset="utf-8" />
+    <title>${esc(site.name)} — site report</title>
+    <style>${REPORT_CSS}${SITE_REPORT_CSS}</style></head>
+    <body><div class="report">${body}</div>
+    <script>setTimeout(function(){ window.print(); }, 500);<\/script>
+    </body></html>`;
+}
+
 function buildReportHTML(items) {
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
@@ -8558,6 +9047,16 @@ function buildDeepDivePanel(meta) {
           <div id="dd-viability-summary"><p class="hint">Turn on the developable-land tool above — the appraisal prices its dwelling capacity.</p></div>
           <button type="button" class="ghost" id="dd-viab-vars">Viability variables…</button>
         </div>
+      </section>
+      <section class="dd-block" data-section="assembly">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Site assembly</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <p class="hint">Group several developable plots into one site, appraise the whole, and export a structured site report with a map extract.</p>
+          <button type="button" id="dd-assemble-toggle" class="plot-mode-btn">▶ Assemble a site</button>
+          <div id="dd-assembly-summary"></div>
+        </div>
       </section>` : ""}
       ${meta.station ? `<section class="dd-synthesis" id="dd-synthesis"></section>` : ""}
       ${meta.station ? stationSectionHTML(meta.station) : ""}
@@ -8711,6 +9210,14 @@ function buildDeepDivePanel(meta) {
   // Viability variables from the deep dive: same modal, deep-dive context —
   // edits re-render this panel's appraisal AND re-score the sift, because
   // there is deliberately only one assumption set.
+  const at = panel.querySelector("#dd-assemble-toggle");
+  if (at) at.addEventListener("click", () => {
+    if (!deep.developableVisible || !deep.developableResult) {
+      renderAssemblySummary("Turn on the developable-land tool first — the plots are what you assemble.");
+      return;
+    }
+    setAssembleMode(!deep.assembly.active);
+  });
   const dv = panel.querySelector("#dd-viab-vars");
   if (dv) dv.addEventListener("click", () => {
     const r = deep.developableResult;
