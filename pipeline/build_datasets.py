@@ -1912,35 +1912,72 @@ def build_land_value():
                                     on_bad_lines="skip")}
 
     values, by_name = {}, {}
-    for _sname, g in grids.items():
+
+    # Targeted parse for the actual 2023 workbook layout (seen via the CI
+    # diagnostics, run 31016580789): a 'Residential' SHEET — title rows, then
+    # a header row containing 'LA Code', then one row per authority whose
+    # columns are a matrix of £/ha figures for site-size × density scenarios
+    # (plus two-digit dwellings/ha assumption columns). The per-authority
+    # benchmark is the MEDIAN of its scenario values — MHCLG's own framing is
+    # a 'typical' site, and the median of their published scenarios is the
+    # faithful single number. The £50k floor excludes the density columns.
+    for sname, g in grids.items():
+        s = str(sname).lower()
+        if "resid" not in s or "adj" in s:
+            continue
         nrow, ncol = g.shape
-        headers = [(rr, cc) for rr in range(min(nrow, 60))
-                   for cc in range(ncol)
-                   if "resid" in str(g.iat[rr, cc]).lower()
-                   or "land value" in str(g.iat[rr, cc]).lower()]
-        for hr, hc in headers:
-            got, got_names = {}, {}
-            for rr in range(hr + 1, nrow):
-                row = g.iloc[rr]
-                val = _money(g.iat[rr, hc])
-                if val is None:
-                    continue
-                code = next((str(x).strip() for x in row
-                             if code_re.match(str(x).strip())), None)
-                if code:
-                    got[code] = val
-                # Name fallback: first plausible text cell in the row (some
-                # releases carry LA names but no ONS codes).
-                nm = next((str(x).strip() for x in row
-                           if isinstance(x, str) and len(str(x).strip()) > 3
-                           and _money(x) is None
-                           and not code_re.match(str(x).strip())), None)
-                if nm:
-                    got_names[_norm_name(nm)] = val
-            if len(got) > len(values):
-                values = got
-            if len(got_names) > len(by_name):
-                by_name = got_names
+        hdr = None
+        for rr in range(min(nrow, 12)):
+            if any("la code" in str(g.iat[rr, cc]).lower() for cc in range(ncol)):
+                hdr = rr
+                break
+        if hdr is None:
+            continue
+        got = {}
+        for rr in range(hdr + 1, nrow):
+            row = g.iloc[rr]
+            code = next((str(x).strip() for x in row
+                         if code_re.match(str(x).strip())), None)
+            if not code:
+                continue
+            nums = sorted(v for v in (_money(x) for x in row)
+                          if v is not None and v >= 50_000)
+            if nums:
+                got[code] = nums[len(nums) // 2]
+        if len(got) > len(values):
+            values = got
+
+    # Generic fallback (covers a LAND_VALUE_SRC CSV or a future re-layout):
+    # find a 'resid'/'land value' header cell, read its column, key rows by
+    # ONS code or, failing that, by normalised authority name.
+    if len(values) < 100:
+        for _sname, g in grids.items():
+            nrow, ncol = g.shape
+            headers = [(rr, cc) for rr in range(min(nrow, 60))
+                       for cc in range(ncol)
+                       if "resid" in str(g.iat[rr, cc]).lower()
+                       or "land value" in str(g.iat[rr, cc]).lower()]
+            for hr, hc in headers:
+                got, got_names = {}, {}
+                for rr in range(hr + 1, nrow):
+                    row = g.iloc[rr]
+                    val = _money(g.iat[rr, hc])
+                    if val is None:
+                        continue
+                    code = next((str(x).strip() for x in row
+                                 if code_re.match(str(x).strip())), None)
+                    if code:
+                        got[code] = val
+                    nm = next((str(x).strip() for x in row
+                               if isinstance(x, str) and len(str(x).strip()) > 3
+                               and _money(x) is None
+                               and not code_re.match(str(x).strip())), None)
+                    if nm:
+                        got_names[_norm_name(nm)] = val
+                if len(got) > len(values):
+                    values = got
+                if len(got_names) > len(by_name):
+                    by_name = got_names
 
     def _rescale(d):
         # Values quoted in £ millions (median < 1000) -> absolute £.
