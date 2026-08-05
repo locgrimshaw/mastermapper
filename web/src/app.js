@@ -1694,9 +1694,24 @@ function _cellsToPoints(fc) {
 // zoom — each resolution band starts small and doubles until the next band
 // takes over. Radius/cell-spacing stays a constant ratio, so the kernel
 // overlap factor (and therefore the density calibration) holds at any zoom.
+// Kernel radius must TRACK THE GRID, not the screen: each stop pair covers one
+// resolution band of the price grid (c 0.32° / l 0.08° / m 0.02° / f 0.005°,
+// switched by datasetFn at z6.5/8.5/11), and within a band the radius is
+// 0.75 × the VERTICAL distance between neighbouring cell centres:
+//     r(z) = 0.75 × cellDeg × (512·2^z / 360) × 1.7
+// The 512 is MapLibre's world size per zoom in CSS px; the 1.7 is Mercator's
+// latitude stretch at ~54°N — degree-square cells sit ~1.7× further apart
+// vertically than horizontally on screen, and it is the VERTICAL gap that has
+// to be bridged for kernels to merge into a surface. The previous stops
+// ignored both factors: at z8.4 the radius was 29 px against a 65 px vertical
+// spacing (0.44×), so every cell rendered as an isolated blob — a polka-dot
+// grid instead of a gradient. These stops hold the ratio at 0.75× at every
+// zoom (exponential-2 interpolation reproduces r ∝ 2^z exactly between
+// stops), which restores the ~1.8× summed-kernel overlap at cell centres that
+// the intensity constant (0.55) was originally tuned for.
 const HEAT_RADIUS = ["interpolate", ["exponential", 2], ["zoom"],
-  4, 5.5, 6.4, 29, 6.5, 7.7, 8.4, 29, 8.5, 7.7, 10.9, 41,
-  11, 11, 13, 44, 15, 120];
+  4, 9.3, 6.4, 49, 6.5, 13.1, 8.4, 49, 8.5, 13.1, 10.9, 69,
+  11, 18.6, 14, 148];
 
 // One spectral ramp for the value surface: transparent nothing -> blue cold
 // -> green -> yellow -> orange -> red hot, like a classic density heatmap.
