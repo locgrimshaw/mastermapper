@@ -232,27 +232,52 @@ def delete_dataset(dataset: str) -> bool:
     return False
 
 
-def _delete_in_chunks(dataset: str, chunk: int = 50000) -> bool:
-    """Clear a dataset via the bounded-delete RPC. True once it is empty."""
-    body = json.dumps({"p_dataset": dataset, "p_limit": chunk}).encode()
+def _delete_in_chunks(dataset: str, chunk: int = 10000) -> bool:
+    """Clear a dataset via the bounded-delete RPC. True once it is empty.
+
+    Chunk sizing is the whole game: a chunk must finish inside the statement
+    timeout, and rows vary hugely (a jittered sale point vs a dissolved road
+    corridor). 50k chunks of ppd_sales timed out on 2026-08-05 — worse, the
+    failure was SILENT because this function only logged when a later chunk
+    failed, so the run fell back to the unbounded delete (which can never
+    work at that size) with no clue why. Now: 10k default, every failure is
+    printed with its reason, and a failing chunk retries once at a fifth of
+    the size before giving up."""
+    def call(limit):
+        body = json.dumps({"p_dataset": dataset, "p_limit": limit}).encode()
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/rpc/delete_dataset_chunk",
+            data=body, method="POST",
+            headers={**_headers(), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            return int((resp.read() or b"0").decode("utf-8", "replace").strip() or 0)
     removed = 0
+    cur = chunk
     while True:
         try:
-            req = urllib.request.Request(
-                f"{SUPABASE_URL}/rest/v1/rpc/delete_dataset_chunk",
-                data=body, method="POST",
-                headers={**_headers(), "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                n = int((resp.read() or b"0").decode("utf-8", "replace").strip() or 0)
+            n = call(cur)
         except Exception as exc:
-            if removed:
-                print(f"  chunked delete of '{dataset}' stopped after "
-                      f"{removed:,} row(s): {exc}")
-            return False
+            detail = ""
+            if isinstance(exc, urllib.error.HTTPError):
+                try:
+                    detail = " " + exc.read().decode("utf-8", "replace")[:200]
+                except Exception:
+                    pass
+            small = max(500, cur // 5)
+            print(f"  chunk delete of '{dataset}' failed at size {cur:,} "
+                  f"({exc}{detail}) — retrying once at {small:,}", flush=True)
+            try:
+                n = call(small)
+                cur = small          # stay small once big has failed
+            except Exception as exc2:
+                print(f"  chunk delete of '{dataset}' failed at {small:,} too "
+                      f"({exc2}) after {removed:,} row(s) — falling back",
+                      flush=True)
+                return False
         removed += n
         if n == 0:
             return count_dataset(dataset) == 0
-        if removed % 500000 < chunk:
+        if removed % 200000 < cur:
             print(f"    cleared {removed:,} row(s) of '{dataset}' so far",
                   flush=True)
 
