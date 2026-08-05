@@ -12130,6 +12130,33 @@ function removeSiftEmphasis() {
   if (map.getSource("sift-emph-src")) map.removeSource("sift-emph-src");
 }
 
+// ---- Info-tooltip placement -----------------------------------------------
+// The .tip bubbles are position:fixed (see styles.css) so they can never be
+// cropped by a scrolling box; this places one beside its .info button the
+// moment it's hovered or focused, preferring above, flipping below when the
+// button sits near the top of the viewport, always clamped to the screen.
+function _placeTip(btn) {
+  const tip = btn.querySelector(".tip");
+  if (!tip) return;
+  const r = btn.getBoundingClientRect();
+  const w = Math.min(260, window.innerWidth - 16);
+  tip.style.width = w + "px";
+  tip.style.left = Math.max(8, Math.min(r.left - 8, window.innerWidth - w - 8)) + "px";
+  // visibility:hidden still has layout, so the height is measurable pre-show.
+  const h = tip.offsetHeight || 120;
+  const above = r.top - 8 - h;
+  tip.style.top = (above >= 6 ? above
+    : Math.min(r.bottom + 8, window.innerHeight - h - 6)) + "px";
+}
+document.addEventListener("mouseover", e => {
+  const btn = e.target && e.target.closest ? e.target.closest(".info") : null;
+  if (btn) _placeTip(btn);
+});
+document.addEventListener("focusin", e => {
+  const btn = e.target && e.target.closest ? e.target.closest(".info") : null;
+  if (btn) _placeTip(btn);
+});
+
 buildLayersPanel();       // the grouped Data layers tree (box 1) — must run
                           // first: buildSliders/wireImdToggle bind to elements
                           // the tree renders (#sliders, #imd-show, …).

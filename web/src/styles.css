@@ -531,11 +531,17 @@ html, body {
   outline: none;
 }
 
+/* FIXED, not absolute: an absolute tip lives inside its scroll container and
+   gets cropped by overflow (worst on a box's first row, where the whole
+   bubble fell outside). Fixed positioning escapes every ancestor; the left/
+   top coordinates are set per-hover by _placeTip() in app.js, clamped to the
+   viewport. No arrow — the bubble may flip below the button when there's no
+   headroom, and a wrong-way arrow is worse than none. */
 .info .tip {
-  position: absolute;
-  left: -8px;
-  bottom: calc(100% + 8px);
-  width: 220px;
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 240px;
   background: var(--ink-2);
   border: 1px solid var(--ink-line);
   border-radius: 8px;
@@ -550,19 +556,9 @@ html, body {
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.12s ease;
-  z-index: 50;
+  z-index: 1200;
   pointer-events: none;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-}
-
-.info .tip::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 14px;
-  transform: translateX(-50%);
-  border: 6px solid transparent;
-  border-top-color: var(--ink-2);
 }
 
 .info:hover .tip,
@@ -2221,8 +2217,6 @@ footer {
 /* Layer-row info tooltips: anchor to the RIGHT of the ⓘ so the 220px tip
    grows leftwards into the panel instead of overflowing its right edge. */
 #layers-tree .info { margin-left: 2px; }
-#layers-tree .info .tip { left: auto; right: -8px; }
-#layers-tree .info .tip::after { left: auto; right: 10px; transform: none; }
 
 /* Click-to-inspect card for dataset overlay features (power assets etc.) */
 .ovp { font: 12px/1.5 var(--font-ui); color: #1c2533; max-width: 300px; }
