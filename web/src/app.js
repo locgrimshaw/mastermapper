@@ -11544,7 +11544,7 @@ function computeViability(row) {
       locationFactor: regionCostFactor(row.region) },
     SIFT.assumptions, { noSens: true });
   return { profitOnCost: r.profitOnCost, rag: r.rag, score: r.score,
-           price: r.price, local: r.local };
+           price: r.price, local: r.local, gdv: r.gdv, profit: r.profit };
 }
 
 // Attach the computed viability appraisal to every row (called before filter/sort).
@@ -11704,9 +11704,13 @@ const SIFT_STEPS = [
 
 function siftSortKey() {
   return {
-    yield: r => r.yield || 0,
+    yield: r => r.effYield ?? (r.yield || 0),
     regen: r => r.regen || 0,
     viability: r => r._viab.profitOnCost == null ? -1e9 : r._viab.profitOnCost,
+    // Absolute £ rankings: scale × margin, so a big marginal scheme can
+    // out-rank a small lucrative one — the portfolio lens.
+    gdv: r => r._viab.gdv == null ? -1e12 : r._viab.gdv,
+    profit: r => r._viab.profit == null ? -1e12 : r._viab.profit,
   }[SIFT.sort] || (r => r._viab.profitOnCost == null ? -1e9 : r._viab.profitOnCost);
 }
 
@@ -11788,7 +11792,8 @@ function siftStepControlsHTML(key) {
           "FILTER: only keep stations achieving at least this profit on cost. Set to your target to keep only viable schemes; leave low (-30) to keep all and rank.") +
         `<button type="button" id="viab-vars-btn" class="ghost" style="margin:6px 0">Viability variables — full assumption set…</button>` +
         `<label class="sift-field"><span>Rank shortlist by</span><select id="sift-sort">` +
-        ["viability:Viability (profit on cost)", "regen:Regeneration need", "yield:Dwelling yield"]
+        ["viability:Viability (profit on cost %)", "profit:Total profit (£)",
+         "gdv:Total GDV (£)", "regen:Regeneration need", "yield:Dwelling yield"]
           .map(o => { const [v, t] = o.split(":"); return `<option value="${v}"${SIFT.sort === v ? " selected" : ""}>${t}</option>`; })
           .join("") + `</select></label>`;
   }
@@ -11834,7 +11839,8 @@ function exportSiftCsv() {
   const rows = siftSurvivorsUpTo(SIFT.step);
   const cols = ["rank", "crs", "name", "region", "tier", "density_floor", "developable_ha",
     "largest_plot_ha", "dwelling_yield", "protected_land_pct", "green_belt_ha",
-    "regeneration_need_pctile", "viability_profit_on_cost_pct", "viability_rag"];
+    "regeneration_need_pctile", "viability_profit_on_cost_pct",
+    "total_gdv_gbp", "total_profit_gbp", "viability_rag"];
   const esc = v => {
     const s = v == null ? "" : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -11846,6 +11852,8 @@ function exportSiftCsv() {
       r.effYield ?? r.yield, r.friction == null ? "" : Math.round(r.friction * 100), r.greenBeltHa,
       r.regen == null ? "" : Math.round(r.regen),
       r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1),
+      r._viab.gdv == null ? "" : Math.round(r._viab.gdv),
+      r._viab.profit == null ? "" : Math.round(r._viab.profit),
       r._viab.rag].map(esc).join(","));
   });
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
@@ -11986,15 +11994,25 @@ function renderSift() {
 
 // The ranked survivors table (shared by every step).
 function renderSiftTable(surv, results) {
-  const SORT_LABELS = { yield: "dwelling yield", regen: "regeneration need", viability: "viability" };
+  const SORT_LABELS = { yield: "dwelling yield", regen: "regeneration need",
+    viability: "viability", gdv: "total GDV", profit: "total profit" };
   const sortLabel = SORT_LABELS[SIFT.sort] || "viability";
   const top = surv.slice(0, 100);
+  const vmoney = x => x == null ? "—"
+    : "£" + (Math.abs(x) >= 1e9 ? (x / 1e9).toFixed(1) + "bn" : (x / 1e6).toFixed(0) + "M");
   const vcell = (r) => {
     const v = r._viab;
     if (v.profitOnCost == null) return `<td>—</td>`;
     const priceNote = v.price == null ? "" :
       ` · sales £${v.price}/ft² (${v.local ? "local Land Registry £/m²" : "regional fallback"})`;
-    return `<td><span class="sift-rag sift-rag-${v.rag}" title="profit on cost; viability score ${Math.round(v.score)}${priceNote}">${v.profitOnCost.toFixed(0)}%</span></td>`;
+    const tip = `profit on cost ${v.profitOnCost.toFixed(1)}% · GDV ${vmoney(v.gdv)} · ` +
+      `profit ${vmoney(v.profit)}; viability score ${Math.round(v.score)}${priceNote}`;
+    // The cell shows the figure the table is RANKED by; the RAG colour stays
+    // margin-based either way (a huge but margin-thin scheme reads amber/red).
+    const text = SIFT.sort === "gdv" ? vmoney(v.gdv)
+      : SIFT.sort === "profit" ? vmoney(v.profit)
+      : v.profitOnCost.toFixed(0) + "%";
+    return `<td><span class="sift-rag sift-rag-${v.rag}" title="${tip}">${text}</span></td>`;
   };
   const nShort = SIFT.shortlist.size;
   const star = crs => SIFT.shortlist.has(crs) ? "★" : "☆";
