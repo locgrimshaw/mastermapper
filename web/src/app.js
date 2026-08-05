@@ -11565,12 +11565,19 @@ const SENS_STEPS = Array.from({ length: 21 }, (_, i) => i - 10);
 function computeViability(row) {
   const r = computeAppraisal(
     { units: row.effYield ?? (row.yield || 0), ppm2: row.catchmentPpm2, region: row.region,
+      // The SAME land basis as the station's own deep dive: developable
+      // hectares × the authority's published MHCLG £/ha (falling back to the
+      // localised £/unit benchmark where the data doesn't cover the station).
+      // Without this the two surfaces contradicted each other on land cost.
+      areaHa: row.effHa ?? row.developableHa ?? null,
+      landValueHa: row.landValueHa ?? null,
       // Localise BUILD costs too, not just sales: the regional index from the
       // build-cost proxy, so a Yorkshire scheme isn't costed at London rates.
       locationFactor: regionCostFactor(row.region) },
     SIFT.assumptions, { noSens: true });
   return { profitOnCost: r.profitOnCost, rag: r.rag, score: r.score,
-           price: r.price, local: r.local, gdv: r.gdv, profit: r.profit };
+           price: r.price, local: r.local, gdv: r.gdv, profit: r.profit,
+           rlvVsBlv: r.rlvVsBlv, landBasisUsed: r.landBasisUsed };
 }
 
 // Attach the computed viability appraisal to every row (called before filter/sort).
@@ -11622,6 +11629,13 @@ async function loadSiftData() {
   try {
     // PostgREST caps a response at ~1000 rows, so page through in ranges until a
     // short page — otherwise the sift silently sees only the top 1000 stations.
+    // MHCLG land value per station, in parallel with the assessment pages —
+    // the sift MUST price land from the same published benchmark the deep
+    // dive uses, or the two read different verdicts for the same station
+    // (Kensal Green: '£160M profit' in the sift, 'unviable' in its dive).
+    const landValuesP = sb.rpc("station_land_values")
+      .then(r => new Map((r.data || []).map(x => [x.crs, Number(x.land_value_ha) || null])))
+      .catch(() => new Map());
     const PAGE = 1000;
     let data = [], from = 0;
     for (;;) {
@@ -11635,8 +11649,10 @@ async function loadSiftData() {
       if (!page || page.length < PAGE) break;
       from += PAGE;
     }
+    const landValues = await landValuesP;
     SIFT.rows = (data || []).map(r => ({
       crs: r.crs, country: r.country || "england", tier: r.tier, inSettlement: !!r.in_settlement, densityFloor: r.density_floor,
+      landValueHa: landValues.get(r.crs) ?? null,
       developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
       largestPlotHa: r.largest_plot_ha == null ? null : Number(r.largest_plot_ha),
       wellConnected: !!(r.stations && r.stations.well_connected),
@@ -11805,7 +11821,7 @@ function siftStepControlsHTML(key) {
         `<label class="sift-field"><span>Show top <b id="sift-depriv-val">${Math.round(C.deprivedTopPct)}%</b> most deprived</span><input type="range" id="sift-depriv" min="5" max="100" step="5" value="${C.deprivedTopPct}"></label>` +
         `<p class="hint" style="margin-top:4px">100% keeps every station; 10% keeps only catchments in the most-deprived national decile.</p>`;
     case "viability":
-      return `<p class="hint"><strong>Viability</strong> runs a full residual appraisal per scheme — GDV from the <strong>local sales value</strong> (catchment-weighted Land Registry £/m² × EPC floor areas within 800 m), against typology build costs on a location index, abnormals, fees, policy costs (CIL/S106/BNG), an explicit finance line from a monthly cashflow, and land. Headline levers below; <strong>every</strong> assumption is tweakable in Viability variables.</p>` +
+      return `<p class="hint"><strong>Viability</strong> runs a full residual appraisal per scheme — GDV from the <strong>local sales value</strong> (catchment-weighted Land Registry £/m² × EPC floor areas within 800 m), against typology build costs on a location index, abnormals, fees, policy costs (CIL/S106/BNG), an explicit finance line from a monthly cashflow, and land priced at the <strong>published MHCLG £/ha for the station's authority</strong> (the same basis the deep dive uses; localised £/unit fallback where uncovered). Headline levers below; <strong>every</strong> assumption is tweakable in Viability variables.</p>` +
         siftNumField("v-salesadj", "New-build premium %", A.salesAdjPct, 5,
           "Applied to the local market £/ft² from Land Registry data. 100% = resale parity; new build typically 105–115.") +
         siftNumField("v-buildh", "Build £/m² (houses)", A.buildPm2House, 25,
@@ -11957,6 +11973,8 @@ function renderSiftStep() {
     openViabilityModal(top ? {
       label: top.name || top.crs,
       units: top.effYield ?? (top.yield || 0), ppm2: top.catchmentPpm2, region: top.region,
+      areaHa: top.effHa ?? top.developableHa ?? null,
+      landValueHa: top.landValueHa ?? null,
       locationFactor: regionCostFactor(top.region),   // preview = sift arithmetic
       onChange: () => { scoreSiftRows(); updateSiftFunnel(); },
     } : null);
@@ -12032,7 +12050,9 @@ function renderSiftTable(surv, results) {
     const priceNote = v.price == null ? "" :
       ` · sales £${v.price}/ft² (${v.local ? "local Land Registry £/m²" : "regional fallback"})`;
     const tip = `profit on cost ${v.profitOnCost.toFixed(1)}% · GDV ${vmoney(v.gdv)} · ` +
-      `profit ${vmoney(v.profit)}; viability score ${Math.round(v.score)}${priceNote}`;
+      `profit ${vmoney(v.profit)} · RLV÷benchmark ${v.rlvVsBlv == null ? "n/a" : v.rlvVsBlv.toFixed(2) + "×"} · ` +
+      `land ${v.landBasisUsed === "mhclg" ? "MHCLG £/ha (published)" : "localised £/unit benchmark"}; ` +
+      `viability score ${Math.round(v.score)}${priceNote}`;
     // The cell shows the figure the table is RANKED by; the RAG colour stays
     // margin-based either way (a huge but margin-thin scheme reads amber/red).
     const text = SIFT.sort === "gdv" ? vmoney(v.gdv)
