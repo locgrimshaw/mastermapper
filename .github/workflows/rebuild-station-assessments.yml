@@ -1,0 +1,52 @@
+name: Rebuild station assessments
+
+# Recomputes station_assessments — the sift's entire data basis. Needed after
+# a migration changes what the assessment carries (e.g. 0049 largest_plot_ha)
+# or when constraint layers change materially.
+#
+# rebuild_station_assessments DELETEs and re-INSERTs rows carrying only the
+# developable/tier columns, so the socio-economic, price and Scotland columns
+# MUST be refilled afterwards — the last three calls are not optional.
+# Batched by CRS first letter so each call fits comfortably inside the
+# service_role 20-minute statement budget.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Rebuild assessments (A–Z), then socioecon, prices, Scotland
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          call () {  # call <fn> <json-args>
+            curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/$1" \
+              -H "apikey: $SUPABASE_SERVICE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+              -H "Content-Type: application/json" -d "$2" --max-time 1500
+          }
+          fail=0
+          for p in A B C D E F G H I J K L M N O P Q R S T U V W X Y Z; do
+            echo "— assessments prefix $p"
+            call rebuild_station_assessments "{\"crs_prefix\":\"$p\"}" \
+              || { echo "::error::assessments prefix $p failed"; fail=1; }
+            echo ""
+          done
+          # Refill the columns the re-insert nulled (see header note).
+          for fn in rebuild_station_socioecon rebuild_station_prices rebuild_station_scotland; do
+            echo "— $fn"
+            call "$fn" '{}' || { echo "::error::$fn failed"; fail=1; }
+            echo ""
+          done
+          exit $fail

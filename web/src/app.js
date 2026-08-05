@@ -11240,7 +11240,7 @@ const SIFT = {
   crit: { requireFrequency: true, requireWellConnected: false, exemptInSettlement: true,
           tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
           maxProtectedPct: 100, deprivedTopPct: 100, minProfitOnCost: -30,
-          excludeGreenBelt: false },
+          excludeGreenBelt: false, largestPlotOnly: false },
   sort: "viability",   // yield | regen | viability
   country: mmStore.get("siftCountry", "england"),  // england | scotland (sifted separately)
   assumptions: Object.assign({}, VIABILITY_DEFAULTS),
@@ -11485,14 +11485,25 @@ function computeViability(row) {
 // Deliverability & a 3-axis composite were removed per review — the funnel now ends
 // on viability; they will return when deliverability is rebuilt.
 function scoreSiftRows() {
-  // Effective developable area/yield: with the step-4 Green Belt exclusion on,
-  // every downstream number (step-3 filters, viability units, table, CSV,
-  // totals) sees the land NET of its Green Belt hectares — the yield scales by
-  // the same proportion since it's area × a flat density floor.
+  // Effective developable area/yield — two optional narrowings, applied in
+  // order, and every downstream number (step-3 filters, viability units,
+  // table, CSV, totals) sees the result. Yield scales proportionally with
+  // area since it's area × a flat density floor.
+  //   1. Largest plot only (step 3): base = the single largest contiguous
+  //      plot, so a catchment of scattered slivers stops out-ranking one
+  //      clean site. Null (not yet rebuilt) falls back to the total.
+  //   2. Green Belt exclusion (step 4): scale by the NON-Green-Belt share of
+  //      the catchment's developable land. On a largest-plot base this is an
+  //      approximation — the GB share of that specific plot isn't stored.
   const nogb = SIFT.crit.excludeGreenBelt;
+  const lgOnly = SIFT.crit.largestPlotOnly;
   for (const r of SIFT.rows) {
-    r.effHa = nogb ? Math.max(0, r.developableHa - (r.greenBeltHa || 0)) : r.developableHa;
-    r.effYield = nogb && r.developableHa > 0
+    const base = lgOnly && r.largestPlotHa != null
+      ? Math.min(r.largestPlotHa, r.developableHa) : r.developableHa;
+    const gbScale = nogb && r.developableHa > 0
+      ? Math.max(0, 1 - (r.greenBeltHa || 0) / r.developableHa) : 1;
+    r.effHa = base * gbScale;
+    r.effYield = r.developableHa > 0
       ? Math.round((r.yield || 0) * (r.effHa / r.developableHa)) : (r.yield || 0);
     r._viab = computeViability(r);
   }
@@ -11524,7 +11535,7 @@ async function loadSiftData() {
     for (;;) {
       const { data: page, error } = await sb
         .from("station_assessments")
-        .select("crs, country, tier, in_settlement, density_floor, developable_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, catchment_ppm2, catchment_median_price, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
+        .select("crs, country, tier, in_settlement, density_floor, developable_ha, largest_plot_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, catchment_ppm2, catchment_median_price, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
         .order("dwelling_yield", { ascending: false })
         .range(from, from + PAGE - 1);
       if (error) throw error;
@@ -11535,6 +11546,7 @@ async function loadSiftData() {
     SIFT.rows = (data || []).map(r => ({
       crs: r.crs, country: r.country || "england", tier: r.tier, inSettlement: !!r.in_settlement, densityFloor: r.density_floor,
       developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
+      largestPlotHa: r.largest_plot_ha == null ? null : Number(r.largest_plot_ha),
       wellConnected: !!(r.stations && r.stations.well_connected),
       meetsFrequency: !!(r.stations && r.stations.meets_frequency),
       connectivityPctile: (r.stations && r.stations.connectivity_pctile != null) ? Number(r.stations.connectivity_pctile) : null,
@@ -11592,7 +11604,7 @@ const SIFT_STEPS = [
     about: {
       what: "The net land physically available for homes within an ~800 m (10-minute) walk of the station, and the dwelling capacity that implies.",
       source: "NPPF 'reasonable walking distance' of a station; the net-developable-area method (start from the catchment, erase undevelopable land) is standard practice in Housing & Economic Land Availability Assessments (HELAA).",
-      calc: "800 m circular catchment MINUS (PostGIS ST_Difference) built-up land, green space, transport corridors (roads + railway curtilage), flood zone 3 and hard environmental designations. dwelling_yield = net developable hectares × the density floor from step 2." },
+      calc: "800 m circular catchment MINUS (PostGIS ST_Difference) built-up land, green space, transport corridors (roads + railway curtilage), flood zone 3 and hard environmental designations. dwelling_yield = net developable hectares × the density floor from step 2. 'Largest plot only' swaps the catchment total for the single largest contiguous plot (precomputed per station), screening out fragmented catchments; yield scales pro-rata." },
     pred: (r, c) => (r.effHa ?? r.developableHa) >= c.minDevHa &&
                     (r.effYield ?? r.yield) >= c.minYield },
   { key: "protected", title: "4 · Protected land %",
@@ -11684,7 +11696,9 @@ function siftStepControlsHTML(key) {
     case "developable":
       return `<p class="hint">Net developable area within 800 m after erasing built-up land, green space, transport (roads + railway curtilage), flood zone 3 and hard environmental designations.</p>` +
         siftNumField("sift-minha", "Min developable ha", C.minDevHa || 0, 1) +
-        siftNumField("sift-minyield", "Min dwelling yield", C.minYield || 0, 50);
+        siftNumField("sift-minyield", "Min dwelling yield", C.minYield || 0, 50) +
+        `<label class="dd-row"><input type="checkbox" id="sift-largest"${chk(C.largestPlotOnly)}> <span>Largest plot only</span></label>` +
+        `<p class="hint" style="margin-top:4px">Sift each station on its single <strong>largest contiguous plot</strong> instead of the catchment total — screens out places whose hectares are really a scatter of small, awkward sites. While on, the filters above, the viability appraisal and all totals use the largest plot (yield scaled pro-rata).</p>`;
     case "protected":
       return `<p class="hint">Hard designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased in step 3. This caps how much of the remaining developable land sits under a <strong>soft</strong> designation — conservation areas, AONB / National Landscapes, registered parks &amp; gardens and listed-building settings — which don't block development but add planning friction.</p>` +
         `<label class="sift-field"><span>Max protected land <b id="sift-prot-val">${Math.round(C.maxProtectedPct)}%</b></span><input type="range" id="sift-maxprot" min="0" max="100" step="5" value="${C.maxProtectedPct}"></label>` +
@@ -11729,6 +11743,7 @@ function readSiftControls() {
   if (g("sift-inelig")) C.ineligible = g("sift-inelig").checked;
   if (g("sift-minha")) C.minDevHa = numv("sift-minha", 0);
   if (g("sift-minyield")) C.minYield = numv("sift-minyield", 0);
+  if (g("sift-largest")) C.largestPlotOnly = g("sift-largest").checked;
   if (g("sift-maxprot")) C.maxProtectedPct = numv("sift-maxprot", 100);
   if (g("sift-nogb")) C.excludeGreenBelt = g("sift-nogb").checked;
   if (g("sift-depriv")) C.deprivedTopPct = numv("sift-depriv", 100);
@@ -11752,8 +11767,8 @@ function readSiftControls() {
 function exportSiftCsv() {
   const rows = siftSurvivorsUpTo(SIFT.step);
   const cols = ["rank", "crs", "name", "region", "tier", "density_floor", "developable_ha",
-    "dwelling_yield", "protected_land_pct", "green_belt_ha", "regeneration_need_pctile",
-    "viability_profit_on_cost_pct", "viability_rag"];
+    "largest_plot_ha", "dwelling_yield", "protected_land_pct", "green_belt_ha",
+    "regeneration_need_pctile", "viability_profit_on_cost_pct", "viability_rag"];
   const esc = v => {
     const s = v == null ? "" : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -11761,7 +11776,7 @@ function exportSiftCsv() {
   const lines = [cols.join(",")];
   rows.forEach((r, i) => {
     lines.push([i + 1, r.crs, r.name, r.region, r.tier, r.densityFloor ?? "",
-      r.effHa ?? r.developableHa,
+      r.effHa ?? r.developableHa, r.largestPlotHa ?? "",
       r.effYield ?? r.yield, r.friction == null ? "" : Math.round(r.friction * 100), r.greenBeltHa,
       r.regen == null ? "" : Math.round(r.regen),
       r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1),
