@@ -1888,13 +1888,20 @@ def build_land_value():
     code_re = re.compile(r"^[EWS]\d{8}$")
 
     def _money(v):
+        # Bare numeric parse only — plausibility and unit scaling are decided
+        # AFTER collection, because the workbook may quote absolute £/ha OR
+        # £ millions/ha and only the population of values tells us which.
         try:
             x = float(str(v).replace("£", "").replace(",", "").strip())
         except (TypeError, ValueError):
             return None
-        # £/ha for English residential land spans roughly £150k (rural NE)
-        # to ~£200M (central London); anything outside is a parse artefact.
-        return x if 50_000 <= x <= 1_000_000_000 else None
+        return x if x > 0 else None
+
+    def _norm_name(s):
+        s = re.sub(r"[^a-z0-9 ]", " ", str(s).lower())
+        s = re.sub(r"\b(city of|county of|royal borough of|london borough of|"
+                   r"district|borough|council|ua|the)\b", " ", s)
+        return re.sub(r"\s+", " ", s.replace(" and ", " ")).strip()
 
     import pandas as pd
     if fpath.suffix.lower() in (".xlsx", ".xlsm", ".xls"):
@@ -1904,39 +1911,45 @@ def build_land_value():
                                     encoding="utf-8-sig",
                                     on_bad_lines="skip")}
 
-    values = {}
+    values, by_name = {}, {}
     for _sname, g in grids.items():
         nrow, ncol = g.shape
-        headers = [(rr, cc) for rr in range(min(nrow, 40))
+        headers = [(rr, cc) for rr in range(min(nrow, 60))
                    for cc in range(ncol)
-                   if "resid" in str(g.iat[rr, cc]).lower()]
+                   if "resid" in str(g.iat[rr, cc]).lower()
+                   or "land value" in str(g.iat[rr, cc]).lower()]
         for hr, hc in headers:
-            got = {}
+            got, got_names = {}, {}
             for rr in range(hr + 1, nrow):
                 row = g.iloc[rr]
+                val = _money(g.iat[rr, hc])
+                if val is None:
+                    continue
                 code = next((str(x).strip() for x in row
                              if code_re.match(str(x).strip())), None)
-                if not code:
-                    continue
-                val = _money(g.iat[rr, hc])
-                if val is not None:
+                if code:
                     got[code] = val
+                # Name fallback: first plausible text cell in the row (some
+                # releases carry LA names but no ONS codes).
+                nm = next((str(x).strip() for x in row
+                           if isinstance(x, str) and len(str(x).strip()) > 3
+                           and _money(x) is None
+                           and not code_re.match(str(x).strip())), None)
+                if nm:
+                    got_names[_norm_name(nm)] = val
             if len(got) > len(values):
                 values = got
+            if len(got_names) > len(by_name):
+                by_name = got_names
 
-    if len(values) < 100:
-        _warn(key, f"only {len(values)} authorities parsed from {fpath.name} "
-                   "— has the workbook layout changed? Set LAND_VALUE_SRC to "
-                   "a CSV with an ONS code column and a 'Residential ...' "
-                   "value column")
-        _note(key, "unrecognised source format")
-        return {}
-    med = sorted(values.values())[len(values) // 2]
-    if not (100_000 <= med <= 100_000_000):
-        _warn(key, f"median parsed value £{med:,.0f}/ha is implausible — "
-                   "refusing to load")
-        _note(key, "implausible values")
-        return {}
+    def _rescale(d):
+        # Values quoted in £ millions (median < 1000) -> absolute £.
+        if not d:
+            return d
+        med0 = sorted(d.values())[len(d) // 2]
+        return {k: v * 1e6 for k, v in d.items()} if med0 < 1000 else d
+
+    values, by_name = _rescale(values), _rescale(by_name)
 
     gdf = gpd.read_file(bpath)
     code_col = None
@@ -1955,6 +1968,39 @@ def build_land_value():
         _warn(key, "no LAD code column in the boundary file")
         _note(key, "no boundary code column")
         return {}
+
+    # No usable code rows -> map the name-keyed parse onto boundary codes.
+    if len(values) < 100 and by_name and name_col is not None:
+        matched = {}
+        for _, brow in gdf[[code_col, name_col]].iterrows():
+            v = by_name.get(_norm_name(brow[name_col]))
+            if v is not None:
+                matched[str(brow[code_col]).strip()] = v
+        if len(matched) > len(values):
+            print(f"  [{key}] no ONS codes in the workbook — matched "
+                  f"{len(matched)} authorities by name instead")
+            values = matched
+
+    if len(values) < 100:
+        # Print enough of the workbook to fix the scan from the CI log alone.
+        _warn(key, f"only {len(values)} authorities parsed from {fpath.name} "
+                   "— has the workbook layout changed? Set LAND_VALUE_SRC to "
+                   "a CSV with an ONS code column and a 'Residential ...' "
+                   "value column. Sheet diagnostics follow:")
+        for sname, g in grids.items():
+            print(f"  [{key}]   sheet '{sname}' shape {g.shape}")
+            for rr in range(min(8, g.shape[0])):
+                cells = [str(g.iat[rr, cc])[:28] for cc in range(min(8, g.shape[1]))]
+                print(f"  [{key}]     r{rr}: {cells}")
+        _note(key, "unrecognised source format")
+        return {}
+    med = sorted(values.values())[len(values) // 2]
+    if not (100_000 <= med <= 100_000_000):
+        _warn(key, f"median parsed value £{med:,.0f}/ha is implausible — "
+                   "refusing to load")
+        _note(key, "implausible values")
+        return {}
+
     # England-only publication: emit only matched authorities, so Wales and
     # Scotland render as absence-of-data rather than a misleading zero.
     total = len(gdf)
