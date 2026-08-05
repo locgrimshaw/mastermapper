@@ -1032,7 +1032,13 @@ const OVERLAY_TREE = [
   ]},
   { key: "student", title: "Student housing &amp; demand", subs: [
     { key: "students", title: "Universities & students" },
-    { key: "market",   title: "Market & boundaries" },
+  ]},
+  // Market granularity: the viability evidence base. Own top-level branch —
+  // it was buried under "Student housing" back when prices only served the
+  // PBSA story, but these layers now feed the residual appraisal directly.
+  { key: "marketgrp", title: "Market", subs: [
+    { key: "market",  title: "Prices & sales" },
+    { key: "market2", title: "Costs, trend & affordability" },
   ]},
   { key: "energy", title: "Energy &amp; utilities", subs: [
     { key: "grid",        title: "Power grid" },
@@ -1143,20 +1149,34 @@ const MAP_OVERLAYS = [
   // (~35 km -> ~550 m cells); the numFilter picks the resolution for the
   // zoom, so the same toggle reads cleanly from a national view down to
   // street blocks. Borderless fills — the colour IS the story.
+  // heatWeightFn, not heatWeight: the kernel weight now depends on the shared
+  // flats/houses filter (marketPtype). The grid carries per-type medians —
+  // med/med_h/med_f and ppm2/ppm2_h/ppm2_f — so switching type is a repaint of
+  // props already on the client, never a refetch. A cell lacking the selected
+  // split (its per-type count missed the privacy floor) weights to 0 and
+  // disappears, rather than lying with the pooled number.
   { key: "price_heat", group: "market", label: "Sold prices (3-yr heatmap)", color: "#d73027", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
     datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
                   : z < 11  ? "price_grid_m" : "price_grid_f",
     // Kernel weight: median price -> 0..1 (blue ~£80k ... red £1.5M+).
-    heatWeight: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "med"]], 0],
-      60000, 0.06, 130000, 0.2, 200000, 0.34, 300000, 0.48,
-      450000, 0.62, 700000, 0.76, 1100000, 0.88, 1800000, 1] },
+    heatWeightFn: pt => {
+      const k = pt === "houses" ? "med_h" : pt === "flats" ? "med_f" : "med";
+      return ["case", ["!", ["has", k]], 0,
+        ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", k]], 0],
+          60000, 0.06, 130000, 0.2, 200000, 0.34, 300000, 0.48,
+          450000, 0.62, 700000, 0.76, 1100000, 0.88, 1800000, 1]];
+    } },
   { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr heatmap)", color: "#7048e8", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
     datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
                   : z < 11  ? "price_grid_m" : "price_grid_f",
     // Kernel weight: £/m² -> 0..1 (blue ~£1k ... red £10k+/m²).
-    heatWeight: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "ppm2"]], 0],
-      800, 0.06, 1500, 0.2, 2200, 0.34, 3000, 0.48,
-      4200, 0.62, 5800, 0.76, 8000, 0.88, 12000, 1] },
+    heatWeightFn: pt => {
+      const k = pt === "houses" ? "ppm2_h" : pt === "flats" ? "ppm2_f" : "ppm2";
+      return ["case", ["!", ["has", k]], 0,
+        ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", k]], 0],
+          800, 0.06, 1500, 0.2, 2200, 0.34, 3000, 0.48,
+          4200, 0.62, 5800, 0.76, 8000, 0.88, 12000, 1]];
+    } },
   // Individual transactions stay for comparables work — close zooms only.
   { key: "ppd_sales",    group: "market", label: "Individual sales (comparables)",  color: "#d64550", dataset: "ppd_sales", render: "point", minZoom: 14, lim: 6000,
     radius: ["interpolate", ["linear"], ["zoom"], 12, 2.5, 15, 5, 17, 7],
@@ -1164,6 +1184,16 @@ const MAP_OVERLAYS = [
            100000, "#f7b267", 300000, "#ef8354", 500000, "#d64550",
            800000, "#a4243b", 1500000, "#6d1a36"] } },
   { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5, nameLabel: true },
+  // --- Costs, trend & affordability (group market2) ------------------------
+  // Price trend as a FILL, not a heatmap: a diverging measure (falling vs
+  // rising) has a meaningful zero, and kernel density cannot show sign.
+  // dataset is the same virtual "price_grid" the heatmaps use, so the popup
+  // dispatch already understands the cells; only cells with enough sales in
+  // BOTH windows carry trend_pct, the rest render transparent.
+  { key: "price_trend", group: "market2", label: "Price trend (12m vs prior 24m)", color: "#2b8a3e", dataset: "price_grid", minZoom: 5, lim: 8000, noOutline: true,
+    datasetFn: z => z < 8.5 ? "price_grid_l" : z < 11 ? "price_grid_m" : "price_grid_f" },
+  { key: "build_cost", group: "market2", label: "Build cost index (free proxy)", color: "#e8590c", dataset: "build_cost_index", minZoom: 5 },
+  { key: "affordability", group: "market2", label: "Affordability (price ÷ income)", color: "#c2255c", dataset: "lad_income", minZoom: 5 },
   // Bus network (NaPTAN + BODS GTFS). ~400k stops nationally: the numeric
   // prop filter thins wide zooms to frequent-service stops, so the row cap
   // bites frequency-first rather than arbitrarily. Until the GTFS timetable
@@ -1350,6 +1380,9 @@ const LAYER_INFO = {
   uni_building:        { about: "Individual university building footprints. Zoom in close — these are dense.", source: "© OpenStreetMap contributors (ODbL)" },
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only. Every cell in view is drawn — no sampling — which is why it needs a close zoom: the full 100 m grid is 159,451 cells and a wider view cannot be served from the database fast enough.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
   la_rents:            { about: "Average monthly private rents by local authority, shaded light (cheapest, ~£500) to deep teal (most expensive, £3,000+). Hover a district for its figure and annual change.", source: "ONS Price Index of Private Rents (OGL v3)" },
+  price_trend:         { about: "Whether local sale prices are rising or falling: median of the last 12 months against the median of the 24 months before, per grid cell. Blue = falling, red = rising; cells without at least 5 sales in BOTH windows stay blank rather than faking a flat market.", source: "HM Land Registry Price Paid Data (OGL v3)" },
+  build_cost:          { about: "Relative construction cost by local authority — a FREE PROXY assembled from ONS construction output indices and openly published regional factors, not BCIS (which is a paid RICS product). Green = cheaper than the national average, red = dearer. Every figure can be overridden per project in Viability variables; a client with BCIS access can paste their own numbers there.", source: "ONS construction output price indices + published regional factors (proxy)" },
+  affordability:       { about: "Median sale price (last 12 months) divided by median gross annual full-time pay of residents, per local authority. 4× is the classic mortgageable benchmark; 12×+ is severe unaffordability. Authorities with suppressed pay data or under 30 sales stay grey.", source: "HM Land Registry Price Paid + ONS ASHE Table 8 (both OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
   power_line:          { about: "High-voltage lines, coloured and weight-scaled by voltage — deep red is the 275/400 kV transmission backbone, orange 90–200 kV, amber below. Wide zooms show the backbone; zoom in for the rest. Click a line for its details.", source: "© OpenStreetMap contributors (ODbL)" },
   power_sub_tx:        { about: "Transmission-scale substations (≥200 kV) — where the national grid itself can be tapped. The biggest dots; each shows its kV. Click one for details.", source: "© OpenStreetMap contributors (ODbL)" },
@@ -1368,6 +1401,38 @@ const LAYER_INFO = {
 
 const OVERLAY_MIN_ZOOM = 7;           // default floor; per-layer minZoom overrides
 const OVERLAY_DEFAULT_OPACITY = 0.32; // fill opacity a fresh overlay starts at
+
+// Shared flats/houses filter for the market layers (price heat, £/m² heat,
+// individual sales). One state, three layers: comparing "flats here vs houses
+// there" with per-layer filters would be a trap. localStorage direct rather
+// than mmStore, which is declared much later in the file.
+let marketPtype = (() => {
+  try { return localStorage.getItem("mm.marketPtype") || "all"; }
+  catch (_) { return "all"; }
+})();
+
+function setMarketPtype(v) {
+  marketPtype = v === "houses" || v === "flats" ? v : "all";
+  try { localStorage.setItem("mm.marketPtype", marketPtype); } catch (_) {}
+  // Heat layers: swap the kernel-weight expression in place — the per-type
+  // medians are already in the loaded cells, so this never refetches.
+  for (const o of MAP_OVERLAYS) {
+    if (o.heatWeightFn && map.getLayer(`ov-${o.key}-heat`))
+      map.setPaintProperty(`ov-${o.key}-heat`, "heatmap-weight",
+                           o.heatWeightFn(marketPtype));
+  }
+  // Individual sales: a client-side layer filter. The row cap applies BEFORE
+  // this filter, so a flats-only view in a dense area may undersample — the
+  // layer's z14+ floor keeps that mostly theoretical, and the popup always
+  // shows the true type of what is drawn.
+  const salesFilter = marketPtype === "houses"
+    ? ["match", ["get", "ptype"], ["D", "S", "T"], true, false]
+    : marketPtype === "flats"
+    ? ["==", ["get", "ptype"], "F"]
+    : null;
+  if (map.getLayer("ov-ppd_sales-pt"))
+    map.setFilter("ov-ppd_sales-pt", salesFilter);
+}
 const OVERLAY_FETCH_MARGIN = 0.3;     // pad each fetch 30% beyond the viewport
 const overlayState = {};              // key -> { on, opacity, fetched:{w,s,e,n,z} }
 
@@ -1709,7 +1774,8 @@ function renderOverlay(key, def, fc) {
     map.addLayer({ id: `ov-${key}-heat`, type: "heatmap", source: srcId,
       paint: {
         "heatmap-radius": HEAT_RADIUS,
-        "heatmap-weight": def.heatWeight || 1,
+        "heatmap-weight": (def.heatWeightFn ? def.heatWeightFn(marketPtype)
+                           : def.heatWeight) || 1,
         "heatmap-intensity": 0.55,
         "heatmap-color": HEAT_COLOR,
         "heatmap-opacity": Math.min(1, opacity * 2.2),
@@ -1750,6 +1816,9 @@ function renderOverlay(key, def, fc) {
         "circle-stroke-width": 1,
         "circle-stroke-opacity": Math.min(1, opacity * 2.5),
       } }, before);
+    // The comparables layer honours the shared flats/houses filter from the
+    // moment it is created, not only after the control is next touched.
+    if (key === "ppd_sales" && marketPtype !== "all") setMarketPtype(marketPtype);
     if (hasIcon) {
       map.addLayer({ id: `ov-${key}-icon`, type: "symbol", source: srcId, minzoom: 9,
         layout: {
@@ -1875,6 +1944,28 @@ function renderOverlay(key, def, fc) {
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "rent_mean"]], 0],
           500, "#d5eef0", 800, "#a3d8dc", 1100, "#6dbcc5", 1500, "#3c96a6",
           2000, "#20707f", 3000, "#0d4a5c"]]
+      : def.dataset === "price_grid"
+      // Only the trend layer renders price_grid cells as FILL (the heatmaps
+      // take the heatPoint path), so this case is the trend ramp: diverging,
+      // blue falling -> grey flat -> red rising. Cells without a trustworthy
+      // trend (either window under 5 sales) are fully transparent, not grey:
+      // grey would read as "flat market", and absence of evidence isn't that.
+      ? ["case", ["!", ["has", "trend_pct"]], "rgba(0,0,0,0)",
+         ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "trend_pct"]], 0],
+          -10, "#1864ab", -5, "#74c0fc", -1.5, "#d8e2e8", 1.5, "#e9d8d8",
+          5, "#ff8787", 10, "#c92a2a"]]
+      : def.dataset === "build_cost_index"
+      // Relative build cost: green cheaper-than-national -> red dearer.
+      ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "factor"]], 1],
+         0.88, "#2f9e44", 0.95, "#94d82d", 1.0, "#ffd43b",
+         1.08, "#f59f00", 1.18, "#e8590c", 1.3, "#c92a2a"]
+      : def.dataset === "lad_income"
+      // Affordability: median price over median gross annual pay. 4x is the
+      // classic mortgageable benchmark; 12x+ is London-grade unaffordability.
+      ? ["case", ["!", ["has", "afford_ratio"]], "rgba(160,170,175,0.4)",
+         ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "afford_ratio"]], 0],
+          4, "#2f9e44", 6, "#94d82d", 8, "#ffd43b", 10, "#f59f00",
+          12, "#e8590c", 15, "#c92a2a"]]
       : def.dataset === "planit_rates"
       // Approval-rate choropleth: red = refusal-happy, green = permissive.
       ? ["case", ["!", ["has", "approval_pct"]], "rgba(160,170,175,0.4)",
@@ -2318,6 +2409,18 @@ function buildLayersPanel() {
                             info: LAYER_INFO.building_height });
         rows += buildingsLegendHTML();
       }
+      // Prices & sales carry ONE shared flats/houses filter above the rows —
+      // per-layer filters would let the heat show flats while the comparables
+      // show houses, which is exactly the confusion this exists to prevent.
+      if (g.key === "market") {
+        rows += `
+          <div class="lt-seg" id="market-ptype" role="group" aria-label="Property type filter">
+            <span class="lt-seg-label">Type</span>
+            ${["all", "houses", "flats"].map(v => `
+              <button type="button" class="lt-seg-btn${marketPtype === v ? " active" : ""}"
+                      data-ptype="${v}">${v === "all" ? "All" : v === "houses" ? "Houses" : "Flats"}</button>`).join("")}
+          </div>`;
+      }
       rows += MAP_OVERLAYS.filter(o => o.group === g.key).map(o =>
         ltRowHTML({ dataKey: o.key, label: o.label, color: o.color, statId: `ov-stat-${o.key}`,
                     checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}`,
@@ -2404,6 +2507,16 @@ function buildLayersPanel() {
   // Building-footprint tiles (also storage-served, not a bbox overlay).
   const buildingsCb = document.getElementById("buildings-show");
   if (buildingsCb) buildingsCb.addEventListener("change", e => setBuildingsVisible(e.target.checked));
+
+  // Shared flats/houses filter for the market layers.
+  const seg = document.getElementById("market-ptype");
+  if (seg) seg.addEventListener("click", e => {
+    const btn = e.target.closest(".lt-seg-btn");
+    if (!btn) return;
+    setMarketPtype(btn.dataset.ptype);
+    seg.querySelectorAll(".lt-seg-btn").forEach(b =>
+      b.classList.toggle("active", b === btn));
+  });
 
   // Every transparency slider routes through one dispatcher.
   host.querySelectorAll(".lt-opacity").forEach(sl =>
@@ -3276,15 +3389,50 @@ function hoverContentForOverlay(def, p) {
     title = p.med != null ? `£${Number(p.med).toLocaleString()} median` : "Price cell";
     kind = "Sold prices — last 3 years";
     const epcReal = p.epc === true || p.epc === "true";
-    rows = [row(p.ppm2 != null ? `${epcReal ? "" : "~"}£${Number(p.ppm2).toLocaleString()}/m²` : null,
+    const psf = v => `£${Math.round(Number(v) / 10.7639).toLocaleString()}/ft²`;
+    const tr = p.trend_pct != null ? Number(p.trend_pct) : null;
+    rows = [row(p.ppm2 != null
+                ? `${epcReal ? "" : "~"}£${Number(p.ppm2).toLocaleString()}/m² · ${psf(p.ppm2)}`
+                : null,
                 epcReal ? `measured (${p.m2n} EPC-matched sales)` : "est. by type mix"),
+            row(p.med_h != null
+                ? `£${Number(p.med_h).toLocaleString()}` +
+                  (p.ppm2_h != null ? ` · £${Number(p.ppm2_h).toLocaleString()}/m²` : "")
+                : null, `houses (${p.n_h ?? "?"})`),
+            row(p.med_f != null
+                ? `£${Number(p.med_f).toLocaleString()}` +
+                  (p.ppm2_f != null ? ` · £${Number(p.ppm2_f).toLocaleString()}/m²` : "")
+                : null, `flats (${p.n_f ?? "?"})`),
+            row(tr != null
+                ? `${tr > 0 ? "▲ +" : tr < 0 ? "▼ " : ""}${tr}%`
+                : null, `12m vs prior 24m (${p.n_r12 ?? "?"}/${p.n_p24 ?? "?"} sales)`),
             row(p.n != null ? `${Number(p.n).toLocaleString()} sales` : null, "in this cell")];
   } else if (d === "ppd_sales") {
     const PTYPE = { D: "Detached", S: "Semi-detached", T: "Terraced", F: "Flat", O: "Other" };
     title = p.price != null ? `£${Number(p.price).toLocaleString()}` : "Sale";
     kind = [p.date, PTYPE[p.ptype] || p.ptype, p.newb === "Y" ? "new build" : null,
             p.tenure === "L" ? "leasehold" : "freehold"].filter(Boolean).join(" · ");
-    rows = [row(p.addr, "address")];
+    rows = [row(p.addr, "address"),
+            row(p.ppm2r != null
+                ? `£${Number(p.ppm2r).toLocaleString()}/m² · ` +
+                  `£${Math.round(Number(p.ppm2r) / 10.7639).toLocaleString()}/ft² ` +
+                  `(${p.m2} m² EPC)`
+                : null, "measured")];
+  } else if (d === "build_cost_index") {
+    title = p.name || "Local authority";
+    kind = "Build cost index — free proxy, not BCIS";
+    rows = [row(p.factor != null ? `${Number(p.factor).toFixed(2)}× national` : null,
+                p.src === "default" ? "no regional factor — national assumed" : (p.region || "region factor")),
+            row(p.cost_house_pm2 != null ? `£${Number(p.cost_house_pm2).toLocaleString()}/m²` : null, "houses, indicative"),
+            row(p.cost_flat_pm2 != null ? `£${Number(p.cost_flat_pm2).toLocaleString()}/m²` : null, "flats, indicative"),
+            row("override in Viability variables", "per-project")];
+  } else if (d === "lad_income") {
+    title = p.afford_ratio != null ? `${Number(p.afford_ratio).toFixed(1)}× income` : (p.name || "Local authority");
+    kind = "Affordability — median price ÷ median gross pay";
+    rows = [row(p.med_price != null ? `£${Number(p.med_price).toLocaleString()}` : null,
+                `median price (${p.n_sales_12m ?? "?"} sales, 12m)`),
+            row(p.income_median != null ? `£${Number(p.income_median).toLocaleString()}` : null,
+                `median annual pay${p.asof ? ` (${p.asof})` : ""}`)];
   } else if (d === "la_rents") {
     title = p.name || "Local authority";
     rows = [row(p.rent_mean != null ? `£${Number(p.rent_mean).toLocaleString()}/mo` : null, "avg rent"),

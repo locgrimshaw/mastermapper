@@ -38,7 +38,10 @@ jobs:
 
       - name: Build the ppd_sales import CSV
         env:
-          PPD_MONTHS: ${{ inputs.months }}
+          # `inputs` is empty on scheduled (cron) runs, so without the fallback
+          # the monthly refresh silently ran a 12-month window while manual
+          # runs used 36 — two different products from the same workflow.
+          PPD_MONTHS: ${{ inputs.months || '36' }}
           # Optional EPC floor-area join (real £/m² instead of the type-mix
           # estimate): free account at epc.opendatacommunities.org, then add
           # these two repository secrets — see docs/MANUAL_TASKS.md 5c.
@@ -69,3 +72,11 @@ jobs:
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
             -H "Content-Type: application/json" -d '{}' --max-time 1500 \
             || echo "::warning::price_grid rebuild call failed — run 'select rebuild_price_grid()' manually"
+          # Affordability ratios on lad_income (median 12m price ÷ ASHE income).
+          # Depends on fresh ppd_sales, so it lives here rather than in the
+          # datasets workflow; harmless no-op when lad_income is not yet loaded.
+          curl -sS -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_lad_affordability" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/json" -d '{}' --max-time 1500 \
+            || echo "::warning::lad_affordability rebuild failed — run 'select rebuild_lad_affordability()' manually"

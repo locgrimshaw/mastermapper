@@ -264,6 +264,11 @@ jobs:
           # link, see MANUAL_TASKS 11.
           OFCOM_FIBRE_SRC: ${{ vars.OFCOM_FIBRE_SRC }}
           CENSUS_STUDENTS_SRC: ${{ vars.CENSUS_STUDENTS_SRC }}
+          # Market granularity: build-cost proxy override + ONS ASHE earnings
+          # (Table 8, residence-based). Both optional — build_cost_index falls
+          # back to the committed proxy table; lad_income skips with a warning.
+          BUILD_COST_SRC: ${{ vars.BUILD_COST_SRC }}
+          ASHE_SRC: ${{ vars.ASHE_SRC }}
         run: |
           echo "Building supabase/datasets_import.csv (DATASETS='${DATASETS}')"
           python pipeline/build_datasets.py

@@ -2133,6 +2133,25 @@ footer {
 
 /* Mini colour ramp swatch (choropleth rows). */
 .lt-ramp { display: inline-flex; border-radius: 3px; overflow: hidden; flex: 0 0 auto; }
+
+/* Shared flats/houses segmented filter above the Prices & sales rows. */
+.lt-seg {
+  display: flex; align-items: center; gap: 4px;
+  margin: 2px 0 6px; padding: 2px 0;
+}
+.lt-seg-label {
+  font-size: 10px; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--text-dim); margin-right: 2px;
+}
+.lt-seg-btn {
+  font-size: 11px; padding: 2px 9px; border-radius: 10px;
+  border: 1px solid var(--ink-line); background: transparent;
+  color: var(--text-dim); cursor: pointer;
+}
+.lt-seg-btn.active {
+  background: var(--accent, #4c6ef5); border-color: transparent;
+  color: #fff; font-weight: 600;
+}
 .lt-ramp i { width: 7px; height: 12px; display: inline-block; }
 
 /* Overlay swatches reuse .ov-swatch (defined with the old overlay list). */

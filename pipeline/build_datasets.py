@@ -218,6 +218,7 @@ ALL_DATASETS = [
     "planit_rates", "bus_route",
     "ofcom_fibre", "census_students", "student_accom",
     "building_height",
+    "build_cost_index", "lad_income",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -1722,6 +1723,207 @@ def build_ofcom_fibre():
     return {key: rows}
 
 
+# National-average new-build base costs, £/m² GIA, used with the regional
+# factor to seed the viability model's typology costs. A PROXY, not BCIS
+# (commercial, licensed — excluded by project policy): mid-range figures from
+# openly published new-build cost commentary, stated to the user as such and
+# overridable both here (env) and per project in the Viability variables modal.
+BUILD_COST_HOUSE_PM2 = float(os.environ.get("BUILD_COST_HOUSE_PM2") or 1850)
+BUILD_COST_FLAT_PM2 = float(os.environ.get("BUILD_COST_FLAT_PM2") or 2350)
+
+
+def build_build_cost():
+    """Localised build-cost index on LAD polygons — dataset build_cost_index.
+
+    The factor CSV is COMMITTED (pipeline/data/build_cost_index.csv): one row
+    per region, UK = 1.00, every row carrying its source string and as-of date.
+    BUILD_COST_SRC (URL or path) overrides it — e.g. a client with a real BCIS
+    licence exporting their own location factors keeps the same column shape.
+
+    LAD -> region comes from the committed rents CSV (ons-la-rents.csv), which
+    already maps every English/Welsh/Scottish LAD code to its region — no new
+    download, and one fewer thing to rot. A LAD absent from that lookup gets
+    factor 1.0 with src='default' rather than dropping off the map: a missing
+    row would read as "no data", when what we mean is "national average"."""
+    key = "build_cost_index"
+    bpath, bhow = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries to join cost factors onto")
+        _note(key, "no LAD boundaries")
+        return {}
+    fpath, fhow = _resolve_source(
+        key, ["BUILD_COST_SRC"], None, "build-cost-factors.csv")
+    if fpath is None:
+        committed = ROOT / "pipeline" / "data" / "build_cost_index.csv"
+        if committed.exists():
+            fpath, fhow = committed, "committed proxy table"
+        else:
+            _warn(key, "no factor CSV (committed file missing and "
+                       "BUILD_COST_SRC unset)")
+            _note(key, "no factor table")
+            return {}
+    print(f"  [{key}] reading {fpath.name} ({fhow}) ...")
+    fdf = _read_csv(fpath)
+    rcol = _find_col(fdf, ["region"], contains=True)
+    fcol = _find_col(fdf, ["factor"], contains=True)
+    acol = _find_col(fdf, ["asof", "as of", "date"], contains=True)
+    if rcol is None or fcol is None:
+        _warn(key, f"factor CSV needs region+factor columns, got "
+                   f"{list(fdf.columns)}")
+        _note(key, "unrecognised factor CSV")
+        return {}
+    factors = {}
+    for _, row in fdf.iterrows():
+        region = str(row[rcol]).strip()
+        f = _num(row, fcol)
+        if region and f:
+            factors[region.lower()] = (f, str(row[acol]).strip() if acol else "")
+
+    # LAD code -> region, from the committed rents lookup.
+    lad_region = {}
+    rents = ROOT / "data" / "raw" / "ons-la-rents.csv"
+    if rents.exists():
+        rdf = _read_csv(rents)
+        ccol = _find_col(rdf, ["area code", "code"], contains=True)
+        gcol = _find_col(rdf, ["region"], contains=True)
+        if ccol is not None and gcol is not None:
+            for _, row in rdf.iterrows():
+                lad_region[str(row[ccol]).strip()] = str(row[gcol]).strip()
+    if not lad_region:
+        _warn(key, "LAD->region lookup unavailable (ons-la-rents.csv) — "
+                   "every authority will carry the national factor 1.0")
+
+    gdf = gpd.read_file(bpath)
+    code_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*cd", str(c).lower()):
+            code_col = c
+            break
+    code_col = code_col or _find_col(gdf, ["lad_code", "code", "areacd"],
+                                     contains=True)
+    name_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*nm", str(c).lower()):
+            name_col = c
+            break
+
+    n_default = 0
+
+    def cost_props(f):
+        nonlocal n_default
+        code = str(_cell(f, code_col) or "").strip()
+        region = lad_region.get(code, "")
+        hit = factors.get(region.lower()) if region else None
+        if hit is None:
+            n_default += 1
+            factor, asof, src = 1.0, "", "default"
+        else:
+            factor, asof = hit
+            src = "proxy"
+        return {"lad_code": code, "region": region or None,
+                "factor": round(factor, 3),
+                "cost_house_pm2": round(BUILD_COST_HOUSE_PM2 * factor),
+                "cost_flat_pm2": round(BUILD_COST_FLAT_PM2 * factor),
+                "asof": asof or None, "src": src}
+
+    rows = _emit(gdf, key, name_col=name_col, id_col=code_col, want="polygon",
+                 props_fn=cost_props)
+    if n_default:
+        print(f"  [{key}] {n_default} authorit(ies) had no region mapping — "
+              f"carrying national factor 1.0, flagged src='default'")
+    _note(key, f"{fhow}; base house £{BUILD_COST_HOUSE_PM2:.0f}/m² "
+               f"flat £{BUILD_COST_FLAT_PM2:.0f}/m²", len(rows))
+    return {key: rows}
+
+
+def build_income():
+    """Household earnings on LAD polygons — dataset lad_income.
+
+    Source: ONS ASHE Table 8 (residence-based gross annual pay, full-time, by
+    local authority). No stable download URL, so the usual pattern: ASHE_SRC
+    (URL or path) or the drop-in data/raw/ashe-la-earnings.csv. Expected
+    columns: an LAD code column and a median annual pay column; extra columns
+    are ignored. The affordability ratio itself (median price / income) is
+    computed in-DB by rebuild_lad_affordability() after each PPD load, so this
+    builder only ships the income side."""
+    key = "lad_income"
+    # Default: the NOMIS API (stable, parameterised — not a hashed per-release
+    # link) serving ASHE resident analysis, median gross ANNUAL pay, full-time,
+    # by local authority. The dimension codes are best-effort: if they drift,
+    # the run warns and skips — and a wrong pay dimension cannot load silently,
+    # because the >£1,000 sanity guard below drops hourly (~£15) and weekly
+    # (~£700) figures wholesale. ASHE_SRC overrides with a hand-picked CSV.
+    ashe_default = ("https://www.nomisweb.co.uk/api/v01/dataset/NM_30_1.data.csv"
+                    "?geography=TYPE434&date=latest&sex=8&item=2&pay=7"
+                    "&measures=20100"
+                    "&select=geography_code,geography_name,date_name,obs_value")
+    ipath, ihow = _resolve_source(key, ["ASHE_SRC"], ashe_default,
+                                  "ashe-la-earnings.csv")
+    if ipath is None:
+        _warn(key, "no earnings CSV — download ONS ASHE Table 8 (residence, "
+                   "gross annual pay, full-time) and supply it as ASHE_SRC or "
+                   "drop in data/raw/ashe-la-earnings.csv")
+        _note(key, "ASHE_SRC not set and NOMIS default failed")
+        return {}
+    bpath, bhow = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries to join earnings onto")
+        _note(key, "no LAD boundaries")
+        return {}
+    print(f"  [{key}] reading {ipath.name} ({ihow}) ...")
+    df = _read_csv(ipath)
+    ccol = _find_col(df, ["area code", "areacd", "ons code", "lad code",
+                          "ladcd", "geography code", "code"], contains=True)
+    mcol = _find_col(df, ["median"], contains=True) \
+        or _find_col(df, ["obs_value", "annual pay", "gross annual", "pay"],
+                     contains=True)
+    ycol = _find_col(df, ["date_name", "year", "period", "date", "asof"],
+                     contains=True)
+    if ccol is None or mcol is None:
+        _warn(key, f"need LAD-code + median-pay columns, got "
+                   f"{list(df.columns)[:12]}")
+        _note(key, "unrecognised earnings CSV")
+        return {}
+    income = {}
+    asof = ""
+    for _, row in df.iterrows():
+        code = str(row[ccol]).strip()
+        v = _num(row, mcol)
+        # ASHE publishes suppressed cells as 'x'/':' — _num returns None; skip.
+        if code and v and v > 1000:
+            income[code] = round(v)
+            if ycol is not None and not asof:
+                asof = str(row[ycol]).strip()
+
+    gdf = gpd.read_file(bpath)
+    code_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*cd", str(c).lower()):
+            code_col = c
+            break
+    code_col = code_col or _find_col(gdf, ["lad_code", "code", "areacd"],
+                                     contains=True)
+    name_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*nm", str(c).lower()):
+            name_col = c
+            break
+    keep = gdf[gdf[code_col].astype(str).str.strip().isin(income)].copy()
+    print(f"  [{key}] {len(keep)}/{len(gdf)} authorities matched an income")
+
+    rows = _emit(keep, key, name_col=name_col, id_col=code_col, want="polygon",
+                 props_fn=lambda f: {
+                     "lad_code": str(_cell(f, code_col)).strip(),
+                     "income_median": income.get(str(_cell(f, code_col)).strip()),
+                     "asof": asof or None})
+    _note(key, ihow, len(rows))
+    return {key: rows}
+
+
 CENSUS_TS062_URL = "https://www.nomisweb.co.uk/output/census/2021/census2021-ts062.zip"
 
 
@@ -2128,6 +2330,8 @@ GROUPS = (
         (["census_students"], build_census_students, []),
         (["student_accom"], build_student_accom, []),
         (["building_height"], build_building_height, []),
+        (["build_cost_index"], build_build_cost, []),
+        (["lad_income"], build_income, []),
     ]
 )
 

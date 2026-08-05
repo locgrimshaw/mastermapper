@@ -1,0 +1,12 @@
+region,factor,source,asof
+London,1.18,"Free proxy: relative regional construction cost factor assembled from openly published regional summaries (ONS construction output; public tender-price commentary). NOT BCIS. Override per project in Viability variables.",2026-Q2
+South East,1.08,"Free proxy — see London row.",2026-Q2
+East of England,1.03,"Free proxy — see London row.",2026-Q2
+South West,1.00,"Free proxy — see London row.",2026-Q2
+West Midlands,0.95,"Free proxy — see London row.",2026-Q2
+East Midlands,0.93,"Free proxy — see London row.",2026-Q2
+Yorkshire and The Humber,0.92,"Free proxy — see London row.",2026-Q2
+North West,0.93,"Free proxy — see London row.",2026-Q2
+North East,0.90,"Free proxy — see London row.",2026-Q2
+Wales,0.92,"Free proxy — see London row.",2026-Q2
+Scotland,0.97,"Free proxy — see London row.",2026-Q2

@@ -49,7 +49,10 @@ EPC_BULK_URL = os.environ.get(
     "https://epc.opendatacommunities.org/api/v1/files/"
     "all-domestic-certificates.zip")
 
-MONTHS = int(os.environ.get("PPD_MONTHS", "12") or 12)
+# 36 months is the product now: the price layers advertise "last 3 years" and
+# the trend metric compares the last 12 months against the prior 24, so a
+# shorter default would silently hollow out both.
+MONTHS = int(os.environ.get("PPD_MONTHS", "36") or 36)
 
 
 def load_postcodes():
@@ -204,7 +207,12 @@ def main() -> int:
         cutoff_m += 12
         cutoff_y -= 1
     cutoff = f"{cutoff_y:04d}-{cutoff_m:02d}"
-    years = sorted({cutoff_y, today.year})
+    # EVERY year from cutoff to now. This was sorted({cutoff_y, today.year}),
+    # which downloads only the two endpoint files — a 36-month window fetched
+    # pp-2023 and pp-2026 and silently skipped 2024 and 2025 entirely, so a
+    # third of the "3-year" comparables never existed. The hole was invisible:
+    # nothing failed, the layer just had less data than it claimed.
+    years = list(range(cutoff_y, today.year + 1))
     print(f"[ppd] window: sales since {cutoff} (files: {years})")
 
     pcs = load_postcodes()
