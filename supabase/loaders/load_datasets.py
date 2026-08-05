@@ -233,29 +233,39 @@ def delete_dataset(dataset: str) -> bool:
 
 
 def _delete_in_chunks(dataset: str, chunk: int = 10000) -> bool:
-    """Clear a dataset via the bounded-delete RPC. True once it is empty.
+    """Clear a dataset via the keyset-delete RPC. True once it is empty.
 
-    Chunk sizing is the whole game: a chunk must finish inside the statement
-    timeout, and rows vary hugely (a jittered sale point vs a dissolved road
-    corridor). 50k chunks of ppd_sales timed out on 2026-08-05 — worse, the
-    failure was SILENT because this function only logged when a later chunk
-    failed, so the run fell back to the unbounded delete (which can never
-    work at that size) with no clue why. Now: 10k default, every failure is
-    printed with its reason, and a failing chunk retries once at a fifth of
-    the size before giving up."""
-    def call(limit):
-        body = json.dumps({"p_dataset": dataset, "p_limit": limit}).encode()
+    The chunk RPC keysets on the primary key (dataset, source_id) and returns
+    the last id it removed; threading that id back as p_after makes every
+    chunk start exactly where the previous one finished. That matters more
+    than chunk size: the earlier ctid version re-scanned the dataset from the
+    start each call, wading through the dead tuples its own previous chunks
+    had created, so on ppd_sales (~910k rows) chunk N+1 was slower than chunk
+    N until even 500-row chunks blew the 8 s statement timeout (2026-08-05,
+    run 30996968528). With the cursor the per-chunk cost is flat however many
+    rows have already gone. Every failure is printed with its reason, and a
+    failing chunk retries once at a fifth of the size (same cursor — a timed
+    out delete rolled back, so nothing was consumed) before giving up."""
+    def call(limit, after):
+        body = json.dumps({"p_dataset": dataset, "p_limit": limit,
+                           "p_after": after}).encode()
         req = urllib.request.Request(
             f"{SUPABASE_URL}/rest/v1/rpc/delete_dataset_chunk",
             data=body, method="POST",
             headers={**_headers(), "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=600) as resp:
-            return int((resp.read() or b"0").decode("utf-8", "replace").strip() or 0)
+            raw = (resp.read() or b"{}").decode("utf-8", "replace").strip()
+        out = json.loads(raw or "{}")
+        if isinstance(out, dict):
+            return int(out.get("removed") or 0), out.get("last") or after
+        # Pre-0048 database: bare integer, no cursor to thread.
+        return int(out or 0), after
     removed = 0
     cur = chunk
+    after = ""
     while True:
         try:
-            n = call(cur)
+            n, after = call(cur, after)
         except Exception as exc:
             detail = ""
             if isinstance(exc, urllib.error.HTTPError):
@@ -267,7 +277,7 @@ def _delete_in_chunks(dataset: str, chunk: int = 10000) -> bool:
             print(f"  chunk delete of '{dataset}' failed at size {cur:,} "
                   f"({exc}{detail}) — retrying once at {small:,}", flush=True)
             try:
-                n = call(small)
+                n, after = call(small, after)
                 cur = small          # stay small once big has failed
             except Exception as exc2:
                 print(f"  chunk delete of '{dataset}' failed at {small:,} too "
