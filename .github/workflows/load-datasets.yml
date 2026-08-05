@@ -269,6 +269,11 @@ jobs:
           # back to the committed proxy table; lad_income skips with a warning.
           BUILD_COST_SRC: ${{ vars.BUILD_COST_SRC }}
           ASHE_SRC: ${{ vars.ASHE_SRC }}
+          # Neighbourhood-scale household income (ONS small area income
+          # estimates, MSOA). No stable URL — supply the CSV; boundaries
+          # default to ONS Open Geography.
+          MSOA_INCOME_SRC: ${{ vars.MSOA_INCOME_SRC }}
+          MSOA_BOUNDARIES_SRC: ${{ vars.MSOA_BOUNDARIES_SRC }}
         run: |
           echo "Building supabase/datasets_import.csv (DATASETS='${DATASETS}')"
           python pipeline/build_datasets.py

@@ -1193,7 +1193,11 @@ const MAP_OVERLAYS = [
   { key: "price_trend", group: "market2", label: "Price trend (12m vs prior 24m)", color: "#2b8a3e", dataset: "price_grid", minZoom: 5, lim: 8000, noOutline: true,
     datasetFn: z => z < 8.5 ? "price_grid_l" : z < 11 ? "price_grid_m" : "price_grid_f" },
   { key: "build_cost", group: "market2", label: "Build cost index (free proxy)", color: "#e8590c", dataset: "build_cost_index", minZoom: 5 },
-  { key: "affordability", group: "market2", label: "Affordability (price ÷ income)", color: "#c2255c", dataset: "lad_income", minZoom: 5 },
+  // Zoom-banded: district (ASHE pay) wide out, MSOA household income close in
+  // — ~7,200 neighbourhood areas, so a village is priced against ITS residents
+  // rather than the nearest city's. Same datasetFn pattern as the price grids.
+  { key: "affordability", group: "market2", label: "Affordability (price ÷ income)", color: "#c2255c", dataset: "lad_income", minZoom: 5,
+    datasetFn: z => z < 9.5 ? "lad_income" : "msoa_income" },
   // Bus network (NaPTAN + BODS GTFS). ~400k stops nationally: the numeric
   // prop filter thins wide zooms to frequent-service stops, so the row cap
   // bites frequency-first rather than arbitrarily. Until the GTFS timetable
@@ -1382,7 +1386,7 @@ const LAYER_INFO = {
   la_rents:            { about: "Average monthly private rents by local authority, shaded light (cheapest, ~£500) to deep teal (most expensive, £3,000+). Hover a district for its figure and annual change.", source: "ONS Price Index of Private Rents (OGL v3)" },
   price_trend:         { about: "Whether local sale prices are rising or falling: median of the last 12 months against the median of the 24 months before, per grid cell. Blue = falling, red = rising; cells without at least 5 sales in BOTH windows stay blank rather than faking a flat market.", source: "HM Land Registry Price Paid Data (OGL v3)" },
   build_cost:          { about: "Relative construction cost by local authority — a FREE PROXY assembled from ONS construction output indices and openly published regional factors, not BCIS (which is a paid RICS product). Green = cheaper than the national average, red = dearer. Every figure can be overridden per project in Viability variables; a client with BCIS access can paste their own numbers there.", source: "ONS construction output price indices + published regional factors (proxy)" },
-  affordability:       { about: "Median sale price (last 12 months) divided by median gross annual full-time pay of residents, per local authority. 4× is the classic mortgageable benchmark; 12×+ is severe unaffordability. Authorities with suppressed pay data or under 30 sales stay grey.", source: "HM Land Registry Price Paid + ONS ASHE Table 8 (both OGL v3)" },
+  affordability:       { about: "Median sale price (last 12 months) divided by local income. Zoomed out: district level, against residents' median gross pay (ONS ASHE). Zoomed in (z9.5+): neighbourhood level — ~7,200 MSOAs of ~4,000 households — against HOUSEHOLD income (ONS small area income estimates), so a village is measured against its own residents rather than the nearest city's. 4× is the classic mortgageable benchmark; 12×+ severe. Areas with suppressed income data or too few sales stay grey.", source: "HM Land Registry Price Paid + ONS ASHE / ONS small area income estimates (all OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
   power_line:          { about: "High-voltage lines, coloured and weight-scaled by voltage — deep red is the 275/400 kV transmission backbone, orange 90–200 kV, amber below. Wide zooms show the backbone; zoom in for the rest. Click a line for its details.", source: "© OpenStreetMap contributors (ODbL)" },
   power_sub_tx:        { about: "Transmission-scale substations (≥200 kV) — where the national grid itself can be tapped. The biggest dots; each shows its kV. Click one for details.", source: "© OpenStreetMap contributors (ODbL)" },
@@ -3427,12 +3431,17 @@ function hoverContentForOverlay(def, p) {
             row(p.cost_flat_pm2 != null ? `£${Number(p.cost_flat_pm2).toLocaleString()}/m²` : null, "flats, indicative"),
             row("override in Viability variables", "per-project")];
   } else if (d === "lad_income") {
-    title = p.afford_ratio != null ? `${Number(p.afford_ratio).toFixed(1)}× income` : (p.name || "Local authority");
-    kind = "Affordability — median price ÷ median gross pay";
+    // Serves both geographies: district (ASHE individual pay) and, close in,
+    // MSOA neighbourhoods (ONS household income, hh flag) — say which.
+    const hh = p.hh === true || p.hh === "true";
+    title = p.afford_ratio != null ? `${Number(p.afford_ratio).toFixed(1)}× income` : (p.name || "Area");
+    kind = hh ? "Affordability — price ÷ household income (neighbourhood)"
+              : "Affordability — price ÷ gross pay (district)";
     rows = [row(p.med_price != null ? `£${Number(p.med_price).toLocaleString()}` : null,
                 `median price (${p.n_sales_12m ?? "?"} sales, 12m)`),
             row(p.income_median != null ? `£${Number(p.income_median).toLocaleString()}` : null,
-                `median annual pay${p.asof ? ` (${p.asof})` : ""}`)];
+                `${hh ? "household income" : "median annual pay"}${p.asof ? ` (${p.asof})` : ""}`),
+            row(p.name || null, hh ? "neighbourhood (MSOA)" : "authority")];
   } else if (d === "la_rents") {
     title = p.name || "Local authority";
     rows = [row(p.rent_mean != null ? `£${Number(p.rent_mean).toLocaleString()}/mo` : null, "avg rent"),

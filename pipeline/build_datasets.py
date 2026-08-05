@@ -195,6 +195,12 @@ LAD_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
                    "services/Local_Authority_Districts_December_2024_Boundaries"
                    "_UK_BGC/FeatureServer/0/query?where=1%3D1&outFields=*"
                    "&outSR=4326&f=geojson")
+# MSOA 2021 generalised boundaries, same ONS Open Geography org. Slug is
+# best-effort (unverifiable from this sandbox); MSOA_BOUNDARIES_SRC overrides.
+MSOA_DEFAULT_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
+                    "services/Middle_layer_Super_Output_Areas_December_2021"
+                    "_Boundaries_EW_BGC_V3/FeatureServer/0/query?where=1%3D1"
+                    "&outFields=*&outSR=4326&f=geojson")
 # Natural England ALC via a signed ArcGIS Hub export link (EXPIRED
 # 2026-07-24T13:01Z — used for the initial load; once dead the builder skips
 # with a warning). To refresh: naturalengland-defra.opendata.arcgis.com →
@@ -218,7 +224,7 @@ ALL_DATASETS = [
     "planit_rates", "bus_route",
     "ofcom_fibre", "census_students", "student_accom",
     "building_height",
-    "build_cost_index", "lad_income",
+    "build_cost_index", "lad_income", "msoa_income",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -1924,6 +1930,102 @@ def build_income():
     return {key: rows}
 
 
+def build_msoa_income():
+    """Neighbourhood-scale household income — dataset msoa_income.
+
+    MSOA is the finest geography with an OFFICIAL income estimate: ONS small
+    area income estimates, ~7,200 areas of roughly 4,000 households each,
+    against ~360 local authorities. This is what stops a market town's
+    affordability being written by the city an hour away — the LAD layer keeps
+    the wide-zoom view, this one takes over close in.
+
+    Uses HOUSEHOLD income (the small-area series is household, not individual
+    pay) — also the better affordability denominator. The ONS file has no
+    stable URL, so: MSOA_INCOME_SRC (URL or path) or the drop-in
+    data/raw/msoa-income.csv, expected to carry an MSOA code column and a
+    total/net annual household income column. Values that look WEEKLY
+    (median < £2,000) are converted to annual x52, because ONS publishes both
+    shapes and the difference is a 52x error if trusted blindly."""
+    key = "msoa_income"
+    ipath, ihow = _resolve_source(key, ["MSOA_INCOME_SRC"], None,
+                                  "msoa-income.csv")
+    if ipath is None:
+        _warn(key, "no MSOA income CSV — download the ONS 'small area income "
+                   "estimates' MSOA table (search ons.gov.uk) and supply it as "
+                   "MSOA_INCOME_SRC or drop in data/raw/msoa-income.csv. The "
+                   "LAD-level affordability layer still works without it.")
+        _note(key, "MSOA_INCOME_SRC not set")
+        return {}
+    bpath, bhow = _resolve_arcgis_source(
+        key, ["MSOA_BOUNDARIES_SRC"], MSOA_DEFAULT_URL, "msoa-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no MSOA boundaries to join income onto — set "
+                   "MSOA_BOUNDARIES_SRC to an ONS Open Geography MSOA 2021 "
+                   "BGC GeoJSON/FeatureServer URL")
+        _note(key, "no MSOA boundaries")
+        return {}
+    print(f"  [{key}] reading {ipath.name} ({ihow}) ...")
+    df = _read_csv(ipath)
+    ccol = _find_col(df, ["msoa code", "msoa21cd", "msoa11cd", "geography code",
+                          "area code", "code"], contains=True)
+    mcol = _find_col(df, ["total annual income", "net annual income",
+                          "annual income", "total weekly income",
+                          "net weekly income", "weekly income", "income"],
+                     contains=True)
+    ycol = _find_col(df, ["date_name", "year", "period", "date"], contains=True)
+    if ccol is None or mcol is None:
+        _warn(key, f"need MSOA-code + income columns, got "
+                   f"{list(df.columns)[:12]}")
+        _note(key, "unrecognised income CSV")
+        return {}
+    vals = []
+    raw = {}
+    asof = ""
+    for _, row in df.iterrows():
+        code = str(row[ccol]).strip()
+        v = _num(row, mcol)
+        if code and v and v > 0:
+            raw[code] = v
+            vals.append(v)
+            if ycol is not None and not asof:
+                asof = str(row[ycol]).strip()
+    if not raw:
+        _warn(key, "no usable income rows")
+        _note(key, "no usable rows")
+        return {}
+    vals.sort()
+    weekly = vals[len(vals) // 2] < 2000
+    if weekly:
+        print(f"  [{key}] values look WEEKLY (median £{vals[len(vals)//2]:.0f})"
+              f" — converting to annual x52")
+    income = {c: round(v * 52 if weekly else v) for c, v in raw.items()}
+
+    gdf = gpd.read_file(bpath)
+    code_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"msoa\d*cd", str(c).lower()):
+            code_col = c
+            break
+    code_col = code_col or _find_col(gdf, ["msoa_code", "code", "areacd"],
+                                     contains=True)
+    name_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"msoa\d*nm", str(c).lower()):
+            name_col = c
+            break
+    keep = gdf[gdf[code_col].astype(str).str.strip().isin(income)].copy()
+    print(f"  [{key}] {len(keep)}/{len(gdf)} MSOAs matched an income")
+
+    rows = _emit(keep, key, name_col=name_col, id_col=code_col, want="polygon",
+                 props_fn=lambda f: {
+                     "msoa_code": str(_cell(f, code_col)).strip(),
+                     "income_median": income.get(str(_cell(f, code_col)).strip()),
+                     "hh": True,           # household income, not individual pay
+                     "asof": asof or None})
+    _note(key, f"{ihow}{' (weekly x52)' if weekly else ''}", len(rows))
+    return {key: rows}
+
+
 CENSUS_TS062_URL = "https://www.nomisweb.co.uk/output/census/2021/census2021-ts062.zip"
 
 
@@ -2332,6 +2434,7 @@ GROUPS = (
         (["building_height"], build_building_height, []),
         (["build_cost_index"], build_build_cost, []),
         (["lad_income"], build_income, []),
+        (["msoa_income"], build_msoa_income, []),
     ]
 )
 
