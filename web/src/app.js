@@ -1190,13 +1190,29 @@ const MAP_OVERLAYS = [
            800000, "#a4243b", 1500000, "#6d1a36"] } },
   { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5, nameLabel: true },
   // --- Costs, trend & affordability (group market2) ------------------------
-  // Price trend as a FILL, not a heatmap: a diverging measure (falling vs
-  // rising) has a meaningful zero, and kernel density cannot show sign.
-  // dataset is the same virtual "price_grid" the heatmaps use, so the popup
-  // dispatch already understands the cells; only cells with enough sales in
-  // BOTH windows carry trend_pct, the rest render transparent.
-  { key: "price_trend", group: "market2", label: "Price trend (12m vs prior 24m)", color: "#2b8a3e", dataset: "price_grid", minZoom: 5, lim: 8000, noOutline: true,
-    datasetFn: z => z < 8.5 ? "price_grid_l" : z < 11 ? "price_grid_m" : "price_grid_f" },
+  // Price trend as a bilinear SURFACE like the price heatmaps (raw cells read
+  // as an illegible checkerboard at national zoom), but on a DIVERGING ramp —
+  // falling blue through near-transparent flat to rising red — because the
+  // measure has a meaningful zero that a sequential ramp would bury. Only
+  // cells with enough sales in BOTH windows carry trend_pct; the rest are
+  // holes the surface fades out around.
+  { key: "price_trend", group: "market2", label: "Price trend (12m vs prior 24m)", color: "#2b8a3e", dataset: "price_grid", minZoom: 5, lim: 8000,
+    datasetFn: z => z < 8.5 ? "price_grid_l" : z < 11 ? "price_grid_m" : "price_grid_f",
+    surface: {
+      keyFn: () => "trend_pct",
+      // % change -> ramp position; the flat middle (±1.5%) stays pale and
+      // translucent so only genuine movement draws the eye.
+      stops: [[-10, 0], [-5, 0.2], [-1.5, 0.4], [0, 0.5], [1.5, 0.6], [5, 0.8], [10, 1]],
+      colors: [
+        [0,   [24, 100, 171, 235]],
+        [0.2, [116, 192, 252, 215]],
+        [0.4, [214, 226, 235, 150]],
+        [0.5, [225, 223, 223, 130]],
+        [0.6, [235, 216, 216, 150]],
+        [0.8, [255, 135, 135, 215]],
+        [1,   [201, 42, 42, 235]],
+      ],
+    } },
   { key: "build_cost", group: "market2", label: "Build cost index (free proxy)", color: "#e8590c", dataset: "build_cost_index", minZoom: 5 },
   // Zoom-banded: district (ASHE pay) wide out, MSOA household income close in
   // — ~7,200 neighbourhood areas, so a village is priced against ITS residents
@@ -1721,23 +1737,29 @@ const SURFACE_COLORS = [
   [0.94, [215, 48, 39, 242]],
   [1,    [165, 0, 38, 248]],
 ];
-let _surfaceLUT = null;
-function surfaceLUT() {
-  if (_surfaceLUT) return _surfaceLUT;
-  const lut = new Uint8ClampedArray(256 * 4);
+// LUTs are cached per colour-stop array, so each surface layer can carry its
+// own ramp (spectral for prices, diverging for the trend) at zero per-pixel
+// cost.
+const _surfaceLUTs = new Map();
+function surfaceLUT(colors) {
+  const ramp = colors || SURFACE_COLORS;
+  let lut = _surfaceLUTs.get(ramp);
+  if (lut) return lut;
+  lut = new Uint8ClampedArray(256 * 4);
   for (let i = 0; i < 256; i++) {
     const t = i / 255;
-    let a = SURFACE_COLORS[0], b = SURFACE_COLORS[SURFACE_COLORS.length - 1];
-    for (let s = 0; s < SURFACE_COLORS.length - 1; s++) {
-      if (t >= SURFACE_COLORS[s][0] && t <= SURFACE_COLORS[s + 1][0]) {
-        a = SURFACE_COLORS[s]; b = SURFACE_COLORS[s + 1]; break;
+    let a = ramp[0], b = ramp[ramp.length - 1];
+    for (let s = 0; s < ramp.length - 1; s++) {
+      if (t >= ramp[s][0] && t <= ramp[s + 1][0]) {
+        a = ramp[s]; b = ramp[s + 1]; break;
       }
     }
     const f = t <= a[0] ? 0 : t >= b[0] ? 1 : (t - a[0]) / (b[0] - a[0]);
     for (let c = 0; c < 4; c++)
       lut[i * 4 + c] = Math.round(a[1][c] + (b[1][c] - a[1][c]) * f);
   }
-  return (_surfaceLUT = lut);
+  _surfaceLUTs.set(ramp, lut);
+  return lut;
 }
 
 // Value -> ramp position via the layer's piecewise-linear stops (clamped).
@@ -1777,10 +1799,14 @@ function renderGridSurface(key, def, fc) {
     if (!ring || !ring.length) continue;
     let sx = 0, sy = 0;
     for (const c of ring) { sx += c[0]; sy += c[1]; }
-    const v = f.properties && Number(f.properties[valKey]);
+    // Finite is the only requirement — the trend surface is legitimately
+    // negative (falling market) or zero; a v > 0 guard here would erase
+    // every falling cell. Absent props still parse to NaN and stay holes.
+    const v = f.properties && f.properties[valKey] != null
+      ? Number(f.properties[valKey]) : NaN;
     if (!res && f.properties && Number(f.properties.res) > 0)
       res = Number(f.properties.res);
-    cells.push([sx / ring.length, sy / ring.length, Number.isFinite(v) && v > 0 ? v : NaN]);
+    cells.push([sx / ring.length, sy / ring.length, Number.isFinite(v) ? v : NaN]);
   }
   const usable = cells.filter(c => Number.isFinite(c[2]));
   if (!usable.length || !res) {
@@ -1810,7 +1836,7 @@ function renderGridSurface(key, def, fc) {
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext("2d");
   const img = ctx.createImageData(W, H);
-  const data = img.data, lut = surfaceLUT(), stops = def.surface.stops;
+  const data = img.data, lut = surfaceLUT(def.surface.colors), stops = def.surface.stops;
   // Column lattice positions are linear in lon; precompute once.
   const gxs = new Float64Array(W);
   for (let i = 0; i < W; i++)
