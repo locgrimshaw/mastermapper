@@ -1764,6 +1764,37 @@ footer {
 }
 .compare-close { background: none; border: none; color: var(--text-dim); font-size: 24px; cursor: pointer; line-height: 1; }
 .compare-body { padding: 18px 24px 24px; }
+
+/* Viability variables modal: schema-generated fields left, live preview right. */
+.viab-sheet { max-width: 1040px; }
+.viab-body { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(320px, 400px); gap: 20px; align-items: start; }
+.viab-fields { max-height: 68vh; overflow-y: auto; padding-right: 6px; }
+.viab-group { border: 1px solid var(--ink-line); border-radius: 8px; margin: 0 0 10px; padding: 6px 10px 10px; }
+.viab-group legend { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); padding: 0 4px; display: flex; gap: 8px; align-items: center; }
+.viab-reset { font-size: 10px; padding: 0 6px; }
+.viab-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+.viab-field span { display: flex; align-items: center; gap: 4px; }
+.viab-unit { font-style: normal; font-size: 10px; color: var(--text-dim); }
+.viab-preview { position: sticky; top: 0; }
+.viab-prev-head { font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.viab-rag { font-size: 10px; padding: 1px 8px; border-radius: 9px; text-transform: uppercase; letter-spacing: .05em; color: #fff; }
+.viab-rag.sg { background: #2f9e44; } .viab-rag.sa { background: #f08c00; } .viab-rag.sr { background: #c92a2a; }
+.viab-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 10px; }
+.viab-kpi { background: var(--panel-2, rgba(128,128,128,.08)); border-radius: 6px; padding: 6px 8px; }
+.viab-kpi b { display: block; font-family: var(--font-data); font-size: 14px; }
+.viab-kpi span { font-size: 10px; color: var(--text-dim); }
+.viab-wf { border-top: 1px solid var(--ink-line); margin-top: 4px; }
+.viab-wf-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); padding: 1px 0; }
+.viab-wf-row span:last-child { font-family: var(--font-data); color: var(--text); }
+.viab-wf-row.pos span:last-child { color: #2f9e44; }
+.viab-sens-h { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); margin: 10px 0 4px; }
+.viab-sens-table { border-collapse: collapse; font-size: 10.5px; font-family: var(--font-data); }
+.viab-sens-table th, .viab-sens-table td { border: 1px solid var(--ink-line); padding: 2px 7px; text-align: right; }
+.viab-sens-table th { color: var(--text-dim); font-weight: 500; }
+.viab-sens-table td.vs-g { background: rgba(47,158,68,.25); }
+.viab-sens-table td.vs-a { background: rgba(240,140,0,.25); }
+.viab-sens-table td.vs-r { background: rgba(201,42,42,.25); }
+@media (max-width: 900px) { .viab-body { grid-template-columns: 1fr; } .viab-fields { max-height: none; } }
 .compare-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .compare-table th { text-align: left; padding: 8px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); border-bottom: 1px solid var(--ink-line); }
 .compare-table th span { font-weight: 400; opacity: 0.7; }

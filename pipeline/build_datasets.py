@@ -1734,8 +1734,8 @@ def build_ofcom_fibre():
 # (commercial, licensed — excluded by project policy): mid-range figures from
 # openly published new-build cost commentary, stated to the user as such and
 # overridable both here (env) and per project in the Viability variables modal.
-BUILD_COST_HOUSE_PM2 = float(os.environ.get("BUILD_COST_HOUSE_PM2") or 1850)
-BUILD_COST_FLAT_PM2 = float(os.environ.get("BUILD_COST_FLAT_PM2") or 2350)
+BUILD_COST_HOUSE_PM2 = float(os.environ.get("BUILD_COST_HOUSE_PM2") or 1650)
+BUILD_COST_FLAT_PM2 = float(os.environ.get("BUILD_COST_FLAT_PM2") or 2100)
 
 
 def build_build_cost():

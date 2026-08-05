@@ -5047,6 +5047,7 @@ function runDeepDive(catchment, meta) {
   deep.publicLandVisible = false;
   deep._plots = null;
   deep._innerCircle = null;
+  delete deep._marketCtx;   // per-dive: next dive fetches its own locality
   removePublicLandLayer();
   renderDeepDiveLegend();
 
@@ -6122,6 +6123,22 @@ function activeDevelopableRegime() {
   return autoDevelopableRegime() || "suburban";
 }
 
+// THE capacity formula — one place. This arithmetic used to be copy-pasted at
+// five call sites (whole-catchment, per-plot, popup, public land, legend), so
+// changing a density rule meant finding all five or shipping a map that
+// disagreed with itself. Urban splits inner/outer ring densities; everything
+// else is flat-rate on total area. innerHa beyond areaHa is clamped, not
+// trusted — clipped geometries occasionally report a sliver more inner than
+// total, and negative outer hectares would silently subtract homes.
+function homesFor(areaHa, innerHa, regime, dph) {
+  const d = dph || deep.developableDph || DPH_DEFAULTS;
+  const a = Math.max(0, Number(areaHa) || 0);
+  const inner = Math.min(a, Math.max(0, Number(innerHa) || 0));
+  if (regime === "urban")
+    return Math.round(inner * d.urbanInner + (a - inner) * d.urbanOuter);
+  return Math.round(a * (d[regime] || d.suburban));
+}
+
 // Potential dwellings under each regime from the RPC's hectare breakdown and the
 // (editable) dwellings-per-hectare constants. Whole numbers. Null if no result.
 function developableDwellings() {
@@ -6132,9 +6149,9 @@ function developableDwellings() {
   const inner = Number(r.inner_ha) || 0;
   const outer = Number(r.outer_ha) || 0;
   return {
-    rural: Math.round(dev * dph.rural),
-    suburban: Math.round(dev * dph.suburban),
-    urban: Math.round(outer * dph.urbanOuter + inner * dph.urbanInner),
+    rural: homesFor(dev, 0, "rural", dph),
+    suburban: homesFor(dev, 0, "suburban", dph),
+    urban: homesFor(dev, inner, "urban", dph),
   };
 }
 
@@ -6309,11 +6326,8 @@ async function selectDevelopablePlot(hit, lngLat, point) {
     : (window.turf ? turf.area(plot) / 10000 : 0);
   const innerHa = plot.properties.inner_ha || 0;
   const outerHa = Math.max(0, areaHa - innerHa);
-  const dph = deep.developableDph || DPH_DEFAULTS;
   const regime = activeDevelopableRegime();
-  const homes = regime === "urban"
-    ? Math.round(innerHa * dph.urbanInner + outerHa * dph.urbanOuter)
-    : Math.round(areaHa * (dph[regime] || dph.suburban));
+  const homes = homesFor(areaHa, innerHa, regime);
 
   // Land parcels the plot spans — counted from the rendered INSPIRE tiles, so
   // it needs the parcels layer on and z13+; say so rather than showing 0.
@@ -6593,9 +6607,7 @@ function renderPublicLandSummary() {
   // Rough capacity of the public holding at the active regime's rates.
   const dph = deep.developableDph || DPH_DEFAULTS;
   const regime = activeDevelopableRegime();
-  const cap = regime === "urban"
-    ? Math.round(innerHa * dph.urbanInner + (ha - innerHa) * dph.urbanOuter)
-    : Math.round(ha * (dph[regime] || dph.suburban));
+  const cap = homesFor(ha, innerHa, regime, dph);
   el.innerHTML =
     `<div class="dd-pl-hero"><strong>${ha.toFixed(2)} ha</strong> ` +
     `<span class="dd-dim">(${(ha * 2.471).toFixed(1)} ac) across ${n} parcel${n === 1 ? "" : "s"}</span></div>` +
@@ -6749,6 +6761,65 @@ function renderDevelopableSummary() {
     </div>
     <p class="hint" style="margin-top:6px">Potential dwellings by density regime (✓ = selected). Urban applies ${deep.developableDph.urbanInner} dph within ${deep.developable.inner_radius_m} m of the station and ${deep.developableDph.urbanOuter} dph beyond.</p>
     ${developableConstraintsHTML(r)}`;
+  renderDeepDiveViability();
+}
+
+// Deep-dive residual appraisal: the developable capacity priced by the SAME
+// engine the sifter uses, with the catchment's own £/m² and, once fetched, the
+// locality's build-cost factor (point_summary at the station centre now
+// returns the containing build_cost_index polygon — migration 0047). Owned-div
+// pattern: this function is the only writer of #dd-viability-summary.
+async function renderDeepDiveViability() {
+  const el = document.getElementById("dd-viability-summary");
+  if (!el) return;
+  const r = deep.developableResult;
+  if (!deep.developableVisible || !r) {
+    el.innerHTML = `<p class="hint">Turn on the developable-land tool above — the appraisal prices its dwelling capacity.</p>`;
+    return;
+  }
+  // Locality build-cost factor + income, fetched once per dive and cached.
+  if (deep._marketCtx === undefined && deep.stationCentre) {
+    deep._marketCtx = null;   // in flight — a re-render must not refetch
+    try {
+      const { data } = await sb.rpc("point_summary",
+        { p_lon: deep.stationCentre[0], p_lat: deep.stationCentre[1] });
+      const areas = (data && data.areas) || {};
+      deep._marketCtx = {
+        factor: Number(areas.build_cost_index?.factor) || null,
+        factorRegion: areas.build_cost_index?.region || null,
+        income: Number((areas.msoa_income || areas.lad_income || {}).income_median) || null,
+      };
+    } catch (_) { deep._marketCtx = null; }
+    if (!document.getElementById("dd-viability-summary")) return;
+  }
+  const regime = activeDevelopableRegime();
+  const units = homesFor(Number(r.developable_ha) || 0, Number(r.inner_ha) || 0, regime);
+  const mc = deep._marketCtx || null;
+  const ap = computeAppraisal({
+    units, ppm2: deep.ppm2 || null, region: deep.stationRegion || null,
+    areaHa: Number(r.developable_ha) || null,
+    locationFactor: (mc && mc.factor) || null,
+  }, SIFT.assumptions, { noSens: true });
+  if (ap.profitOnCost == null) {
+    el.innerHTML = `<p class="hint">No dwelling capacity to appraise yet.</p>`;
+    return;
+  }
+  const money = v => v == null ? "—"
+    : (Math.abs(v) >= 1e6 ? "£" + (v / 1e6).toFixed(1) + "M" : "£" + Math.round(v / 1000) + "k");
+  const ragCls = ap.rag === "viable" ? "sg" : ap.rag === "marginal" ? "sa" : "sr";
+  el.innerHTML = `
+    <div class="dd-pl-hero"><strong>${ap.profitOnCost.toFixed(1)}%</strong>
+      <span class="dd-dim">profit on cost · ${units.toLocaleString()} homes (${regime})</span>
+      <span class="viab-rag ${ragCls}">${ap.rag}</span></div>
+    <div class="dd-pl-rows">
+      <div class="dd-pl-row"><span>GDV</span><span>${money(ap.gdv)}</span></div>
+      <div class="dd-pl-row"><span>total cost incl. finance</span><span>${money(ap.totalCost)}</span></div>
+      <div class="dd-pl-row"><span>residual land value</span><span>${money(ap.residualLandValue)}</span></div>
+      <div class="dd-pl-row"><span>peak debt</span><span>${money(ap.peakDebt)}</span></div>
+      <div class="dd-pl-row"><span>sales value basis</span><span>${ap.local ? `local £${Math.round((deep.ppm2 || 0)).toLocaleString()}/m²` : "regional fallback"}</span></div>
+      <div class="dd-pl-row"><span>build cost index</span><span>${mc && mc.factor ? mc.factor.toFixed(2) + "× (" + (mc.factorRegion || "local") + ")" : "1.00× (national)"}</span></div>
+    </div>
+    <p class="hint" style="margin-top:4px">Same engine and assumptions as the station sifter — tweak them below and both update.</p>`;
 }
 
 // Gate-3 read-out for the developable summary: the hard designations are already
@@ -7524,6 +7595,134 @@ function openShortlistPanel() {
       </div>
     </div>`;
   wireCompareModal(modal);
+}
+
+// ---- Viability variables modal --------------------------------------------
+// The full assumption set, GENERATED from VIAB_SCHEMA so the modal can never
+// drift from the engine: every field the engine reads gets an input, grouped,
+// tooltipped, with its source note. Right-hand pane is a live preview for the
+// calling context (top sift survivor, the open deep dive, or an assembled
+// site) — waterfall, headline metrics, RAG sensitivity grid — recomputed on
+// every keystroke. Edits write straight into SIFT.assumptions (one assumption
+// set everywhere, persisted with the sift config).
+let _viabCtx = null;
+
+function viabFieldHTML(f, a) {
+  const val = a[f.key] ?? f.default;
+  if (f.unit === "choice") {
+    return `<label class="sift-field viab-field"><span>${f.label}` +
+      `<button class="info" type="button" tabindex="0">i<span class="tip" role="tooltip">${escapeSift(f.tip)}<span class="tip-source">Source: ${escapeSift(f.source)}</span></span></button></span>` +
+      `<select data-viab="${f.key}">` +
+      f.choices.map(c => `<option value="${c}"${val === c ? " selected" : ""}>` +
+        (c === "perUnit" ? "£/unit benchmark" : "EUV + premium") + `</option>`).join("") +
+      `</select></label>`;
+  }
+  return `<label class="sift-field viab-field"><span>${f.label} <em class="viab-unit">${f.unit}</em>` +
+    `<button class="info" type="button" tabindex="0">i<span class="tip" role="tooltip">${escapeSift(f.tip)}<span class="tip-source">Source: ${escapeSift(f.source)}</span></span></button></span>` +
+    `<input type="number" step="${f.step || 1}" value="${val}" data-viab="${f.key}" /></label>`;
+}
+
+function viabPreviewHTML(r, label) {
+  if (!r || r.profitOnCost == null)
+    return `<p class="hint">No appraisal context — open from the sift or a deep dive.</p>`;
+  const money = v => v == null ? "—"
+    : (Math.abs(v) >= 1e6 ? "£" + (v / 1e6).toFixed(2) + "M"
+                          : "£" + Math.round(v / 1000) + "k");
+  const pct = v => v == null ? "n/a" : v.toFixed(1) + "%";
+  const ragCls = r.rag === "viable" ? "sg" : r.rag === "marginal" ? "sa" : "sr";
+  const wf = (r.waterfall || []).map(([k, v]) =>
+    `<div class="viab-wf-row${v >= 0 ? " pos" : ""}"><span>${k}</span><span>${money(v)}</span></div>`).join("");
+  const steps = [-10, -5, 0, 5, 10];
+  const target = SIFT.assumptions.profitTargetPct || 17.5;
+  const sens = r.sensitivity ? `<table class="viab-sens-table"><thead><tr><th>build \\ sales</th>` +
+    steps.map(s => `<th>${s > 0 ? "+" : ""}${s}%</th>`).join("") + `</tr></thead><tbody>` +
+    r.sensitivity.map((rowArr, i) => `<tr><th>${steps[i] > 0 ? "+" : ""}${steps[i]}%</th>` +
+      rowArr.map(v => {
+        const cls = v == null ? "" : v >= target ? "vs-g" : v >= target / 2 ? "vs-a" : "vs-r";
+        return `<td class="${cls}">${v == null ? "—" : v.toFixed(0)}</td>`;
+      }).join("") + `</tr>`).join("") + `</tbody></table>` : "";
+  return `<div class="viab-prev-head">${escapeSift(label || "Scheme")} <span class="viab-rag ${ragCls}">${r.rag}</span></div>` +
+    `<div class="viab-kpis">` +
+    `<div class="viab-kpi"><b>${pct(r.profitOnCost)}</b><span>profit on cost</span></div>` +
+    `<div class="viab-kpi"><b>${pct(r.profitOnGdv)}</b><span>profit on GDV</span></div>` +
+    `<div class="viab-kpi"><b>${money(r.residualLandValue)}</b><span>residual land value</span></div>` +
+    `<div class="viab-kpi"><b>${r.irr == null ? "n/a" : pct(r.irr)}</b><span>IRR (equity)</span></div>` +
+    `<div class="viab-kpi"><b>${money(r.peakDebt)}</b><span>peak debt</span></div>` +
+    `<div class="viab-kpi"><b>${money(r.gdv)}</b><span>GDV</span></div>` +
+    `</div>` +
+    `<div class="viab-wf">${wf}</div>` +
+    `<div class="viab-sens-h">Sensitivity — profit on cost, build cost × sales value</div>` + sens +
+    `<p class="hint" style="margin-top:6px">Model: sin² build S-curve, even sales absorption, equity-first funding, monthly interest capitalised on drawn debt, arrangement fee on peak. Every figure above reacts to the fields on the left.</p>`;
+}
+
+function refreshViabPreview() {
+  const host = document.getElementById("viab-preview");
+  if (!host || !_viabCtx) return;
+  const r = computeAppraisal(
+    { units: _viabCtx.units, ppm2: _viabCtx.ppm2, region: _viabCtx.region,
+      areaHa: _viabCtx.areaHa, locationFactor: _viabCtx.locationFactor },
+    SIFT.assumptions);
+  host.innerHTML = viabPreviewHTML(r, _viabCtx.label);
+}
+
+function openViabilityModal(ctx) {
+  const modal = document.getElementById("viab-modal");
+  if (!modal) return;
+  _viabCtx = ctx;
+  const a = SIFT.assumptions;
+  const groupsHTML = VIAB_GROUPS.map(([g, title]) => {
+    const fields = VIAB_SCHEMA.filter(f => f.group === g);
+    return `<fieldset class="viab-group"><legend>${title}` +
+      `<button type="button" class="viab-reset ghost" data-group="${g}">reset</button></legend>` +
+      `<div class="viab-grid">${fields.map(f => viabFieldHTML(f, a)).join("")}</div></fieldset>`;
+  }).join("");
+  modal.innerHTML = `
+    <div class="compare-backdrop"></div>
+    <div class="compare-sheet viab-sheet">
+      <div class="compare-head">
+        <strong>Viability variables</strong>
+        <span class="hint" style="margin-left:8px">the full assumption set behind every appraisal — sift, deep dive and site reports share it</span>
+        <div class="compare-head-actions">
+          <button type="button" class="ghost" id="viab-reset-all">Reset all</button>
+          <button type="button" class="compare-close" aria-label="Close">×</button>
+        </div>
+      </div>
+      <div class="compare-body viab-body">
+        <div class="viab-fields">${groupsHTML}</div>
+        <div class="viab-preview" id="viab-preview"></div>
+      </div>
+    </div>`;
+  modal.hidden = false;
+  const close = () => { modal.hidden = true; modal.innerHTML = ""; _viabCtx = null; };
+  modal.querySelector(".compare-close").addEventListener("click", close);
+  modal.querySelector(".compare-backdrop").addEventListener("click", close);
+  const commit = () => {
+    persistSiftConfig();
+    refreshViabPreview();
+    if (ctx && ctx.onChange) ctx.onChange();
+  };
+  modal.querySelectorAll("[data-viab]").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const key = inp.dataset.viab;
+      a[key] = inp.tagName === "SELECT" ? inp.value : (parseFloat(inp.value) || 0);
+      commit();
+    });
+  });
+  modal.querySelectorAll(".viab-reset").forEach(btn =>
+    btn.addEventListener("click", () => {
+      for (const f of VIAB_SCHEMA.filter(f => f.group === btn.dataset.group))
+        a[f.key] = f.default;
+      openViabilityModal(ctx);   // re-render with defaults restored
+      if (ctx && ctx.onChange) ctx.onChange();
+      persistSiftConfig();
+    }));
+  modal.querySelector("#viab-reset-all").addEventListener("click", () => {
+    for (const f of VIAB_SCHEMA) a[f.key] = f.default;
+    openViabilityModal(ctx);
+    if (ctx && ctx.onChange) ctx.onChange();
+    persistSiftConfig();
+  });
+  refreshViabPreview();
 }
 
 function wireCompareModal(modal) {
@@ -8350,6 +8549,16 @@ function buildDeepDivePanel(meta) {
 
     <div class="dd-body">
       ${meta.station ? developableSectionHTML(meta.station) : ""}
+      ${meta.station ? `
+      <section class="dd-block" data-section="viability">
+        <button class="dd-block-head" type="button" aria-expanded="true">
+          <span class="dd-h">Viability — residual appraisal</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <div id="dd-viability-summary"><p class="hint">Turn on the developable-land tool above — the appraisal prices its dwelling capacity.</p></div>
+          <button type="button" class="ghost" id="dd-viab-vars">Viability variables…</button>
+        </div>
+      </section>` : ""}
       ${meta.station ? `<section class="dd-synthesis" id="dd-synthesis"></section>` : ""}
       ${meta.station ? stationSectionHTML(meta.station) : ""}
 
@@ -8499,6 +8708,23 @@ function buildDeepDivePanel(meta) {
 
   // Developable-land + dwelling-capacity controls (station profiles only).
   wireDevelopableControls(panel);
+  // Viability variables from the deep dive: same modal, deep-dive context —
+  // edits re-render this panel's appraisal AND re-score the sift, because
+  // there is deliberately only one assumption set.
+  const dv = panel.querySelector("#dd-viab-vars");
+  if (dv) dv.addEventListener("click", () => {
+    const r = deep.developableResult;
+    const regime = activeDevelopableRegime();
+    openViabilityModal({
+      label: (meta.station && (meta.station.name || meta.station.crs)) || "This catchment",
+      units: r ? homesFor(Number(r.developable_ha) || 0, Number(r.inner_ha) || 0, regime) : 0,
+      ppm2: deep.ppm2 || null,
+      region: null,
+      areaHa: r ? Number(r.developable_ha) : null,
+      locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
+      onChange: () => { renderDeepDiveViability(); if (SIFT.loaded) scoreSiftRows(); },
+    });
+  });
 
   // Fill the deprivation headline, breakdown bars and plain-English summary.
   renderDeprivationScore();
@@ -10225,18 +10451,106 @@ function regionPriceMult(region) {
   return k ? REGION_PRICE_MULT[k] : 1.0;
 }
 
-const VIABILITY_DEFAULTS = {
-  unitSizeFt2: 750,    // average saleable area per dwelling
-  salesPsf: 350,       // FALLBACK base £/ft² (× regional multiplier) where no local price
-  salesAdjPct: 100,    // adjustment applied to the LOCAL catchment £/ft² (new-build premium/discount)
-  buildPsf: 200,       // £/ft² build cost
-  softCostPct: 30,     // fees + finance + contingency, as % of build cost
-  affordablePct: 25,   // % affordable homes
-  affordableValue: 55, // affordable unit value as % of market
-  blvPerUnit: 20,      // benchmark land value, £000s per unit
-  profitTargetPct: 17.5, // target profit on cost (viability threshold)
-  gbTierBBonus: 10,    // deliverability bonus for a permitted Tier-B Green Belt site
-};
+// ---------------------------------------------------------------------------
+// Viability assumption schema — the single source of truth. Drives the
+// defaults, the Viability variables modal (fields are GENERATED from this,
+// grouped and tooltipped), and the report appendix. Client-facing: every
+// figure here is an opening position to be overridden, and each carries its
+// source note so the tool never presents an assumption as a fact.
+//
+// Replaces the old flat VIABILITY_DEFAULTS. Two deliberate structural changes:
+// build cost is £/m² BY TYPOLOGY × a location index (fed from the
+// build_cost_index layer) instead of one £/ft²; and the old softCostPct
+// bundle (which mixed fees, contingency AND finance) is split into explicit
+// professional fees + contingency + computed finance + sales costs, so
+// nothing is double-counted and each line can be challenged on its own.
+// ---------------------------------------------------------------------------
+const VIAB_SCHEMA = [
+  // Land
+  { key: "landBasis", group: "land", label: "Land value basis", unit: "choice",
+    choices: ["perUnit", "euvPlus"], default: "perUnit",
+    tip: "Benchmark land value per unit, or existing use value plus a premium (the Planning Practice Guidance EUV+ approach).", source: "PPG viability guidance" },
+  { key: "blvPerUnit", group: "land", label: "Benchmark land value", unit: "£k/unit", step: 1, default: 20,
+    tip: "Land cost per plot when basis is per-unit.", source: "assumption" },
+  { key: "euvPerHa", group: "land", label: "Existing use value", unit: "£k/ha", step: 5, default: 25,
+    tip: "EUV per hectare (agricultural ≈ £20–30k/ha; industrial and urban uses far higher).", source: "assumption" },
+  { key: "euvPremiumPct", group: "land", label: "EUV premium", unit: "%", step: 5, default: 100,
+    tip: "Uplift on EUV to incentivise release (PPG: a premium to the landowner).", source: "PPG viability guidance" },
+  // Build
+  { key: "buildPm2House", group: "build", label: "Build cost — houses", unit: "£/m²", step: 25, default: 1650,
+    tip: "New-build houses, GIA. Seeded from a free proxy (ONS construction indices + regional factors), NOT BCIS — paste your own BCIS rate here if you hold a licence.", source: "free proxy" },
+  { key: "buildPm2Flat", group: "build", label: "Build cost — flats", unit: "£/m²", step: 25, default: 2100,
+    tip: "New-build flats, GIA — higher than houses (cores, corridors, M&E).", source: "free proxy" },
+  { key: "flatMixPct", group: "build", label: "Flat mix", unit: "%", step: 5, default: 40,
+    tip: "Share of units built as flats; blends the two build rates and informs the sales blend.", source: "assumption" },
+  { key: "costIndexFactor", group: "build", label: "Location cost index", unit: "×", step: 0.01, default: 1.0,
+    tip: "Regional/local construction cost factor (1.00 = national average). Auto-filled from the build-cost layer for the area in view; editable.", source: "free proxy (build_cost_index layer)" },
+  { key: "abnormalsPct", group: "build", label: "Abnormals allowance", unit: "% of build", step: 1, default: 5,
+    tip: "Remediation, retaining structures, piling, service diversions, offsite highway works — the classic viability killers. Raise materially on brownfield or sloping sites.", source: "assumption" },
+  { key: "sitePrepPerPlot", group: "build", label: "Site preparation", unit: "£k/unit", step: 1, default: 5,
+    tip: "Groundworks, drainage, enabling works per plot.", source: "assumption" },
+  { key: "infraPerPlot", group: "build", label: "Site infrastructure", unit: "£k/unit", step: 1, default: 8,
+    tip: "Estate roads, utilities connections, POS per plot.", source: "assumption" },
+  // Fees
+  { key: "profFeesPct", group: "fees", label: "Professional fees", unit: "% of build", step: 0.5, default: 10,
+    tip: "Architects, engineers, PM, surveys, planning.", source: "assumption" },
+  { key: "contingencyPct", group: "fees", label: "Contingency", unit: "% of build", step: 0.5, default: 5,
+    tip: "Construction risk allowance on top of abnormals.", source: "assumption" },
+  { key: "salesCostPct", group: "fees", label: "Sales & marketing", unit: "% of GDV", step: 0.5, default: 3,
+    tip: "Agents, legals, show home, incentives.", source: "assumption" },
+  // Revenue
+  { key: "unitSizeFt2", group: "revenue", label: "Average unit size", unit: "ft²", step: 25, default: 750,
+    tip: "Average saleable area per dwelling across the mix (NDSS 2b4p ≈ 850 ft²; 1-bed flats ≈ 550).", source: "assumption" },
+  { key: "salesAdjPct", group: "revenue", label: "New-build premium", unit: "% of local", step: 5, default: 100,
+    tip: "Applied to the LOCAL £/ft² (Land Registry × EPC within the catchment). 100 = resale parity; new build typically 105–115.", source: "assumption" },
+  { key: "salesPsf", group: "revenue", label: "Fallback sales value", unit: "£/ft²", step: 10, default: 350,
+    tip: "Used (× regional multiplier) only where no local price is loaded.", source: "assumption" },
+  { key: "affordablePct", group: "revenue", label: "Affordable housing", unit: "% units", step: 5, default: 25,
+    tip: "Policy-compliant share — check the LPA's adopted policy; London boroughs commonly 35–50%.", source: "LPA policy" },
+  { key: "affordableValue", group: "revenue", label: "Affordable value", unit: "% of market", step: 5, default: 55,
+    tip: "RP offer as a share of market value, blended across tenures (social rent ~40–50%, shared ownership ~65–75%).", source: "assumption" },
+  { key: "salesInflationPct", group: "revenue", label: "Sales inflation", unit: "%/yr", step: 0.5, default: 0,
+    tip: "House price growth assumed across the sales period. Leave 0 for today's-prices appraisal (the defensible default).", source: "assumption" },
+  // Finance
+  { key: "debtRatePct", group: "finance", label: "Debt rate", unit: "%/yr", step: 0.25, default: 7.5,
+    tip: "All-in cost of senior debt on the drawn balance.", source: "assumption" },
+  { key: "ltcPct", group: "finance", label: "Loan to cost", unit: "%", step: 5, default: 85,
+    tip: "Share of costs funded by debt; the rest is equity (equity drawn first).", source: "assumption" },
+  { key: "arrangementFeePct", group: "finance", label: "Arrangement fee", unit: "% of peak debt", step: 0.25, default: 1,
+    tip: "Lender entry fee, charged on peak facility.", source: "assumption" },
+  { key: "preConMonths", group: "finance", label: "Pre-construction", unit: "months", step: 1, default: 6,
+    tip: "Land to start on site: discharge of conditions, procurement, mobilisation.", source: "assumption" },
+  { key: "buildMonths", group: "finance", label: "Build period", unit: "months", step: 1, default: 24,
+    tip: "Start on site to practical completion. Scale with scheme size.", source: "assumption" },
+  { key: "salesMonths", group: "finance", label: "Sales period", unit: "months", step: 1, default: 18,
+    tip: "Absorption: first completion to final sale.", source: "assumption" },
+  { key: "salesOverlapMonths", group: "finance", label: "Sales overlap", unit: "months", step: 1, default: 6,
+    tip: "How far sales completions start before build completion (off-plan / phased handover).", source: "assumption" },
+  // Policy costs
+  { key: "cilPerUnit", group: "policy", label: "CIL", unit: "£k/unit", step: 1, default: 5,
+    tip: "Community Infrastructure Levy — zone-specific; check the charging schedule. n/a Scotland.", source: "LPA charging schedule" },
+  { key: "s106PerUnit", group: "policy", label: "S106 / S75", unit: "£k/unit", step: 1, default: 5,
+    tip: "Education, healthcare, transport, open space heads of terms.", source: "LPA precedent" },
+  { key: "bngPerUnit", group: "policy", label: "BNG", unit: "£k/unit", step: 0.5, default: 2,
+    tip: "10% biodiversity net gain — cheap where on-site delivery works, £20k+/unit where off-site units must be bought.", source: "assumption" },
+  // Targets
+  { key: "profitTargetPct", group: "targets", label: "Profit target (on cost)", unit: "%", step: 0.5, default: 17.5,
+    tip: "The viability threshold: schemes below half this read unviable.", source: "PPG: 15–20% of GDV typical" },
+  { key: "profitTargetGdvPct", group: "targets", label: "Profit target (on GDV)", unit: "%", step: 0.5, default: 15,
+    tip: "Used for the residual land value: RLV = GDV − costs − this margin.", source: "PPG: 15–20% of GDV typical" },
+];
+
+const VIAB_GROUPS = [
+  ["land", "Land"], ["build", "Build costs"], ["fees", "Fees & selling"],
+  ["revenue", "Revenue"], ["finance", "Finance & programme"],
+  ["policy", "Policy costs"], ["targets", "Targets"],
+];
+
+const VIABILITY_DEFAULTS = Object.fromEntries(
+  VIAB_SCHEMA.map(f => [f.key, f.default]));
+// Saved assumptions from the OLD flat model (buildPsf/softCostPct era) are not
+// meaningfully translatable — discard them once, keep everything else.
+VIABILITY_DEFAULTS._v = 2;
 
 const SIFT = {
   loaded: false,
@@ -10257,7 +10571,12 @@ const SIFT = {
   const saved = mmStore.get("siftConfig", null);
   if (!saved) return;
   Object.assign(SIFT.crit, saved.crit || {});
-  Object.assign(SIFT.assumptions, saved.assumptions || {});
+  // Assumptions only survive a reload if they speak the current schema. The
+  // v1 flat model (buildPsf £/ft², bundled softCostPct) cannot be translated
+  // into typology £/m² + explicit fees/finance without inventing numbers, so
+  // stale saves are dropped once — criteria, sort and shortlist are kept.
+  if (saved.assumptions && saved.assumptions._v === VIABILITY_DEFAULTS._v)
+    Object.assign(SIFT.assumptions, saved.assumptions);
   if (saved.sort) SIFT.sort = saved.sort;
 })();
 
@@ -10272,35 +10591,203 @@ function toggleShortlist(crs) {
   persistShortlist();
 }
 
-// Residual appraisal → profit on cost (%). Transparent: GDV − (build + softs +
-// land); profit-on-cost is the headline viability metric.
+// ---------------------------------------------------------------------------
+// The residual appraisal engine. One engine for every context: sift rows,
+// the deep dive, and assembled sites all call computeAppraisal with explicit
+// inputs, so a station and the plots inside its catchment can never be priced
+// by different arithmetic.
+//
+// inputs: { units, ppm2, region, areaHa?, locationFactor? }
+//   units          dwellings
+//   ppm2           local sales £/m² (null -> fallback £/ft² × regional mult)
+//   region         for the fallback multiplier only
+//   areaHa         site hectares — needed only for the EUV+ land basis
+//   locationFactor build-cost index for the locality (overrides a.costIndexFactor
+//                  when the caller knows better, e.g. from the build_cost layer)
+//
+// MODEL SIMPLIFICATIONS, stated rather than hidden (also shown in the modal):
+// build spend follows a sin² S-curve; sales complete evenly across the sales
+// period; equity is drawn before debt; interest accrues monthly on the drawn
+// balance and capitalises; the arrangement fee is charged on peak debt
+// computed before the fee (the circularity is a rounding error at 1%); IRR is
+// on the equity cashflow, annualised from the monthly rate.
+// ---------------------------------------------------------------------------
 const FT2_PER_M2 = 10.7639;
-function computeViability(row) {
-  const a = SIFT.assumptions;
-  const units = row.yield || 0;
-  if (units <= 0) return { profitOnCost: null, rag: "n/a", score: 0, price: null, local: false };
-  const area = units * a.unitSizeFt2;
-  // Sales value: prefer the LOCAL catchment £/ft² (from Land Registry £/m² within
-  // 800 m) × an adjustment; fall back to the base £/ft² × regional multiplier where
-  // no local price is loaded yet.
-  const localPsf = row.catchmentPpm2 ? row.catchmentPpm2 / FT2_PER_M2 : null;
+const M2_PER_FT2 = 1 / FT2_PER_M2;
+
+function computeAppraisal(inputs, a, opts) {
+  a = a || SIFT.assumptions;
+  opts = opts || {};
+  const nil = { profitOnCost: null, profitOnGdv: null, rag: "n/a", score: 0,
+                price: null, local: false, gdv: 0, totalCost: 0, profit: 0,
+                residualLandValue: null, irr: null, peakDebt: null,
+                cashflow: null, sensitivity: null, waterfall: null };
+  const units = Number(inputs.units) || 0;
+  if (units <= 0) return nil;
+
+  // --- Revenue --------------------------------------------------------------
+  const unitFt2 = a.unitSizeFt2 || 750;
+  const unitM2 = unitFt2 * M2_PER_FT2;
+  const localPsf = inputs.ppm2 ? inputs.ppm2 / FT2_PER_M2 : null;
   const price = localPsf != null
     ? localPsf * ((a.salesAdjPct || 100) / 100)
-    : a.salesPsf * regionPriceMult(row.region);
+    : (a.salesPsf || 350) * regionPriceMult(inputs.region);
   const affFrac = (a.affordablePct || 0) / 100;
   const blend = (1 - affFrac) + affFrac * ((a.affordableValue || 0) / 100);
-  const gdv = area * price * blend;
-  const build = area * a.buildPsf;
-  const softs = build * ((a.softCostPct || 0) / 100);
-  const land = units * (a.blvPerUnit || 0) * 1000;
-  const cost = build + softs + land;
-  if (cost <= 0) return { profitOnCost: null, rag: "n/a", score: 0, price: null, local: false };
-  const poc = ((gdv - cost) / cost) * 100;
+  // Sales inflation to the MIDPOINT of the sales period — even absorption
+  // means half the revenue lands either side of it.
+  const preCon = Math.max(0, a.preConMonths ?? 6);
+  const build = Math.max(1, a.buildMonths ?? 24);
+  const sell = Math.max(1, a.salesMonths ?? 18);
+  const overlap = Math.min(build, Math.max(0, a.salesOverlapMonths ?? 6));
+  const midSaleYears = (preCon + build - overlap + sell / 2) / 12;
+  const infl = Math.pow(1 + (a.salesInflationPct || 0) / 100, midSaleYears);
+  const gdv = units * unitFt2 * price * blend * infl;
+
+  // --- Costs ----------------------------------------------------------------
+  const flatFrac = Math.min(1, Math.max(0, (a.flatMixPct || 0) / 100));
+  const pm2 = ((a.buildPm2House || 0) * (1 - flatFrac)
+             + (a.buildPm2Flat || 0) * flatFrac)
+             * (inputs.locationFactor || a.costIndexFactor || 1);
+  const buildBase = units * unitM2 * pm2;
+  const abnormals = buildBase * ((a.abnormalsPct || 0) / 100);
+  const prepInfra = units * (((a.sitePrepPerPlot || 0) + (a.infraPerPlot || 0)) * 1000);
+  const hardCost = buildBase + abnormals + prepInfra;
+  const fees = hardCost * ((a.profFeesPct || 0) / 100);
+  const contingency = hardCost * ((a.contingencyPct || 0) / 100);
+  const policyCosts = units * (((a.cilPerUnit || 0) + (a.s106PerUnit || 0)
+                              + (a.bngPerUnit || 0)) * 1000);
+  const salesCosts = gdv * ((a.salesCostPct || 0) / 100);
+  const land = a.landBasis === "euvPlus" && inputs.areaHa > 0
+    ? inputs.areaHa * (a.euvPerHa || 0) * 1000 * (1 + (a.euvPremiumPct || 0) / 100)
+    : units * (a.blvPerUnit || 0) * 1000;
+
+  // --- Cashflow, finance, IRR ----------------------------------------------
+  const months = preCon + build + Math.max(0, sell - overlap) + 1;
+  const out = new Array(months).fill(0);
+  const inn = new Array(months).fill(0);
+  out[0] += land;
+  // Fees front-load with pre-construction (design happens before spades).
+  for (let m = 0; m < preCon; m++) out[m] += fees * 0.5 / Math.max(1, preCon);
+  // Policy costs at commencement — CIL is due on start on site.
+  out[preCon] = (out[preCon] || 0) + policyCosts;
+  // Build spend (incl. abnormals/prep, remaining fees, contingency) on a sin²
+  // S-curve: slow mobilisation, peak mid-programme, tail-off to completion.
+  const constr = hardCost + fees * 0.5 + contingency;
+  let sTot = 0;
+  const sW = [];
+  for (let m = 0; m < build; m++) {
+    const w = Math.pow(Math.sin(Math.PI * (m + 0.5) / build), 2);
+    sW.push(w); sTot += w;
+  }
+  for (let m = 0; m < build; m++) out[preCon + m] += constr * sW[m] / sTot;
+  // Sales: even absorption; sales costs leave in proportion to revenue.
+  const firstSale = preCon + build - overlap;
+  for (let m = 0; m < sell; m++) {
+    inn[firstSale + m] += gdv / sell;
+    out[firstSale + m] += salesCosts / sell;
+  }
+  // Equity first, then debt; interest capitalises monthly on the drawn balance.
+  const totalOut = out.reduce((s, v) => s + v, 0);
+  const equityCap = totalOut * (1 - (a.ltcPct ?? 85) / 100);
+  const mRate = (a.debtRatePct || 0) / 100 / 12;
+  let debt = 0, equityUsed = 0, peakDebt = 0, interest = 0;
+  const equityFlow = new Array(months).fill(0);
+  for (let m = 0; m < months; m++) {
+    const i = debt * mRate;
+    interest += i;
+    debt += i;
+    let need = out[m];
+    const eq = Math.min(need, Math.max(0, equityCap - equityUsed));
+    equityUsed += eq;
+    equityFlow[m] -= eq;
+    debt += need - eq;
+    const repay = Math.min(debt, inn[m]);
+    debt -= repay;
+    equityFlow[m] += inn[m] - repay;
+    peakDebt = Math.max(peakDebt, debt);
+  }
+  // Any residual debt at the end nets off the final equity receipt.
+  equityFlow[months - 1] -= debt;
+  const financeFee = peakDebt * ((a.arrangementFeePct || 0) / 100);
+  equityFlow[months - 1] -= financeFee;
+
+  const totalCost = hardCost + fees + contingency + policyCosts + salesCosts
+                  + land + interest + financeFee;
+  const profit = gdv - totalCost;
+  const poc = totalCost > 0 ? (profit / totalCost) * 100 : null;
+  const pog = gdv > 0 ? (profit / gdv) * 100 : null;
+
+  // Residual land value: what the site is WORTH at the target margin —
+  // reported beside the fixed-land profit, because clients ask both questions.
+  const nonLand = totalCost - land;
+  const residualLandValue = gdv - nonLand - gdv * ((a.profitTargetGdvPct || 15) / 100);
+
+  // IRR on the equity cashflow (monthly, bisection, annualised). Null when the
+  // flows are degenerate — an "IRR" of a no-equity or loss-making stream is
+  // noise, and "n/a" is the honest render.
+  const irr = (() => {
+    const anyNeg = equityFlow.some(v => v < -1), anyPos = equityFlow.some(v => v > 1);
+    if (!anyNeg || !anyPos) return null;
+    const npv = r => equityFlow.reduce((s, v, m) => s + v / Math.pow(1 + r, m), 0);
+    let lo = -0.5, hi = 1.0;
+    if (npv(lo) * npv(hi) > 0) return null;
+    for (let i = 0; i < 80; i++) {
+      const mid = (lo + hi) / 2;
+      (npv(lo) * npv(mid) <= 0) ? (hi = mid) : (lo = mid);
+    }
+    return (Math.pow(1 + (lo + hi) / 2, 12) - 1) * 100;
+  })();
+
+  // Two-way sensitivity: build cost × sales value, ±10% in 5% steps. Rows =
+  // build, cols = sales. Recursion is fenced off by opts.noSens.
+  let sensitivity = null;
+  if (!opts.noSens) {
+    const steps = [-10, -5, 0, 5, 10];
+    sensitivity = steps.map(b => steps.map(s => {
+      const aa = Object.assign({}, a, {
+        buildPm2House: (a.buildPm2House || 0) * (1 + b / 100),
+        buildPm2Flat: (a.buildPm2Flat || 0) * (1 + b / 100),
+        salesAdjPct: (a.salesAdjPct || 100) * (1 + s / 100),
+        salesPsf: (a.salesPsf || 350) * (1 + s / 100),
+      });
+      const r = computeAppraisal(inputs, aa, { noSens: true });
+      return r.profitOnCost;
+    }));
+  }
+
   const target = a.profitTargetPct || 17.5;
-  const rag = poc >= target ? "viable" : poc >= target * 0.5 ? "marginal" : "unviable";
-  // 0–100 score: target maps to ~60, 2× target to 100, break-even to ~25.
-  const score = Math.max(0, Math.min(100, 25 + (poc / (2 * target)) * 55));
-  return { profitOnCost: poc, rag, score, price: Math.round(price), local: localPsf != null };
+  const rag = poc == null ? "n/a"
+    : poc >= target ? "viable" : poc >= target * 0.5 ? "marginal" : "unviable";
+  const score = poc == null ? 0
+    : Math.max(0, Math.min(100, 25 + (poc / (2 * target)) * 55));
+
+  return {
+    profitOnCost: poc, profitOnGdv: pog, rag, score,
+    price: Math.round(price), local: localPsf != null,
+    gdv, totalCost, profit, residualLandValue, irr, peakDebt,
+    cashflow: { out, inn, equityFlow, months, interest, financeFee },
+    sensitivity,
+    waterfall: [
+      ["GDV", gdv], ["Build", -buildBase], ["Abnormals", -abnormals],
+      ["Site prep & infra", -prepInfra], ["Fees", -fees],
+      ["Contingency", -contingency], ["CIL/S106/BNG", -policyCosts],
+      ["Sales costs", -salesCosts], ["Finance", -(interest + financeFee)],
+      ["Land", -land], ["Profit", profit],
+    ],
+  };
+}
+
+// Legacy shape for the sift pipeline — same keys the funnel, sort and CSV
+// exports already read. The sift's whole-catchment appraisal is just the
+// engine with the row's yield and catchment £/m². Sensitivity is skipped for
+// speed: scoring ~2,400 stations must stay instant.
+function computeViability(row) {
+  const r = computeAppraisal(
+    { units: row.yield || 0, ppm2: row.catchmentPpm2, region: row.region },
+    SIFT.assumptions, { noSens: true });
+  return { profitOnCost: r.profitOnCost, rag: r.rag, score: r.score,
+           price: r.price, local: r.local };
 }
 
 // Attach the computed viability appraisal to every row (called before filter/sort).
@@ -10505,25 +10992,18 @@ function siftStepControlsHTML(key) {
         `<label class="sift-field"><span>Show top <b id="sift-depriv-val">${Math.round(C.deprivedTopPct)}%</b> most deprived</span><input type="range" id="sift-depriv" min="5" max="100" step="5" value="${C.deprivedTopPct}"></label>` +
         `<p class="hint" style="margin-top:4px">100% keeps every station; 10% keeps only catchments in the most-deprived national decile.</p>`;
     case "viability":
-      return `<p class="hint"><strong>Viability</strong> runs a residual appraisal per scheme: <em>Gross Development Value − (build + soft costs + land)</em> = <strong>profit on cost %</strong>. GDV uses each station's <strong>local sales value</strong> — the catchment-weighted £/m² from HM Land Registry (Price Paid × EPC floor area) over the LSOAs within 800 m, converted to £/ft² — so value reflects the actual neighbourhood, not a broad region. Where local price data isn't loaded yet it falls back to the base £/ft² below.</p>` +
-        siftNumField("v-salesadj", "Local price adjustment %", A.salesAdjPct, 5,
-          "Applied to the local market £/ft² from Land Registry data. 100% = the neighbourhood market rate; raise it for a prime new-build premium, lower it for a discount.") +
-        siftNumField("v-sales", "Fallback sales £/ft²", A.salesPsf, 10,
-          "Used only for stations where local Land Registry £/m² hasn't loaded. Multiplied by a regional factor (London ~1.9× … North East ~0.8×).") +
-        siftNumField("v-build", "Build £/ft²", A.buildPsf, 10,
-          "All-in construction cost per square foot (BCIS-style). Higher build cost lowers profit on cost.") +
-        siftNumField("v-unit", "Avg unit ft²", A.unitSizeFt2, 25,
-          "Average saleable floor area per dwelling. Converts the dwelling count into saleable area for GDV and into build cost.") +
-        siftNumField("v-soft", "Soft costs %", A.softCostPct, 1,
-          "Professional fees, finance, contingency and marketing, as a % of build cost (typically 25–35%).") +
+      return `<p class="hint"><strong>Viability</strong> runs a full residual appraisal per scheme — GDV from the <strong>local sales value</strong> (catchment-weighted Land Registry £/m² × EPC floor areas within 800 m), against typology build costs on a location index, abnormals, fees, policy costs (CIL/S106/BNG), an explicit finance line from a monthly cashflow, and land. Headline levers below; <strong>every</strong> assumption is tweakable in Viability variables.</p>` +
+        siftNumField("v-salesadj", "New-build premium %", A.salesAdjPct, 5,
+          "Applied to the local market £/ft² from Land Registry data. 100% = resale parity; new build typically 105–115.") +
+        siftNumField("v-buildh", "Build £/m² (houses)", A.buildPm2House, 25,
+          "Headline construction rate for houses, GIA. Seeded from a free proxy index — paste a BCIS rate if you hold a licence. Flats and the full cost stack are in Viability variables.") +
         siftNumField("v-aff", "Affordable %", A.affordablePct, 5,
-          "Share of homes delivered as affordable. Affordable units are valued at ~55% of market value, so a higher % reduces GDV.") +
-        siftNumField("v-blv", "Land £000/unit", A.blvPerUnit, 5,
-          "Benchmark land value / existing-use value paid to the landowner, in £000s per dwelling. A cost in the appraisal.") +
+          "Share of homes delivered as affordable, valued at the % of market set in Viability variables.") +
         siftNumField("v-target", "Profit target %", A.profitTargetPct, 0.5,
-          "Your required profit on cost. Schemes at/above this are 'viable' (green), down to half of it 'marginal' (amber), below that 'unviable' (red) in the results table.") +
+          "Required profit on cost. At/above = viable (green); half of it = marginal (amber); below = unviable (red).") +
         siftNumField("v-minpoc", "Min profit on cost %", C.minProfitOnCost, 1,
-          "FILTER: only keep stations whose scheme achieves at least this profit on cost. Set it to your profit target to keep only viable schemes, or leave low (e.g. -30) to keep everything and just rank by viability.") +
+          "FILTER: only keep stations achieving at least this profit on cost. Set to your target to keep only viable schemes; leave low (-30) to keep all and rank.") +
+        `<button type="button" id="viab-vars-btn" class="ghost" style="margin:6px 0">Viability variables — full assumption set…</button>` +
         `<label class="sift-field"><span>Rank shortlist by</span><select id="sift-sort">` +
         ["viability:Viability (profit on cost)", "regen:Regeneration need", "yield:Dwelling yield"]
           .map(o => { const [v, t] = o.split(":"); return `<option value="${v}"${SIFT.sort === v ? " selected" : ""}>${t}</option>`; })
@@ -10549,9 +11029,10 @@ function readSiftControls() {
   if (g("sift-maxprot")) C.maxProtectedPct = numv("sift-maxprot", 100);
   if (g("sift-depriv")) C.deprivedTopPct = numv("sift-depriv", 100);
   if (g("v-minpoc")) C.minProfitOnCost = numv("v-minpoc", -30);
-  [["v-sales", "salesPsf"], ["v-salesadj", "salesAdjPct"], ["v-build", "buildPsf"],
-   ["v-unit", "unitSizeFt2"], ["v-soft", "softCostPct"], ["v-aff", "affordablePct"],
-   ["v-blv", "blvPerUnit"], ["v-target", "profitTargetPct"]].forEach(([id, key]) => {
+  // Headline fields only — the full assumption set lives in the Viability
+  // variables modal, which writes into the same SIFT.assumptions object.
+  [["v-salesadj", "salesAdjPct"], ["v-buildh", "buildPm2House"],
+   ["v-aff", "affordablePct"], ["v-target", "profitTargetPct"]].forEach(([id, key]) => {
     if (g(id)) A[key] = numv(id, A[key]);
   });
   if (g("sift-sort")) SIFT.sort = g("sift-sort").value;
@@ -10647,6 +11128,18 @@ function renderSiftStep() {
   crit.querySelector("#sift-next").addEventListener("click", () => { if (SIFT.step < last) { SIFT.step++; renderSift(); } });
   crit.querySelectorAll(".sift-step-body input, .sift-step-body select").forEach(i =>
     i.addEventListener("input", () => { readSiftControls(); updateSiftFunnel(); }));
+  const vbtn = crit.querySelector("#viab-vars-btn");
+  if (vbtn) vbtn.addEventListener("click", () => {
+    // Preview context: the current top sift survivor, so edits show their
+    // effect on a real station rather than an abstract example.
+    const top = siftSurvivorsUpTo(SIFT_STEPS.length - 1)[0]
+             || siftCountryRows()[0] || null;
+    openViabilityModal(top ? {
+      label: top.name || top.crs,
+      units: top.yield || 0, ppm2: top.catchmentPpm2, region: top.region,
+      onChange: () => { scoreSiftRows(); updateSiftFunnel(); },
+    } : null);
+  });
 }
 
 // Recompute survivors up to the current step + refresh the summary, stepper
@@ -10846,4 +11339,6 @@ window.__mm = { MAP_OVERLAYS, LAYER_INFO, renderOverlay, hoverContentForOverlay,
                 renderDeepDiveLegend, renderPublicLandSummary,
                 developablePlotFeatures, publicLandPopupHTML,
                 selectDevelopablePlot, DEVELOPABLE_COLOR,
-                DEVELOPABLE_INNER_COLOR, PUBLIC_LAND_COLOR };
+                DEVELOPABLE_INNER_COLOR, PUBLIC_LAND_COLOR,
+                computeAppraisal, VIAB_SCHEMA, openViabilityModal, homesFor,
+                setMarketPtype, SIFT };
