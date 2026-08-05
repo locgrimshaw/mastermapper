@@ -29,11 +29,17 @@ jobs:
           # --fail-with-body: an HTTP error must fail the step, not print a
           # JSON error body into a green log (the 2026-08-05 failure mode).
           fail=0
-          curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_price_grid" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" -d '{}' --max-time 1500 \
-            || { echo "::error::price_grid rebuild failed"; fail=1; }
+          # One resolution per call — the four-band rebuild exceeds the API
+          # gateway's ~120 s ceiling on 36 months of sales (migration 0052).
+          for res in 0.32 0.08 0.02 0.005; do
+            echo "— price_grid @ $res°"
+            curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_price_grid" \
+              -H "apikey: $SUPABASE_SERVICE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+              -H "Content-Type: application/json" -d "{\"p_res\": $res}" --max-time 1500 \
+              || { echo "::error::price_grid rebuild @ $res failed"; fail=1; }
+            echo ""
+          done
           curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_lad_affordability" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \

@@ -72,12 +72,19 @@ jobs:
           # "succeeded" with a stale grid. PostgREST runs these with the
           # service_role statement_timeout (raised to 20min for exactly this).
           fail=0
-          # Re-aggregate the multi-resolution price_grid from the fresh sales.
-          curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_price_grid" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" -d '{}' --max-time 1500 \
-            || { echo "::error::price_grid rebuild failed — the heatmaps are showing STALE data until 'select rebuild_price_grid()' succeeds"; fail=1; }
+          # Re-aggregate the price_grid ONE RESOLUTION PER CALL: the four-band
+          # rebuild takes >120 s on 36 months of sales and the API gateway
+          # hangs up at ~120 s (HTTP 504) whatever the role statement budget
+          # says. Each band alone fits (migration 0052).
+          for res in 0.32 0.08 0.02 0.005; do
+            echo "— price_grid @ $res°"
+            curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_price_grid" \
+              -H "apikey: $SUPABASE_SERVICE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+              -H "Content-Type: application/json" -d "{\"p_res\": $res}" --max-time 1500 \
+              || { echo "::error::price_grid rebuild @ $res failed — that band is STALE until 'select rebuild_price_grid($res)' succeeds"; fail=1; }
+            echo ""
+          done
           # Affordability ratios on lad_income (median 12m price ÷ ASHE income).
           # Depends on fresh ppd_sales, so it lives here rather than in the
           # datasets workflow; harmless no-op when lad_income is not yet loaded.
