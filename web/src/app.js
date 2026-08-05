@@ -1153,33 +1153,33 @@ const MAP_OVERLAYS = [
   // (~35 km -> ~550 m cells); the numFilter picks the resolution for the
   // zoom, so the same toggle reads cleanly from a national view down to
   // street blocks. Borderless fills — the colour IS the story.
-  // heatWeightFn, not heatWeight: the kernel weight now depends on the shared
-  // flats/houses filter (marketPtype). The grid carries per-type medians —
-  // med/med_h/med_f and ppm2/ppm2_h/ppm2_f — so switching type is a repaint of
-  // props already on the client, never a refetch. A cell lacking the selected
-  // split (its per-type count missed the privacy floor) weights to 0 and
-  // disappears, rather than lying with the pooled number.
-  { key: "price_heat", group: "market", label: "Sold prices (3-yr heatmap)", color: "#d73027", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
+  // `surface`: bilinear value surface rendered to a canvas image overlay, NOT
+  // a kernel-density heatmap. The grid is a uniform VALUE lattice — summed
+  // kernels oscillate between cell centres at any radius, which showed up as
+  // banded stripes on screen. Interpolating the values directly means colour
+  // maps to price (legendable) and the surface is genuinely smooth.
+  // keyFn depends on the shared flats/houses filter (marketPtype): the grid
+  // carries per-type medians — med/med_h/med_f and ppm2/ppm2_h/ppm2_f — so
+  // switching type is a re-rasterise of props already on the client, never a
+  // refetch. A cell lacking the selected split (its per-type count missed the
+  // privacy floor) goes transparent, rather than lying with the pooled number.
+  { key: "price_heat", group: "market", label: "Sold prices (3-yr heatmap)", color: "#d73027", dataset: "price_grid", minZoom: 4, lim: 8000,
     datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
                   : z < 11  ? "price_grid_m" : "price_grid_f",
-    // Kernel weight: median price -> 0..1 (blue ~£80k ... red £1.5M+).
-    heatWeightFn: pt => {
-      const k = pt === "houses" ? "med_h" : pt === "flats" ? "med_f" : "med";
-      return ["case", ["!", ["has", k]], 0,
-        ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", k]], 0],
-          60000, 0.06, 130000, 0.2, 200000, 0.34, 300000, 0.48,
-          450000, 0.62, 700000, 0.76, 1100000, 0.88, 1800000, 1]];
+    surface: {
+      keyFn: pt => pt === "houses" ? "med_h" : pt === "flats" ? "med_f" : "med",
+      // Median price -> ramp position (blue ~£80k ... red £1.5M+).
+      stops: [[60000, 0.06], [130000, 0.2], [200000, 0.34], [300000, 0.48],
+              [450000, 0.62], [700000, 0.76], [1100000, 0.88], [1800000, 1]],
     } },
-  { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr heatmap)", color: "#7048e8", dataset: "price_grid", minZoom: 4, lim: 8000, heatPoint: true,
+  { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr heatmap)", color: "#7048e8", dataset: "price_grid", minZoom: 4, lim: 8000,
     datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
                   : z < 11  ? "price_grid_m" : "price_grid_f",
-    // Kernel weight: £/m² -> 0..1 (blue ~£1k ... red £10k+/m²).
-    heatWeightFn: pt => {
-      const k = pt === "houses" ? "ppm2_h" : pt === "flats" ? "ppm2_f" : "ppm2";
-      return ["case", ["!", ["has", k]], 0,
-        ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", k]], 0],
-          800, 0.06, 1500, 0.2, 2200, 0.34, 3000, 0.48,
-          4200, 0.62, 5800, 0.76, 8000, 0.88, 12000, 1]];
+    surface: {
+      keyFn: pt => pt === "houses" ? "ppm2_h" : pt === "flats" ? "ppm2_f" : "ppm2",
+      // £/m² -> ramp position (blue ~£1k ... red £10k+/m²).
+      stops: [[800, 0.06], [1500, 0.2], [2200, 0.34], [3000, 0.48],
+              [4200, 0.62], [5800, 0.76], [8000, 0.88], [12000, 1]],
     } },
   // Individual transactions stay for comparables work — close zooms only.
   { key: "ppd_sales",    group: "market", label: "Individual sales (comparables)",  color: "#d64550", dataset: "ppd_sales", render: "point", minZoom: 14, lim: 6000,
@@ -1422,12 +1422,12 @@ let marketPtype = (() => {
 function setMarketPtype(v) {
   marketPtype = v === "houses" || v === "flats" ? v : "all";
   try { localStorage.setItem("mm.marketPtype", marketPtype); } catch (_) {}
-  // Heat layers: swap the kernel-weight expression in place — the per-type
-  // medians are already in the loaded cells, so this never refetches.
+  // Surface layers: re-rasterise from the cached cells — the per-type
+  // medians are already in the loaded features, so this never refetches.
   for (const o of MAP_OVERLAYS) {
-    if (o.heatWeightFn && map.getLayer(`ov-${o.key}-heat`))
-      map.setPaintProperty(`ov-${o.key}-heat`, "heatmap-weight",
-                           o.heatWeightFn(marketPtype));
+    const st = overlayState[o.key];
+    if (o.surface && st && st.on && st.surfaceFC)
+      renderGridSurface(o.key, o, st.surfaceFC);
   }
   // Individual sales: a client-side layer filter. The row cap applies BEFORE
   // this filter, so a flats-only view in a dense area may undersample — the
@@ -1504,8 +1504,10 @@ function setOverlayOpacity(key, v) {
     map.setPaintProperty(`ov-${key}-line`, "line-opacity", lineAlpha);
   }
   if (map.getLayer(`ov-${key}-heat`))
-    map.setPaintProperty(`ov-${key}-heat`, "heatmap-opacity", Math.min(1, v * 2.2));
-  if (map.getLayer(`ov-${key}-pt`) && !(def && def.heatPoint)) {
+    // Surface layers use the same -heat layer id but it's a raster now.
+    map.setPaintProperty(`ov-${key}-heat`,
+      def && def.surface ? "raster-opacity" : "heatmap-opacity", Math.min(1, v * 2.2));
+  if (map.getLayer(`ov-${key}-pt`) && !(def && def.surface)) {
     map.setPaintProperty(`ov-${key}-pt`, "circle-opacity", Math.min(1, v * 2.5));
     map.setPaintProperty(`ov-${key}-pt`, "circle-stroke-opacity", Math.min(1, v * 2.5));
   }
@@ -1689,45 +1691,173 @@ function _cellsToPoints(fc) {
   }) };
 }
 
-// Kernel radius tracking the price-grid cell size on screen (×0.75, so the
-// kernels of neighbouring cells overlap into one surface): a sawtooth over
-// zoom — each resolution band starts small and doubles until the next band
-// takes over. Radius/cell-spacing stays a constant ratio, so the kernel
-// overlap factor (and therefore the density calibration) holds at any zoom.
-// Kernel radius must TRACK THE GRID, not the screen: each stop pair covers one
-// resolution band of the price grid (c 0.32° / l 0.08° / m 0.02° / f 0.005°,
-// switched by datasetFn at z6.5/8.5/11), and within a band the radius is
-// 0.75 × the VERTICAL distance between neighbouring cell centres:
-//     r(z) = 0.75 × cellDeg × (512·2^z / 360) × 1.7
-// The 512 is MapLibre's world size per zoom in CSS px; the 1.7 is Mercator's
-// latitude stretch at ~54°N — degree-square cells sit ~1.7× further apart
-// vertically than horizontally on screen, and it is the VERTICAL gap that has
-// to be bridged for kernels to merge into a surface. The previous stops
-// ignored both factors: at z8.4 the radius was 29 px against a 65 px vertical
-// spacing (0.44×), so every cell rendered as an isolated blob — a polka-dot
-// grid instead of a gradient. These stops hold the ratio at 0.75× at every
-// zoom (exponential-2 interpolation reproduces r ∝ 2^z exactly between
-// stops), which restores the ~1.8× summed-kernel overlap at cell centres that
-// the intensity constant (0.55) was originally tuned for.
-const HEAT_RADIUS = ["interpolate", ["exponential", 2], ["zoom"],
-  4, 9.3, 6.4, 49, 6.5, 13.1, 8.4, 49, 8.5, 13.1, 10.9, 69,
-  11, 18.6, 14, 148];
+// ---- Grid value surface (bilinear canvas raster) ---------------------------
+// The price grids are uniform VALUE lattices, and a kernel-density heatmap can
+// never render one smoothly: however the radius is tuned, the sum of round
+// kernels oscillates between cell centres (it peaked as banded stripes on the
+// Mercator-stretched vertical spacing). The right primitive is interpolation
+// of the values themselves: rasterise the lattice with bilinear interpolation
+// onto a canvas, hand it to MapLibre as an image source, and let the GPU
+// stretch it under the map. Colour then MEANS price — same number, same
+// colour, at every zoom — and the surface is smooth by construction.
 
-// One spectral ramp for the value surface: transparent nothing -> blue cold
-// -> green -> yellow -> orange -> red hot, like a classic density heatmap.
-const HEAT_COLOR = ["interpolate", ["linear"], ["heatmap-density"],
-  0, "rgba(0,0,0,0)",
-  0.06, "rgba(49,54,149,0.45)",
-  0.18, "rgba(69,117,180,0.6)",
-  0.3, "rgba(116,173,209,0.68)",
-  0.42, "rgba(171,217,233,0.72)",
-  0.52, "rgba(224,243,248,0.75)",
-  0.6, "#ffffbf",
-  0.7, "#fee090",
-  0.79, "#fdae61",
-  0.87, "#f46d43",
-  0.94, "#d73027",
-  1, "#a50026"];
+// Spectral ramp for the surface, position t in 0..1 -> RGBA. Low end keeps
+// some transparency so cold areas sit lightly on the basemap.
+const SURFACE_COLORS = [
+  [0.06, [49, 54, 149, 115]],
+  [0.18, [69, 117, 180, 153]],
+  [0.3,  [116, 173, 209, 173]],
+  [0.42, [171, 217, 233, 184]],
+  [0.52, [224, 243, 248, 191]],
+  [0.6,  [255, 255, 191, 210]],
+  [0.7,  [254, 224, 144, 220]],
+  [0.79, [253, 174, 97, 228]],
+  [0.87, [244, 109, 67, 235]],
+  [0.94, [215, 48, 39, 242]],
+  [1,    [165, 0, 38, 248]],
+];
+let _surfaceLUT = null;
+function surfaceLUT() {
+  if (_surfaceLUT) return _surfaceLUT;
+  const lut = new Uint8ClampedArray(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let a = SURFACE_COLORS[0], b = SURFACE_COLORS[SURFACE_COLORS.length - 1];
+    for (let s = 0; s < SURFACE_COLORS.length - 1; s++) {
+      if (t >= SURFACE_COLORS[s][0] && t <= SURFACE_COLORS[s + 1][0]) {
+        a = SURFACE_COLORS[s]; b = SURFACE_COLORS[s + 1]; break;
+      }
+    }
+    const f = t <= a[0] ? 0 : t >= b[0] ? 1 : (t - a[0]) / (b[0] - a[0]);
+    for (let c = 0; c < 4; c++)
+      lut[i * 4 + c] = Math.round(a[1][c] + (b[1][c] - a[1][c]) * f);
+  }
+  return (_surfaceLUT = lut);
+}
+
+// Value -> ramp position via the layer's piecewise-linear stops (clamped).
+function surfaceT(stops, v) {
+  if (v <= stops[0][0]) return stops[0][1];
+  const last = stops[stops.length - 1];
+  if (v >= last[0]) return last[1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [v0, t0] = stops[i], [v1, t1] = stops[i + 1];
+    if (v >= v0 && v <= v1) return t0 + (t1 - t0) * ((v - v0) / (v1 - v0));
+  }
+  return last[1];
+}
+
+// Image sources map linearly in MERCATOR between their corner coordinates, so
+// canvas rows must be sampled at equal Mercator-y steps (and converted back to
+// latitude to index the degree lattice) — sampling rows linearly in latitude
+// would shear the whole surface north at UK latitudes.
+const _mercY = lat => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+const _invMercY = y => ((2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180) / Math.PI;
+
+// Rasterise one fetched grid FeatureCollection into the layer's image overlay.
+// Missing cells (privacy floor, no sales, or the selected flats/houses split
+// absent) are NaN in the lattice; bilinear samples renormalise over whichever
+// of their 4 surrounding centres exist, and the summed corner weight doubles
+// as an alpha fade — so the surface dissolves softly at its data edge instead
+// of ending in a hard staircase.
+function renderGridSurface(key, def, fc) {
+  const imgSrcId = `ov-${key}-img`, rasterId = `ov-${key}-heat`;
+  const valKey = def.surface.keyFn(marketPtype);
+  const cells = [];
+  let res = 0;
+  for (const f of fc.features || []) {
+    const g = f.geometry;
+    const ring = g && (g.type === "Polygon" ? g.coordinates[0]
+                : g.type === "MultiPolygon" ? g.coordinates[0][0] : null);
+    if (!ring || !ring.length) continue;
+    let sx = 0, sy = 0;
+    for (const c of ring) { sx += c[0]; sy += c[1]; }
+    const v = f.properties && Number(f.properties[valKey]);
+    if (!res && f.properties && Number(f.properties.res) > 0)
+      res = Number(f.properties.res);
+    cells.push([sx / ring.length, sy / ring.length, Number.isFinite(v) && v > 0 ? v : NaN]);
+  }
+  const usable = cells.filter(c => Number.isFinite(c[2]));
+  if (!usable.length || !res) {
+    if (map.getLayer(rasterId)) map.removeLayer(rasterId);
+    if (map.getSource(imgSrcId)) map.removeSource(imgSrcId);
+    return;
+  }
+  let minLonC = Infinity, maxLonC = -Infinity, minLatC = Infinity, maxLatC = -Infinity;
+  for (const [lon, lat] of cells) {
+    if (lon < minLonC) minLonC = lon; if (lon > maxLonC) maxLonC = lon;
+    if (lat < minLatC) minLatC = lat; if (lat > maxLatC) maxLatC = lat;
+  }
+  const nx = Math.round((maxLonC - minLonC) / res) + 1;
+  const ny = Math.round((maxLatC - minLatC) / res) + 1;
+  if (nx < 1 || ny < 1 || nx > 600 || ny > 600) return;   // malformed fetch — keep last image
+  const grid = new Float64Array(nx * ny).fill(NaN);
+  for (const [lon, lat, v] of cells) {
+    const ix = Math.round((lon - minLonC) / res), iy = Math.round((lat - minLatC) / res);
+    if (ix >= 0 && ix < nx && iy >= 0 && iy < ny) grid[iy * nx + ix] = v;
+  }
+  // Image extent = outer cell EDGES (centres ± half a cell).
+  const lon0 = minLonC - res / 2, lon1 = maxLonC + res / 2;
+  const lat0 = minLatC - res / 2, lat1 = maxLatC + res / 2;
+  const px = Math.max(3, Math.min(14, Math.floor(1600 / Math.max(nx, ny))));
+  const W = nx * px, H = ny * px;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  const img = ctx.createImageData(W, H);
+  const data = img.data, lut = surfaceLUT(), stops = def.surface.stops;
+  // Column lattice positions are linear in lon; precompute once.
+  const gxs = new Float64Array(W);
+  for (let i = 0; i < W; i++)
+    gxs[i] = (lon0 + ((i + 0.5) / W) * (lon1 - lon0) - minLonC) / res;
+  const yTop = _mercY(lat1), yBot = _mercY(lat0);
+  for (let j = 0; j < H; j++) {
+    const lat = _invMercY(yTop + ((j + 0.5) / H) * (yBot - yTop));
+    const gy = (lat - minLatC) / res;
+    const y0 = Math.floor(gy), fy = gy - y0;
+    for (let i = 0; i < W; i++) {
+      const gx = gxs[i];
+      const x0 = Math.floor(gx), fx = gx - x0;
+      let wsum = 0, vsum = 0;
+      for (let dy = 0; dy <= 1; dy++) {
+        const cy = y0 + dy;
+        if (cy < 0 || cy >= ny) continue;
+        const wy = dy ? fy : 1 - fy;
+        for (let dx = 0; dx <= 1; dx++) {
+          const cx = x0 + dx;
+          if (cx < 0 || cx >= nx) continue;
+          const v = grid[cy * nx + cx];
+          if (Number.isNaN(v)) continue;
+          const w = wy * (dx ? fx : 1 - fx);
+          wsum += w; vsum += w * v;
+        }
+      }
+      const o = (j * W + i) * 4;
+      if (wsum > 1e-9) {
+        const ci = Math.round(surfaceT(stops, vsum / wsum) * 255) * 4;
+        data[o] = lut[ci]; data[o + 1] = lut[ci + 1]; data[o + 2] = lut[ci + 2];
+        data[o + 3] = Math.round(lut[ci + 3] * Math.min(1, wsum));
+      }
+      // else: all four corners missing — pixel stays transparent (zero-init).
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const url = canvas.toDataURL("image/png");
+  const coordinates = [[lon0, lat1], [lon1, lat1], [lon1, lat0], [lon0, lat0]];
+  const src = map.getSource(imgSrcId);
+  if (src) {
+    src.updateImage({ url, coordinates });
+  } else {
+    map.addSource(imgSrcId, { type: "image", url, coordinates });
+  }
+  if (!map.getLayer(rasterId)) {
+    const opacity = overlayState[key]?.opacity ?? OVERLAY_DEFAULT_OPACITY;
+    map.addLayer({ id: rasterId, type: "raster", source: imgSrcId,
+      paint: { "raster-opacity": Math.min(1, opacity * 2.2),
+               "raster-resampling": "linear",
+               "raster-fade-duration": 0 } }, overlayBeforeId());
+  }
+}
 
 // Stand up (or tear down) a PMTiles-backed overlay. Used where a dataset is too
 // large to serve per viewport from Postgres — PTAL is a 100 m grid of 159,451
@@ -1780,7 +1910,25 @@ async function ensureOverlayTiles(key, def) {
 function renderOverlay(key, def, fc) {
   const srcId = `ov-${key}-src`, fillId = `ov-${key}-fill`, lineId = `ov-${key}-line`,
         ptId = `ov-${key}-pt`, dashId = `ov-${key}-line-dashed`;
-  if (def.heatPoint) fc = _cellsToPoints(fc);
+  if (def.surface) {
+    // Value-surface layers: the visible pixels come from the canvas raster
+    // (renderGridSurface); the geojson source only carries invisible centre
+    // circles so hover/click popups keep working. Cache the raw cells so a
+    // flats/houses switch re-rasterises without a refetch.
+    const st = overlayState[key] || (overlayState[key] = { opacity: OVERLAY_DEFAULT_OPACITY });
+    st.surfaceFC = fc;
+    renderGridSurface(key, def, fc);
+    const pts = _cellsToPoints(fc);
+    if (map.getSource(srcId)) { map.getSource(srcId).setData(pts); return; }
+    map.addSource(srcId, { type: "geojson", data: pts });
+    map.addLayer({ id: ptId, type: "circle", source: srcId,
+      paint: { "circle-radius": ["interpolate", ["exponential", 2], ["zoom"],
+                 4, 3, 6.4, 15, 6.5, 4, 8.4, 15, 8.5, 4, 10.9, 21,
+                 11, 6, 13, 22, 15, 60],
+               "circle-color": "#000000", "circle-opacity": 0,
+               "circle-stroke-width": 0 } }, overlayBeforeId());
+    return;
+  }
   if (map.getSource(srcId)) {
     map.getSource(srcId).setData(fc);
     return;
@@ -1788,30 +1936,7 @@ function renderOverlay(key, def, fc) {
   const opacity = overlayState[key]?.opacity ?? OVERLAY_DEFAULT_OPACITY;
   map.addSource(srcId, { type: "geojson", data: fc });
   const before = overlayBeforeId();
-  if (def.heatPoint) {
-    // True kernel-density surface (native heatmap renderer): each cell
-    // centre contributes a kernel WEIGHTED by its value. The cells sit on a
-    // uniform grid, so the summed density is proportional to the local
-    // value average — a single continuous gradient, not visible dots.
-    // Intensity compensates the constant kernel-overlap factor (~1.8).
-    map.addLayer({ id: `ov-${key}-heat`, type: "heatmap", source: srcId,
-      paint: {
-        "heatmap-radius": HEAT_RADIUS,
-        "heatmap-weight": (def.heatWeightFn ? def.heatWeightFn(marketPtype)
-                           : def.heatWeight) || 1,
-        "heatmap-intensity": 0.55,
-        "heatmap-color": HEAT_COLOR,
-        "heatmap-opacity": Math.min(1, opacity * 2.2),
-      } }, before);
-    // Invisible hit-circles on the same source keep hover/click working —
-    // heatmap layers aren't feature-queryable.
-    map.addLayer({ id: ptId, type: "circle", source: srcId,
-      paint: { "circle-radius": ["interpolate", ["exponential", 2], ["zoom"],
-                 4, 3, 6.4, 15, 6.5, 4, 8.4, 15, 8.5, 4, 10.9, 21,
-                 11, 6, 13, 22, 15, 60],
-               "circle-color": "#000000", "circle-opacity": 0,
-               "circle-stroke-width": 0 } }, before);
-  } else if (def.render === "point") {
+  if (def.render === "point") {
     // Point dataset (campuses, substations, connection queue): circles that
     // scale slightly with zoom; opacity slider drives circle+stroke alpha.
     // Substation tiers pass their own radius curve so bigger sites = bigger dots.
@@ -1969,7 +2094,7 @@ function renderOverlay(key, def, fc) {
           2000, "#20707f", 3000, "#0d4a5c"]]
       : def.dataset === "price_grid"
       // Only the trend layer renders price_grid cells as FILL (the heatmaps
-      // take the heatPoint path), so this case is the trend ramp: diverging,
+      // take the surface path), so this case is the trend ramp: diverging,
       // blue falling -> grey flat -> red rising. Cells without a trustworthy
       // trend (either window under 5 sales) are fully transparent, not grey:
       // grey would read as "flat market", and absence of evidence isn't that.
@@ -2132,6 +2257,7 @@ function removeOverlayLayers(key) {
     if (map.getLayer(id)) map.removeLayer(id);
   const srcId = `ov-${key}-src`;
   if (map.getSource(srcId)) map.removeSource(srcId);
+  if (map.getSource(`ov-${key}-img`)) map.removeSource(`ov-${key}-img`);
   updateOverlayAttribution();
 }
 
