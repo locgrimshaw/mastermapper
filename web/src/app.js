@@ -11112,6 +11112,26 @@ function regionPriceMult(region) {
   return k ? REGION_PRICE_MULT[k] : 1.0;
 }
 
+// Regional BUILD-COST factors — a client-side mirror of the committed
+// pipeline/data/build_cost_index.csv (the free BCIS-like proxy behind the
+// build_cost_index layer; 1.00 = national average). The deep dive reads the
+// station's LAD factor live from that layer via point_summary; the sift scores
+// ~2,400 stations at once with no per-station fetch, so it applies the same
+// index at region grain from this table. Keep the two in step when the CSV
+// is recalibrated.
+const REGION_COST_FACTORS = {
+  "London": 1.18, "South East": 1.08, "East of England": 1.03, "East": 1.03,
+  "South West": 1.00, "West Midlands": 0.95, "East Midlands": 0.93,
+  "North West": 0.93, "Yorkshire and The Humber": 0.92, "Yorkshire": 0.92,
+  "North East": 0.90, "Wales": 0.92, "Scotland": 0.97,
+};
+function regionCostFactor(region) {
+  if (!region) return 1.0;
+  if (REGION_COST_FACTORS[region] != null) return REGION_COST_FACTORS[region];
+  const k = Object.keys(REGION_COST_FACTORS).find(x => region.indexOf(x) !== -1);
+  return k ? REGION_COST_FACTORS[k] : 1.0;
+}
+
 // ---------------------------------------------------------------------------
 // Viability assumption schema — the single source of truth. Drives the
 // defaults, the Viability variables modal (fields are GENERATED from this,
@@ -11452,7 +11472,10 @@ const SENS_STEPS = Array.from({ length: 21 }, (_, i) => i - 10);
 // speed: scoring ~2,400 stations must stay instant.
 function computeViability(row) {
   const r = computeAppraisal(
-    { units: row.effYield ?? (row.yield || 0), ppm2: row.catchmentPpm2, region: row.region },
+    { units: row.effYield ?? (row.yield || 0), ppm2: row.catchmentPpm2, region: row.region,
+      // Localise BUILD costs too, not just sales: the regional index from the
+      // build-cost proxy, so a Yorkshire scheme isn't costed at London rates.
+      locationFactor: regionCostFactor(row.region) },
     SIFT.assumptions, { noSens: true });
   return { profitOnCost: r.profitOnCost, rag: r.rag, score: r.score,
            price: r.price, local: r.local };
@@ -11676,7 +11699,7 @@ function siftStepControlsHTML(key) {
         siftNumField("v-salesadj", "New-build premium %", A.salesAdjPct, 5,
           "Applied to the local market £/ft² from Land Registry data. 100% = resale parity; new build typically 105–115.") +
         siftNumField("v-buildh", "Build £/m² (houses)", A.buildPm2House, 25,
-          "Headline construction rate for houses, GIA. Seeded from a free proxy index — paste a BCIS rate if you hold a licence. Flats and the full cost stack are in Viability variables.") +
+          "Headline construction rate for houses, GIA, at the NATIONAL average — each station is then scaled by its regional build-cost index (London ×1.18 … North East ×0.90, from the free proxy behind the build-cost layer). Paste a BCIS rate if you hold a licence. Flats and the full cost stack are in Viability variables.") +
         siftNumField("v-aff", "Affordable %", A.affordablePct, 5,
           "Share of homes delivered as affordable, valued at the % of market set in Viability variables.") +
         siftNumField("v-target", "Profit target %", A.profitTargetPct, 0.5,
@@ -11818,7 +11841,8 @@ function renderSiftStep() {
              || siftCountryRows()[0] || null;
     openViabilityModal(top ? {
       label: top.name || top.crs,
-      units: top.yield || 0, ppm2: top.catchmentPpm2, region: top.region,
+      units: top.effYield ?? (top.yield || 0), ppm2: top.catchmentPpm2, region: top.region,
+      locationFactor: regionCostFactor(top.region),   // preview = sift arithmetic
       onChange: () => { scoreSiftRows(); updateSiftFunnel(); },
     } : null);
   });
