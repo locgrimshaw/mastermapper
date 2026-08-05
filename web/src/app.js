@@ -146,14 +146,15 @@ const DEVELOPABLE_SUBTRACT_KINDS = [
   { key: "scheduled_monument", label: "Scheduled monument", on: true },
 ];
 
-// Fill/outline colours: green for the developable land kept, muted red for the
+// Fill/outline colours: purple for the developable land kept (green kept
+// getting read as green SPACE — the exact land it is not), muted red for the
 // subtracted "blocker" constraints.
-const DEVELOPABLE_COLOR = "#2f9e44";
+const DEVELOPABLE_COLOR = "#ae3ec9";
 const DEVELOPABLE_BLOCKER_COLOR = "#c0392b";
 // Developable land inside the inner ring carries the URBAN dwellings-per-
 // hectare rate — far more homes per acre than the same land further out — so
-// it gets its own hotter colour rather than reading as "more green".
-const DEVELOPABLE_INNER_COLOR = "#a9d626";
+// it gets its own deeper, hotter shade rather than reading as "more purple".
+const DEVELOPABLE_INNER_COLOR = "#5f3dc4";
 // Publicly-owned parcels (CCOD x INSPIRE, flats excluded): indigo, deliberately
 // outside the green/red developable language.
 const PUBLIC_LAND_COLOR = "#4c6ef5";
@@ -4981,7 +4982,13 @@ function buildStationSnapshot() {
   const key = (st.crs && st.crs.toUpperCase()) || st.name || "station";
 
   // NEED: live combined deprivation score (0-100, higher = more deprived).
-  const need = combinedScoreFromDomains(deep.domains, state.weights);
+  // Same fallback chain as renderDeprivationScore: when the LSOA tiles for the
+  // catchment aren't loaded (deep.domains null), fall back to the precomputed
+  // catchment IMD percentile from station_assessments — otherwise the Official
+  // supply triad showed "—" while the Need block right below showed a score.
+  let need = combinedScoreFromDomains(deep.domains, state.weights);
+  const dbImd = deep.assessment && deep.assessment.catchment_imd;
+  if ((need == null || isNaN(need)) && dbImd != null) need = Number(dbImd);
 
   // SUPPLY: brownfield capacity in the catchment (max-dwellings total).
   const bf = deep.brownfieldSummary;
@@ -6430,7 +6437,7 @@ function renderDevelopableLayer() {
       paint: { "line-color": "#ffffff", "line-width": 3.4, "line-opacity": 0.95 },
     });
     // Assembly highlight — its own fill+line so it never fights the
-    // single-select layer. Amber: distinct from the green fills, readable on
+    // single-select layer. Amber: distinct from the purple fills, readable on
     // both light and dark basemaps.
     map.addLayer({
       id: "developable-assembled", type: "fill", source: "developable-src",
@@ -7915,15 +7922,17 @@ function viabPreviewHTML(r, label) {
   const ragCls = r.rag === "viable" ? "sg" : r.rag === "marginal" ? "sa" : "sr";
   const wf = (r.waterfall || []).map(([k, v]) =>
     `<div class="viab-wf-row${v >= 0 ? " pos" : ""}"><span>${k}</span><span>${money(v)}</span></div>`).join("");
-  const steps = [-10, -5, 0, 5, 10];
+  const steps = SENS_STEPS;
   const target = SIFT.assumptions.profitTargetPct || 17.5;
-  const sens = r.sensitivity ? `<table class="viab-sens-table"><thead><tr><th>build \\ sales</th>` +
-    steps.map(s => `<th>${s > 0 ? "+" : ""}${s}%</th>`).join("") + `</tr></thead><tbody>` +
-    r.sensitivity.map((rowArr, i) => `<tr><th>${steps[i] > 0 ? "+" : ""}${steps[i]}%</th>` +
+  // 21 columns: bare numbers (the header cell carries the % once), tiny cells,
+  // horizontal scroll if a narrow window still can't fit them.
+  const sens = r.sensitivity ? `<div class="viab-sens-scroll"><table class="viab-sens-table"><thead><tr><th>build \\ sales %</th>` +
+    steps.map(s => `<th>${s > 0 ? "+" : ""}${s}</th>`).join("") + `</tr></thead><tbody>` +
+    r.sensitivity.map((rowArr, i) => `<tr><th>${steps[i] > 0 ? "+" : ""}${steps[i]}</th>` +
       rowArr.map(v => {
         const cls = v == null ? "" : v >= target ? "vs-g" : v >= target / 2 ? "vs-a" : "vs-r";
         return `<td class="${cls}">${v == null ? "—" : v.toFixed(0)}</td>`;
-      }).join("") + `</tr>`).join("") + `</tbody></table>` : "";
+      }).join("") + `</tr>`).join("") + `</tbody></table></div>` : "";
   return `<div class="viab-prev-head">${escapeSift(label || "Scheme")} <span class="viab-rag ${ragCls}">${r.rag}</span></div>` +
     `<div class="viab-kpis">` +
     `<div class="viab-kpi"><b>${pct(r.profitOnCost)}</b><span>profit on cost</span></div>` +
@@ -8179,6 +8188,7 @@ const SITE_REPORT_CSS = `
   .sr-table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 6px 0; }
   .sr-table th, .sr-table td { border: 1px solid #d8d4c8; padding: 3px 8px; text-align: right; }
   .sr-table th:first-child, .sr-table td:first-child { text-align: left; }
+  .sr-sens th, .sr-sens td { padding: 1px 2px; font-size: 7.5px; }
   .sr-sens td.g { background: #d3f0d8; } .sr-sens td.a { background: #fdeec9; } .sr-sens td.r { background: #f6d5d0; }
   .sr-note { font-size: 10px; color: #8a8574; margin-top: 4px; }
   .sr-rag { font-size: 10px; padding: 2px 10px; border-radius: 9px; color: #fff; text-transform: uppercase; }
@@ -8249,11 +8259,11 @@ function buildSiteReportHTML(site) {
       <td>${x.dist_m != null ? Math.round(x.dist_m) + " m" : ""}</td></tr>`).join("") +
     `</tbody></table>` : `<p class="sr-note">No recent transactions within the sample radius.</p>`;
 
-  const steps = [-10, -5, 0, 5, 10];
+  const steps = SENS_STEPS;
   const target = SIFT.assumptions.profitTargetPct || 17.5;
   const sensTable = ap.sensitivity ? `<table class="sr-table sr-sens"><thead>
-      <tr><th>build \\ sales</th>${steps.map(s => `<th>${s > 0 ? "+" : ""}${s}%</th>`).join("")}</tr></thead><tbody>` +
-    ap.sensitivity.map((r2, i) => `<tr><th>${steps[i] > 0 ? "+" : ""}${steps[i]}%</th>` +
+      <tr><th>build \\ sales %</th>${steps.map(s => `<th>${s > 0 ? "+" : ""}${s}</th>`).join("")}</tr></thead><tbody>` +
+    ap.sensitivity.map((r2, i) => `<tr><th>${steps[i] > 0 ? "+" : ""}${steps[i]}</th>` +
       r2.map(v => `<td class="${v == null ? "" : v >= target ? "g" : v >= target / 2 ? "a" : "r"}">${v == null ? "—" : v.toFixed(0)}</td>`).join("") +
       `</tr>`).join("") + `</tbody></table>` : "";
 
@@ -9411,8 +9421,11 @@ async function loadStationAssessment(crs) {
       deep.popFromDb = true;
       renderCatchmentStats();
     }
-    // Re-render the Need headline / breakdown now the DB fallback is available.
+    // Re-render the Need headline / breakdown now the DB fallback is available,
+    // and the synthesis block — its triad + sentence read the same need value
+    // via buildStationSnapshot and may have rendered before this row arrived.
     renderDeprivationScore();
+    if (typeof renderStationSynthesis === "function") renderStationSynthesis();
   } catch (err) {
     console.warn("station assessment load failed", err.message);
   }
@@ -11206,7 +11219,8 @@ const SIFT = {
   step: 0,             // current wizard step (index into SIFT_STEPS)
   crit: { requireFrequency: true, requireWellConnected: false, exemptInSettlement: true,
           tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
-          maxProtectedPct: 100, deprivedTopPct: 100, minProfitOnCost: -30 },
+          maxProtectedPct: 100, deprivedTopPct: 100, minProfitOnCost: -30,
+          excludeGreenBelt: false },
   sort: "viability",   // yield | regen | viability
   country: mmStore.get("siftCountry", "england"),  // england | scotland (sifted separately)
   assumptions: Object.assign({}, VIABILITY_DEFAULTS),
@@ -11387,11 +11401,13 @@ function computeAppraisal(inputs, a, opts) {
     return (Math.pow(1 + (lo + hi) / 2, 12) - 1) * 100;
   })();
 
-  // Two-way sensitivity: build cost × sales value, ±10% in 5% steps. Rows =
-  // build, cols = sales. Recursion is fenced off by opts.noSens.
+  // Two-way sensitivity: build cost × sales value, ±10% in 1% steps (21×21).
+  // Rows = build, cols = sales. Recursion is fenced off by opts.noSens — and
+  // only the modal preview and site report ever request it, so the 441
+  // appraisals (~tens of ms) never touch the per-station sift loop.
   let sensitivity = null;
   if (!opts.noSens) {
-    const steps = [-10, -5, 0, 5, 10];
+    const steps = SENS_STEPS;
     sensitivity = steps.map(b => steps.map(s => {
       const aa = Object.assign({}, a, {
         buildPm2House: (a.buildPm2House || 0) * (1 + b / 100),
@@ -11426,13 +11442,17 @@ function computeAppraisal(inputs, a, opts) {
   };
 }
 
+// Sensitivity axis shared by the engine and every renderer of the grid: every
+// whole percent from -10 to +10 on both build cost and sales value.
+const SENS_STEPS = Array.from({ length: 21 }, (_, i) => i - 10);
+
 // Legacy shape for the sift pipeline — same keys the funnel, sort and CSV
 // exports already read. The sift's whole-catchment appraisal is just the
 // engine with the row's yield and catchment £/m². Sensitivity is skipped for
 // speed: scoring ~2,400 stations must stay instant.
 function computeViability(row) {
   const r = computeAppraisal(
-    { units: row.yield || 0, ppm2: row.catchmentPpm2, region: row.region },
+    { units: row.effYield ?? (row.yield || 0), ppm2: row.catchmentPpm2, region: row.region },
     SIFT.assumptions, { noSens: true });
   return { profitOnCost: r.profitOnCost, rag: r.rag, score: r.score,
            price: r.price, local: r.local };
@@ -11442,7 +11462,15 @@ function computeViability(row) {
 // Deliverability & a 3-axis composite were removed per review — the funnel now ends
 // on viability; they will return when deliverability is rebuilt.
 function scoreSiftRows() {
+  // Effective developable area/yield: with the step-4 Green Belt exclusion on,
+  // every downstream number (step-3 filters, viability units, table, CSV,
+  // totals) sees the land NET of its Green Belt hectares — the yield scales by
+  // the same proportion since it's area × a flat density floor.
+  const nogb = SIFT.crit.excludeGreenBelt;
   for (const r of SIFT.rows) {
+    r.effHa = nogb ? Math.max(0, r.developableHa - (r.greenBeltHa || 0)) : r.developableHa;
+    r.effYield = nogb && r.developableHa > 0
+      ? Math.round((r.yield || 0) * (r.effHa / r.developableHa)) : (r.yield || 0);
     r._viab = computeViability(r);
   }
 }
@@ -11459,6 +11487,7 @@ async function enterSiftMode() {
 
 function exitSiftMode() {
   if (map.getLayer("station-dot")) { try { map.setFilter("station-dot", null); } catch (_) {} }
+  if (typeof removeSiftEmphasis === "function") removeSiftEmphasis();
 }
 
 async function loadSiftData() {
@@ -11541,7 +11570,8 @@ const SIFT_STEPS = [
       what: "The net land physically available for homes within an ~800 m (10-minute) walk of the station, and the dwelling capacity that implies.",
       source: "NPPF 'reasonable walking distance' of a station; the net-developable-area method (start from the catchment, erase undevelopable land) is standard practice in Housing & Economic Land Availability Assessments (HELAA).",
       calc: "800 m circular catchment MINUS (PostGIS ST_Difference) built-up land, green space, transport corridors (roads + railway curtilage), flood zone 3 and hard environmental designations. dwelling_yield = net developable hectares × the density floor from step 2." },
-    pred: (r, c) => r.developableHa >= c.minDevHa && r.yield >= c.minYield },
+    pred: (r, c) => (r.effHa ?? r.developableHa) >= c.minDevHa &&
+                    (r.effYield ?? r.yield) >= c.minYield },
   { key: "protected", title: "4 · Protected land %",
     about: {
       what: "Of the land left after hard exclusions, how much sits under a SOFT heritage or landscape designation — one that doesn't stop development outright but adds planning friction, delay and cost.",
@@ -11634,7 +11664,9 @@ function siftStepControlsHTML(key) {
         siftNumField("sift-minyield", "Min dwelling yield", C.minYield || 0, 50);
     case "protected":
       return `<p class="hint">Hard designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased in step 3. This caps how much of the remaining developable land sits under a <strong>soft</strong> designation — conservation areas, AONB / National Landscapes, registered parks &amp; gardens and listed-building settings — which don't block development but add planning friction.</p>` +
-        `<label class="sift-field"><span>Max protected land <b id="sift-prot-val">${Math.round(C.maxProtectedPct)}%</b></span><input type="range" id="sift-maxprot" min="0" max="100" step="5" value="${C.maxProtectedPct}"></label>`;
+        `<label class="sift-field"><span>Max protected land <b id="sift-prot-val">${Math.round(C.maxProtectedPct)}%</b></span><input type="range" id="sift-maxprot" min="0" max="100" step="5" value="${C.maxProtectedPct}"></label>` +
+        `<label class="dd-row"><input type="checkbox" id="sift-nogb"${chk(C.excludeGreenBelt)}> <span>Exclude Green Belt land</span></label>` +
+        `<p class="hint" style="margin-top:4px">With this on, each station's developable area and dwelling yield are counted <strong>net of Green Belt hectares</strong> — the exclusion flows through the land filters, the viability appraisal and the totals. Off by default because the draft NPPF explicitly permits Green Belt release around well-connected stations (Tier B).</p>`;
     case "regen":
       return `<p class="hint">Target the most deprived catchments. Each station's catchment deprivation is a national percentile of the population-weighted IMD (2019) of its LSOAs — <strong>100 = most deprived</strong>. Keep only stations in the top X% most deprived.</p>` +
         `<label class="sift-field"><span>Show top <b id="sift-depriv-val">${Math.round(C.deprivedTopPct)}%</b> most deprived</span><input type="range" id="sift-depriv" min="5" max="100" step="5" value="${C.deprivedTopPct}"></label>` +
@@ -11675,6 +11707,7 @@ function readSiftControls() {
   if (g("sift-minha")) C.minDevHa = numv("sift-minha", 0);
   if (g("sift-minyield")) C.minYield = numv("sift-minyield", 0);
   if (g("sift-maxprot")) C.maxProtectedPct = numv("sift-maxprot", 100);
+  if (g("sift-nogb")) C.excludeGreenBelt = g("sift-nogb").checked;
   if (g("sift-depriv")) C.deprivedTopPct = numv("sift-depriv", 100);
   if (g("v-minpoc")) C.minProfitOnCost = numv("v-minpoc", -30);
   // Headline fields only — the full assumption set lives in the Viability
@@ -11704,8 +11737,9 @@ function exportSiftCsv() {
   };
   const lines = [cols.join(",")];
   rows.forEach((r, i) => {
-    lines.push([i + 1, r.crs, r.name, r.region, r.tier, r.densityFloor ?? "", r.developableHa,
-      r.yield, r.friction == null ? "" : Math.round(r.friction * 100), r.greenBeltHa,
+    lines.push([i + 1, r.crs, r.name, r.region, r.tier, r.densityFloor ?? "",
+      r.effHa ?? r.developableHa,
+      r.effYield ?? r.yield, r.friction == null ? "" : Math.round(r.friction * 100), r.greenBeltHa,
       r.regen == null ? "" : Math.round(r.regen),
       r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1),
       r._viab.rag].map(esc).join(","));
@@ -11801,7 +11835,7 @@ function updateSiftFunnel() {
     if (counts[i] != null) el.textContent = counts[i].toLocaleString();
   });
   const surv = siftSurvivorsUpTo(SIFT.step);
-  const totalYield = surv.reduce((s, r) => s + (r.yield || 0), 0);
+  const totalYield = surv.reduce((s, r) => s + (r.effYield ?? r.yield ?? 0), 0);
   const stepTitle = SIFT_STEPS[SIFT.step].title.replace(/^\d+ · /, "");
   const countryTotal = siftCountryRows().length;
   summary.innerHTML =
@@ -11881,7 +11915,7 @@ function renderSiftTable(surv, results) {
       `<td>${i + 1}</td>` +
       `<td>${escapeSift(r.name)}<small>${escapeSift(r.region || r.ttwa)}</small></td>` +
       `<td><span class="sift-tier sift-tier-${r.tier}">${r.tier === "ineligible" ? "—" : r.tier}</span></td>` +
-      `<td title="${r.developableHa.toFixed(1)} developable ha · ${r.densityFloor || "?"} dph">${(r.yield || 0).toLocaleString()}</td>` +
+      `<td title="${(r.effHa ?? r.developableHa).toFixed(1)} developable ha · ${r.densityFloor || "?"} dph${SIFT.crit.excludeGreenBelt && r.greenBeltHa > 0 ? ` · net of ${r.greenBeltHa.toFixed(1)} ha Green Belt` : ""}">${(r.effYield ?? r.yield ?? 0).toLocaleString()}</td>` +
       `<td>${r.regen == null ? "—" : `<span class="sift-need" title="catchment IMD percentile ${Math.round(r.regen)} (100 = most deprived)${r.friction == null ? "" : ` · ${Math.round(r.friction * 100)}% protected land`}">${Math.round(r.regen)}</span>`}${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha developable in Green Belt">⬡</span>` : ""}</td>` +
       vcell(r) +
       `</tr>`
@@ -11918,6 +11952,59 @@ function highlightSiftSurvivors(surv) {
   try {
     map.setFilter("station-dot", ["in", ["get", "crs"], ["literal", surv.map(r => r.crs)]]);
   } catch (_) { /* filter unsupported — leave all stations shown */ }
+  renderSiftEmphasis(surv);
+}
+
+// Survivors drawn STRONGLY at any zoom, so a nationwide view reads as a
+// geography of opportunity rather than a scatter of faint dots: every
+// survivor gets a solid orange dot sized to survive z5, and the CURRENT top
+// 10 (in the active sort) wear their rank as a number on an enlarged dot,
+// with the station name alongside from regional zooms. Rebuilt on every sift
+// re-render, torn down on leaving sift mode.
+function renderSiftEmphasis(surv) {
+  const byCrs = new Map(surv.map((r, i) => [r.crs, i + 1]));
+  const feats = ((state.stationsData && state.stationsData.features) || [])
+    .filter(f => byCrs.has(f.properties.crs))
+    .map(f => ({ type: "Feature", geometry: f.geometry,
+      properties: { crs: f.properties.crs, name: f.properties.name || f.properties.crs,
+                    rank: byCrs.get(f.properties.crs) } }));
+  const fc = { type: "FeatureCollection", features: feats };
+  const src = map.getSource("sift-emph-src");
+  if (src) { src.setData(fc); return; }
+  map.addSource("sift-emph-src", { type: "geojson", data: fc });
+  const topTen = ["<=", ["get", "rank"], 10];
+  // Zoom must be the OUTER interpolate; the rank test nests inside each stop.
+  const radius = ["interpolate", ["linear"], ["zoom"],
+    4,  ["case", topTen, 8, 3.4],
+    8,  ["case", topTen, 10, 5],
+    12, ["case", topTen, 13, 7]];
+  map.addLayer({ id: "sift-emph-dot", type: "circle", source: "sift-emph-src",
+    paint: { "circle-radius": radius,
+             "circle-color": "#e8590c",
+             "circle-stroke-color": "#ffffff",
+             "circle-stroke-width": ["case", topTen, 2, 1.2] } });
+  map.addLayer({ id: "sift-emph-num", type: "symbol", source: "sift-emph-src",
+    filter: topTen,
+    layout: { "text-field": ["to-string", ["get", "rank"]],
+              "text-font": ["Noto Sans Regular"],
+              "text-size": ["interpolate", ["linear"], ["zoom"], 4, 10, 8, 12, 12, 14],
+              "text-allow-overlap": true },
+    paint: { "text-color": "#ffffff" } });
+  map.addLayer({ id: "sift-emph-name", type: "symbol", source: "sift-emph-src",
+    filter: topTen, minzoom: 6,
+    layout: { "text-field": ["get", "name"],
+              "text-font": ["Noto Sans Regular"],
+              "text-size": 10.5,
+              "text-anchor": "top", "text-offset": [0, 1.1],
+              "text-optional": true },
+    paint: { "text-color": "#7c2d05", "text-halo-color": "#ffffff",
+             "text-halo-width": 1.4 } });
+}
+
+function removeSiftEmphasis() {
+  for (const id of ["sift-emph-num", "sift-emph-name", "sift-emph-dot"])
+    if (map.getLayer(id)) map.removeLayer(id);
+  if (map.getSource("sift-emph-src")) map.removeSource("sift-emph-src");
 }
 
 buildLayersPanel();       // the grouped Data layers tree (box 1) — must run

@@ -889,10 +889,10 @@ footer {
 .dd-dev-dph { margin-top: 6px; }
 .dd-dev-caps { margin-top: 8px; }
 .dd-dev-cap-on {
-  background: rgba(47, 158, 68, 0.16);
-  border-color: rgba(47, 158, 68, 0.55);
+  background: rgba(174, 62, 201, 0.14);
+  border-color: rgba(174, 62, 201, 0.55);
 }
-.dd-dev-cap-on .dd-stat-num { color: #2f9e44; }
+.dd-dev-cap-on .dd-stat-num { color: #ae3ec9; }
 
 .dd-stat {
   font-family: var(--font-data);
@@ -1062,22 +1062,24 @@ footer {
 .dd-block.collapsed .dd-block-content { display: none; }
 .dd-block.collapsed { padding-bottom: 16px; }
 
-/* Hero treatment for the developable-land section — the station-profile headline. */
+/* Hero treatment for the developable-land section — the station-profile
+   headline. Purple to match the developable fills on the map (green read as
+   green SPACE — the one thing this land is not). */
 .dd-block.dd-hero {
-  background: linear-gradient(180deg, rgba(47,158,68,0.10), transparent 55%);
-  border: 1px solid rgba(47,158,68,0.55);
-  border-bottom: 1px solid rgba(47,158,68,0.55);
+  background: linear-gradient(180deg, rgba(174,62,201,0.10), transparent 55%);
+  border: 1px solid rgba(174,62,201,0.55);
+  border-bottom: 1px solid rgba(174,62,201,0.55);
   border-radius: 12px;
   padding: 14px 14px 16px;
   margin-bottom: 6px;
 }
-.dd-block.dd-hero .dd-h { color: #2f9e44; }
+.dd-block.dd-hero .dd-h { color: #ae3ec9; }
 .dd-dev-hero {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; flex-wrap: wrap;
-  background: #2f9e44; color: #fff;
+  background: #9c36b5; color: #fff;
   border-radius: 10px; padding: 12px 14px; margin: 0 0 12px;
-  box-shadow: 0 2px 10px rgba(47,158,68,0.25);
+  box-shadow: 0 2px 10px rgba(156,54,181,0.25);
 }
 .dd-dev-hero:empty { display: none; }
 .dd-dev-hero-num { font-family: var(--font-data); font-size: 36px; font-weight: 700; line-height: 1; }
@@ -1766,9 +1768,18 @@ footer {
 .compare-body { padding: 18px 24px 24px; }
 
 /* Viability variables modal: schema-generated fields left, live preview right. */
-.viab-sheet { max-width: 1040px; }
-.viab-body { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(320px, 400px); gap: 20px; align-items: start; }
-.viab-fields { max-height: 68vh; overflow-y: auto; padding-right: 6px; }
+.viab-sheet { max-width: 1120px; }
+.viab-body { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(340px, 460px); gap: 20px; align-items: start; }
+.viab-fields { max-height: 68vh; overflow-y: auto; overflow-x: hidden; padding-right: 6px; }
+/* Fields must yield to their grid cell, not force it wider: the .sift-field
+   label+input row's min-content width exceeded half the column, so the 1fr
+   grid tracks grew past the pane and pushed every field's right edge behind a
+   horizontal scrollbar. Stack label over input instead — each field then fits
+   any cell width, and the label can wrap. */
+.viab-grid > * { min-width: 0; }
+.viab-field { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-width: 0; font-size: 11.5px; }
+.viab-field > span { flex-wrap: wrap; }
+.viab-field input { width: 100%; min-width: 0; box-sizing: border-box; }
 .viab-group { border: 1px solid var(--ink-line); border-radius: 8px; margin: 0 0 10px; padding: 6px 10px 10px; }
 .viab-group legend { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim); padding: 0 4px; display: flex; gap: 8px; align-items: center; }
 .viab-reset { font-size: 10px; padding: 0 6px; }
@@ -1788,8 +1799,12 @@ footer {
 .viab-wf-row span:last-child { font-family: var(--font-data); color: var(--text); }
 .viab-wf-row.pos span:last-child { color: #2f9e44; }
 .viab-sens-h { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); margin: 10px 0 4px; }
-.viab-sens-table { border-collapse: collapse; font-size: 10.5px; font-family: var(--font-data); }
-.viab-sens-table th, .viab-sens-table td { border: 1px solid var(--ink-line); padding: 2px 7px; text-align: right; }
+/* 21×21 grid (every 1% from −10 to +10): tiny cells, and its own horizontal
+   scroll as a last resort so it can never widen the whole modal. */
+.viab-sens-scroll { overflow-x: auto; }
+.viab-sens-table { border-collapse: collapse; font-size: 8.5px; font-family: var(--font-data); }
+.viab-sens-table th, .viab-sens-table td { border: 1px solid var(--ink-line); padding: 1px 3px; text-align: right; }
+.viab-sens-table thead th:first-child { font-size: 7.5px; white-space: nowrap; }
 .viab-sens-table th { color: var(--text-dim); font-weight: 500; }
 .viab-sens-table td.vs-g { background: rgba(47,158,68,.25); }
 .viab-sens-table td.vs-a { background: rgba(240,140,0,.25); }
