@@ -66,17 +66,24 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
+          # --fail-with-body is load-bearing: without it curl exits 0 on an
+          # HTTP 500, so on 2026-08-05 both rebuilds died on a statement
+          # timeout, printed the JSON error into a green log, and the step
+          # "succeeded" with a stale grid. PostgREST runs these with the
+          # service_role statement_timeout (raised to 20min for exactly this).
+          fail=0
           # Re-aggregate the multi-resolution price_grid from the fresh sales.
-          curl -sS -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_price_grid" \
+          curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_price_grid" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
             -H "Content-Type: application/json" -d '{}' --max-time 1500 \
-            || echo "::warning::price_grid rebuild call failed — run 'select rebuild_price_grid()' manually"
+            || { echo "::error::price_grid rebuild failed — the heatmaps are showing STALE data until 'select rebuild_price_grid()' succeeds"; fail=1; }
           # Affordability ratios on lad_income (median 12m price ÷ ASHE income).
           # Depends on fresh ppd_sales, so it lives here rather than in the
           # datasets workflow; harmless no-op when lad_income is not yet loaded.
-          curl -sS -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_lad_affordability" \
+          curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_lad_affordability" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
             -H "Content-Type: application/json" -d '{}' --max-time 1500 \
-            || echo "::warning::lad_affordability rebuild failed — run 'select rebuild_lad_affordability()' manually"
+            || { echo "::error::lad_affordability rebuild failed — run 'select rebuild_lad_affordability()' manually"; fail=1; }
+          exit $fail

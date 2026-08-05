@@ -1,0 +1,42 @@
+name: Rebuild market aggregates (price grid + affordability)
+
+# Re-runs the two post-load aggregations WITHOUT reloading the 2M-row
+# ppd_sales dataset (which takes ~50 minutes). Use when a load-ppd run's
+# rebuild step failed, or after applying a migration that changes what the
+# grid carries. Both functions fully replace their datasets, so this is
+# idempotent and safe to run at any time.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Rebuild price_grid and lad affordability
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          # --fail-with-body: an HTTP error must fail the step, not print a
+          # JSON error body into a green log (the 2026-08-05 failure mode).
+          fail=0
+          curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_price_grid" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/json" -d '{}' --max-time 1500 \
+            || { echo "::error::price_grid rebuild failed"; fail=1; }
+          curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_lad_affordability" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/json" -d '{}' --max-time 1500 \
+            || { echo "::error::lad_affordability rebuild failed"; fail=1; }
+          exit $fail
