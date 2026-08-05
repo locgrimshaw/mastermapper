@@ -1203,6 +1203,9 @@ const MAP_OVERLAYS = [
   // rather than the nearest city's. Same datasetFn pattern as the price grids.
   { key: "affordability", group: "market2", label: "Affordability (price ÷ income)", color: "#c2255c", dataset: "lad_income", minZoom: 5,
     datasetFn: z => z < 9.5 ? "lad_income" : "msoa_income" },
+  // MHCLG/VOA residential land value per hectare — the published benchmark
+  // the viability engine's land line uses. England only (source coverage).
+  { key: "land_value", group: "market2", label: "Land value (resi £/ha, MHCLG)", color: "#4263eb", dataset: "land_value", minZoom: 5 },
   // Bus network (NaPTAN + BODS GTFS). ~400k stops nationally: the numeric
   // prop filter thins wide zooms to frequent-service stops, so the row cap
   // bites frequency-first rather than arbitrarily. Until the GTFS timetable
@@ -1406,6 +1409,7 @@ const LAYER_INFO = {
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — green available, amber restricted, red not available. A proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
   ppd_sales:           { about: "Every registered property sale in the last 12 months as a dot, colour-ramped from amber (~£100k) to deep red (£1.5m+). Street-level price truth beneath the LSOA averages. Positions are postcode-centroid based. Zoom right in — it's dense.", source: "HM Land Registry Price Paid Data © Crown copyright (PPD licence); OS Code-Point Open" },
   hdt:                 { about: "The Housing Delivery Test: each authority's housing delivery vs target. Red (<75%) triggers the NPPF presumption in favour of sustainable development — the strongest single approval signal; orange = 20% buffer; amber = action plan; green = passing.", source: "MHCLG Housing Delivery Test measurement (OGL v3)" },
+  land_value:          { about: "The value per hectare of a typical residential site in each English authority, from the government's official policy-appraisal estimates — pale blue ~£0.5M/ha rural, deep violet £10M+, grape £50M+ central London. This is the published benchmark the viability engine's land line uses. Estimates for appraisal, not valuations of specific sites.", source: "MHCLG/VOA land value estimates for policy appraisal 2023 (OGL v3)" },
 };
 
 const OVERLAY_MIN_ZOOM = 7;           // default floor; per-layer minZoom overrides
@@ -2103,6 +2107,13 @@ function renderOverlay(key, def, fc) {
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "trend_pct"]], 0],
           -10, "#1864ab", -5, "#74c0fc", -1.5, "#d8e2e8", 1.5, "#e9d8d8",
           5, "#ff8787", 10, "#c92a2a"]]
+      : def.dataset === "land_value"
+      // Residential land value: log-ish sweep, pale blue (~£0.5M/ha rural)
+      // deepening through violet (£10M+) to grape (central-London £50M+).
+      ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "resi_gbp_ha"]], 0],
+         500000, "#d0ebff", 1500000, "#74c0fc", 3000000, "#4dabf7",
+         6000000, "#4263eb", 12000000, "#7048e8", 25000000, "#9c36b5",
+         60000000, "#5f2a6e"]
       : def.dataset === "build_cost_index"
       // Relative build cost: green cheaper-than-national -> red dearer.
       ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "factor"]], 1],
@@ -3576,6 +3587,14 @@ function hoverContentForOverlay(def, p) {
             row(p.cost_house_pm2 != null ? `£${Number(p.cost_house_pm2).toLocaleString()}/m²` : null, "houses, indicative"),
             row(p.cost_flat_pm2 != null ? `£${Number(p.cost_flat_pm2).toLocaleString()}/m²` : null, "flats, indicative"),
             row("override in Viability variables", "per-project")];
+  } else if (d === "land_value") {
+    title = p.resi_gbp_ha != null
+      ? `£${(Number(p.resi_gbp_ha) / 1e6).toFixed(1)}M/ha` : (p.name || "Local authority");
+    kind = "Residential land value — MHCLG policy appraisal estimate";
+    rows = [row(p.name || null, "authority"),
+            row(p.resi_gbp_ha != null ? `£${Number(p.resi_gbp_ha).toLocaleString()}/ha` : null,
+                `typical residential site${p.asof ? ` (${p.asof})` : ""}`),
+            row("appraisal benchmark — not a valuation of any specific site", "VOA/MHCLG caveat")];
   } else if (d === "lad_income") {
     // Serves both geographies: district (ASHE individual pay) and, close in,
     // MSOA neighbourhoods (ONS household income, hh flag) — say which.
@@ -6973,17 +6992,23 @@ async function renderDeepDiveViability() {
     el.innerHTML = `<p class="hint">Turn on the developable-land tool above — the appraisal prices its dwelling capacity.</p>`;
     return;
   }
-  // Locality build-cost factor + income, fetched once per dive and cached.
+  // Locality build-cost factor, income and MHCLG land value, fetched once per
+  // dive and cached. NOTE the explicit client: this block previously used a
+  // bare `sb` that was never in scope, the ReferenceError vanished into the
+  // catch, and every dive quietly fell back to "1.00× (national)".
   if (deep._marketCtx === undefined && deep.stationCentre) {
     deep._marketCtx = null;   // in flight — a re-render must not refetch
+    const sbc = (typeof getSupabase === "function") ? getSupabase() : null;
     try {
-      const { data } = await sb.rpc("point_summary",
+      if (!sbc) throw new Error("not configured");
+      const { data } = await sbc.rpc("point_summary",
         { p_lon: deep.stationCentre[0], p_lat: deep.stationCentre[1] });
       const areas = (data && data.areas) || {};
       deep._marketCtx = {
         factor: Number(areas.build_cost_index?.factor) || null,
         factorRegion: areas.build_cost_index?.region || null,
         income: Number((areas.msoa_income || areas.lad_income || {}).income_median) || null,
+        landValueHa: Number(areas.land_value?.resi_gbp_ha) || null,
       };
     } catch (_) { deep._marketCtx = null; }
     if (!document.getElementById("dd-viability-summary")) return;
@@ -6995,6 +7020,7 @@ async function renderDeepDiveViability() {
     units, ppm2: deep.ppm2 || null, region: deep.stationRegion || null,
     areaHa: Number(r.developable_ha) || null,
     locationFactor: (mc && mc.factor) || null,
+    landValueHa: (mc && mc.landValueHa) || null,
   }, SIFT.assumptions, { noSens: true });
   if (ap.profitOnCost == null) {
     el.innerHTML = `<p class="hint">No dwelling capacity to appraise yet.</p>`;
@@ -7012,7 +7038,7 @@ async function renderDeepDiveViability() {
       <div class="dd-pl-row"><span>total cost incl. finance</span><span>${money(ap.totalCost)}</span></div>
       <div class="dd-pl-row"><span>residual land value</span><span>${money(ap.residualLandValue)}</span></div>
       <div class="dd-pl-row"><span>RLV ÷ benchmark land</span><span>${ap.rlvVsBlv == null ? "n/a" : ap.rlvVsBlv.toFixed(2) + "×"}</span></div>
-      <div class="dd-pl-row"><span>land localisation</span><span>${ap.landScale == null ? "—" : "×" + ap.landScale.toFixed(2) + " (value-linked)"}</span></div>
+      <div class="dd-pl-row"><span>land basis</span><span>${ap.landBasisUsed === "mhclg" ? "MHCLG £/ha (published)" : ap.landScale == null ? "—" : "×" + ap.landScale.toFixed(2) + " (value-linked)"}</span></div>
       <div class="dd-pl-row"><span>peak debt</span><span>${money(ap.peakDebt)}</span></div>
       <div class="dd-pl-row"><span>sales value basis</span><span>${ap.local ? `local £${Math.round((deep.ppm2 || 0)).toLocaleString()}/m²` : "regional fallback"}</span></div>
       <div class="dd-pl-row"><span>build cost index</span><span>${mc && mc.factor ? mc.factor.toFixed(2) + "× (" + (mc.factorRegion || "local") + ")" : "1.00× (national)"}</span></div>
@@ -7081,6 +7107,7 @@ function renderAssemblySummary(notice) {
   const ap = computeAppraisal({
     units, ppm2: deep.ppm2 || null, region: null, areaHa: totHa,
     locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
+    landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
   }, SIFT.assumptions, { noSens: true });
   const rows = plots.map(p => `
     <div class="dd-pl-row"><span>Plot ${p.properties.plot + 1} · ${(p.properties.area_ha || 0).toFixed(2)} ha</span>
@@ -7906,7 +7933,8 @@ function viabFieldHTML(f, a) {
       `<button class="info" type="button" tabindex="0">i<span class="tip" role="tooltip">${escapeSift(f.tip)}<span class="tip-source">Source: ${escapeSift(f.source)}</span></span></button></span>` +
       `<select data-viab="${f.key}">` +
       f.choices.map(c => `<option value="${c}"${val === c ? " selected" : ""}>` +
-        (c === "perUnit" ? "£/unit benchmark" : "EUV + premium") + `</option>`).join("") +
+        ({ mhclg: "MHCLG £/ha (published)", perUnit: "£/unit benchmark",
+           euvPlus: "EUV + premium" }[c] || c) + `</option>`).join("") +
       `</select></label>`;
   }
   return `<label class="sift-field viab-field"><span>${f.label} <em class="viab-unit">${f.unit}</em>` +
@@ -7941,7 +7969,7 @@ function viabPreviewHTML(r, label) {
     `<div class="viab-kpi"><b>${pct(r.profitOnGdv)}</b><span>profit on GDV</span></div>` +
     `<div class="viab-kpi"><b>${money(r.residualLandValue)}</b><span>residual land value</span></div>` +
     `<div class="viab-kpi"><b>${r.rlvVsBlv == null ? "n/a" : r.rlvVsBlv.toFixed(2) + "×"}</b><span>RLV ÷ benchmark land</span></div>` +
-    `<div class="viab-kpi"><b>${r.landScale == null ? "—" : "×" + r.landScale.toFixed(2)}</b><span>land localisation</span></div>` +
+    `<div class="viab-kpi"><b>${r.landBasisUsed === "mhclg" ? "MHCLG" : r.landScale == null ? "—" : "×" + r.landScale.toFixed(2)}</b><span>${r.landBasisUsed === "mhclg" ? "land basis (published £/ha)" : "land localisation"}</span></div>` +
     `<div class="viab-kpi"><b>${r.irr == null ? "n/a" : pct(r.irr)}</b><span>IRR (equity)</span></div>` +
     `<div class="viab-kpi"><b>${money(r.peakDebt)}</b><span>peak debt</span></div>` +
     `<div class="viab-kpi"><b>${money(r.gdv)}</b><span>GDV</span></div>` +
@@ -7956,7 +7984,8 @@ function refreshViabPreview() {
   if (!host || !_viabCtx) return;
   const r = computeAppraisal(
     { units: _viabCtx.units, ppm2: _viabCtx.ppm2, region: _viabCtx.region,
-      areaHa: _viabCtx.areaHa, locationFactor: _viabCtx.locationFactor },
+      areaHa: _viabCtx.areaHa, locationFactor: _viabCtx.locationFactor,
+      landValueHa: _viabCtx.landValueHa },
     SIFT.assumptions);
   host.innerHTML = viabPreviewHTML(r, _viabCtx.label);
 }
@@ -8149,6 +8178,7 @@ async function _generateSiteReport() {
     const appraisal = computeAppraisal({
       units, ppm2: deep.ppm2 || null, region: null, areaHa: totHa,
       locationFactor: mc.factor || null,
+      landValueHa: mc.landValueHa || null,
     }, SIFT.assumptions);
 
     const site = {
@@ -9388,6 +9418,7 @@ function buildDeepDivePanel(meta) {
       region: null,
       areaHa: r ? Number(r.developable_ha) : null,
       locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
+      landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
       onChange: () => { renderDeepDiveViability(); if (SIFT.loaded) scoreSiftRows(); },
     });
   });
@@ -11157,8 +11188,8 @@ function regionCostFactor(region) {
 const VIAB_SCHEMA = [
   // Land
   { key: "landBasis", group: "land", label: "Land value basis", unit: "choice",
-    choices: ["perUnit", "euvPlus"], default: "perUnit",
-    tip: "Benchmark land value per unit, or existing use value plus a premium (the Planning Practice Guidance EUV+ approach).", source: "PPG viability guidance" },
+    choices: ["mhclg", "perUnit", "euvPlus"], default: "mhclg",
+    tip: "MHCLG £/ha: the published 'land value estimates for policy appraisal' figure for the authority (residential £/ha × site hectares) — the best free benchmark, used wherever the data covers the site; falls back to the localised £/unit benchmark elsewhere (including the sifter, which appraises 2,400 stations without per-site lookups). £/unit and EUV+ (the PPG approach) remain as manual bases.", source: "MHCLG land value estimates (OGL) / PPG viability guidance" },
   { key: "blvPerUnit", group: "land", label: "Benchmark land value", unit: "£k/unit", step: 1, default: 20,
     tip: "Land cost per plot when basis is per-unit.", source: "assumption" },
   { key: "euvPerHa", group: "land", label: "Existing use value", unit: "£k/ha", step: 5, default: 25,
@@ -11360,9 +11391,18 @@ function computeAppraisal(inputs, a, opts) {
   const policyScale = 1 + (valueRatio - 1) * ((a.policyLocalisePct ?? 100) / 100);
   const policyCosts = units * (((a.cilPerUnit || 0) + (a.s106PerUnit || 0)) * policyScale
                               + (a.bngPerUnit || 0)) * 1000;
-  const land = (a.landBasis === "euvPlus" && inputs.areaHa > 0
-    ? inputs.areaHa * (a.euvPerHa || 0) * 1000 * (1 + (a.euvPremiumPct || 0) / 100)
-    : units * (a.blvPerUnit || 0) * 1000) * landScale;
+  // Land, best evidence first: the published MHCLG per-hectare benchmark for
+  // the authority when the caller holds it (deep dive / assembler / report —
+  // already local, so the value-ratio scaling must NOT stack on top), else
+  // EUV+ or the £/unit benchmark, both localised by the value ratio.
+  const mhclgLand = a.landBasis === "mhclg" && inputs.landValueHa > 0 && inputs.areaHa > 0
+    ? inputs.areaHa * inputs.landValueHa : null;
+  const land = mhclgLand != null ? mhclgLand
+    : (a.landBasis === "euvPlus" && inputs.areaHa > 0
+      ? inputs.areaHa * (a.euvPerHa || 0) * 1000 * (1 + (a.euvPremiumPct || 0) / 100)
+      : units * (a.blvPerUnit || 0) * 1000) * landScale;
+  const landBasisUsed = mhclgLand != null ? "mhclg"
+    : a.landBasis === "euvPlus" && inputs.areaHa > 0 ? "euvPlus" : "perUnit";
   const salesCosts = gdv * ((a.salesCostPct || 0) / 100);
 
   // --- Cashflow, finance, IRR ----------------------------------------------
@@ -11474,7 +11514,8 @@ function computeAppraisal(inputs, a, opts) {
   return {
     profitOnCost: poc, profitOnGdv: pog, rag, score,
     price: Math.round(price), local: localPsf != null,
-    gdv, totalCost, profit, residualLandValue, rlvVsBlv, valueRatio, landScale, irr, peakDebt,
+    gdv, totalCost, profit, residualLandValue, rlvVsBlv, valueRatio, irr, peakDebt,
+    landBasisUsed, landScale: landBasisUsed === "mhclg" ? null : landScale,
     cashflow: { out, inn, equityFlow, months, interest, financeFee },
     sensitivity,
     waterfall: [

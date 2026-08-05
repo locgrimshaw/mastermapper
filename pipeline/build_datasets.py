@@ -224,7 +224,7 @@ ALL_DATASETS = [
     "planit_rates", "bus_route",
     "ofcom_fibre", "census_students", "student_accom",
     "building_height",
-    "build_cost_index", "lad_income", "msoa_income",
+    "build_cost_index", "lad_income", "msoa_income", "land_value",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -1844,6 +1844,139 @@ def build_build_cost():
     return {key: rows}
 
 
+LAND_VALUE_DEFAULT_URL = (
+    "https://assets.publishing.service.gov.uk/media/"
+    "69b2d95f912f3f96bf687b1c/"
+    "Land_value_estimates_for_policy_appraisal_2023.xlsx")
+LAND_VALUE_ASOF = "2023"
+
+
+def build_land_value():
+    """MHCLG/VOA residential land value estimates on LAD polygons — land_value.
+
+    Source: 'Land value estimates for policy appraisal' (MHCLG, valuations by
+    the VOA; OGL) — the value per hectare of a TYPICAL residential site in
+    each English local authority. This is the published benchmark the
+    viability engine's land line uses in place of the value-ratio proxy where
+    available. MHCLG's own caveat travels with the data: these are policy
+    appraisal estimates, not market valuations of any specific site.
+
+    The workbook layout isn't guaranteed across releases, so parsing is a
+    tolerant grid scan rather than fixed cell references: find a header cell
+    containing 'resid', read that column downwards, and take the value for
+    any row that also carries an ONS area code. LAND_VALUE_SRC (URL or path,
+    xlsx or csv) overrides the default download; the parse aborts loudly —
+    never silently — if it recognises fewer than 100 authorities or the
+    median is implausible."""
+    key = "land_value"
+    bpath, bhow = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries to join land values onto")
+        _note(key, "no LAD boundaries")
+        return {}
+    fpath, fhow = _resolve_source(key, ["LAND_VALUE_SRC"],
+                                  LAND_VALUE_DEFAULT_URL,
+                                  "land-value-estimates.xlsx")
+    if fpath is None:
+        _warn(key, f"land value source unavailable ({fhow})")
+        _note(key, "no source")
+        return {}
+    print(f"  [{key}] reading {fpath.name} ({fhow}) ...")
+
+    code_re = re.compile(r"^[EWS]\d{8}$")
+
+    def _money(v):
+        try:
+            x = float(str(v).replace("£", "").replace(",", "").strip())
+        except (TypeError, ValueError):
+            return None
+        # £/ha for English residential land spans roughly £150k (rural NE)
+        # to ~£200M (central London); anything outside is a parse artefact.
+        return x if 50_000 <= x <= 1_000_000_000 else None
+
+    import pandas as pd
+    if fpath.suffix.lower() in (".xlsx", ".xlsm", ".xls"):
+        grids = pd.read_excel(fpath, sheet_name=None, header=None)
+    else:
+        grids = {"csv": pd.read_csv(fpath, header=None, dtype=str,
+                                    encoding="utf-8-sig",
+                                    on_bad_lines="skip")}
+
+    values = {}
+    for _sname, g in grids.items():
+        nrow, ncol = g.shape
+        headers = [(rr, cc) for rr in range(min(nrow, 40))
+                   for cc in range(ncol)
+                   if "resid" in str(g.iat[rr, cc]).lower()]
+        for hr, hc in headers:
+            got = {}
+            for rr in range(hr + 1, nrow):
+                row = g.iloc[rr]
+                code = next((str(x).strip() for x in row
+                             if code_re.match(str(x).strip())), None)
+                if not code:
+                    continue
+                val = _money(g.iat[rr, hc])
+                if val is not None:
+                    got[code] = val
+            if len(got) > len(values):
+                values = got
+
+    if len(values) < 100:
+        _warn(key, f"only {len(values)} authorities parsed from {fpath.name} "
+                   "— has the workbook layout changed? Set LAND_VALUE_SRC to "
+                   "a CSV with an ONS code column and a 'Residential ...' "
+                   "value column")
+        _note(key, "unrecognised source format")
+        return {}
+    med = sorted(values.values())[len(values) // 2]
+    if not (100_000 <= med <= 100_000_000):
+        _warn(key, f"median parsed value £{med:,.0f}/ha is implausible — "
+                   "refusing to load")
+        _note(key, "implausible values")
+        return {}
+
+    gdf = gpd.read_file(bpath)
+    code_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*cd", str(c).lower()):
+            code_col = c
+            break
+    code_col = code_col or _find_col(gdf, ["lad_code", "code", "areacd"],
+                                     contains=True)
+    name_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*nm", str(c).lower()):
+            name_col = c
+            break
+    if code_col is None:
+        _warn(key, "no LAD code column in the boundary file")
+        _note(key, "no boundary code column")
+        return {}
+    # England-only publication: emit only matched authorities, so Wales and
+    # Scotland render as absence-of-data rather than a misleading zero.
+    total = len(gdf)
+    gdf = gdf[gdf[code_col].astype(str).str.strip().isin(values.keys())]
+    print(f"  [{key}] {len(values)} authorities parsed (median "
+          f"£{med:,.0f}/ha); {len(gdf)} of {total} boundaries matched")
+
+    def lv_props(f):
+        code = str(_cell(f, code_col) or "").strip()
+        return {"lad_code": code,
+                "resi_gbp_ha": round(values[code]),
+                "asof": LAND_VALUE_ASOF,
+                "src": "MHCLG/VOA land value estimates for policy appraisal "
+                       "(OGL) — appraisal benchmarks, not site valuations"}
+
+    rows = _emit(gdf, key, name_col=name_col, id_col=code_col, want="polygon",
+                 props_fn=lv_props)
+    _note(key, f"{fhow}; {len(values)} authorities, median £{med:,.0f}/ha",
+          len(rows))
+    return {key: rows}
+
+
 def build_income():
     """Household earnings on LAD polygons — dataset lad_income.
 
@@ -2435,6 +2568,7 @@ GROUPS = (
         (["build_cost_index"], build_build_cost, []),
         (["lad_income"], build_income, []),
         (["msoa_income"], build_msoa_income, []),
+        (["land_value"], build_land_value, []),
     ]
 )
 

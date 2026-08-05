@@ -274,6 +274,9 @@ jobs:
           # default to ONS Open Geography.
           MSOA_INCOME_SRC: ${{ vars.MSOA_INCOME_SRC }}
           MSOA_BOUNDARIES_SRC: ${{ vars.MSOA_BOUNDARIES_SRC }}
+          # MHCLG land value estimates for policy appraisal (resi £/ha by LA).
+          # Optional override — the builder defaults to the 2023 gov.uk asset.
+          LAND_VALUE_SRC: ${{ vars.LAND_VALUE_SRC }}
         run: |
           echo "Building supabase/datasets_import.csv (DATASETS='${DATASETS}')"
           python pipeline/build_datasets.py
