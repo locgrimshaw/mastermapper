@@ -205,40 +205,58 @@ def epc_floor_areas(sales):
         dest.unlink(missing_ok=True)
         return {}
     with zf_test as zf:
+        # Member layout varies by service era: the retired service shipped one
+        # <la>-certificates.csv per authority; the replacement ships a single
+        # full-load CSV under a name of its own choosing. Take every CSV that
+        # is not a recommendations file, and say what was found — the
+        # 2026-08-11 run scanned 0 files silently because it pattern-matched
+        # the old era's names against the new archive.
         members = [m for m in zf.namelist()
-                   if m.lower().endswith("certificates.csv")]
-        print(f"[epc] scanning {len(members)} authority files ...")
-        # Header casing varies by vintage: the retired service's zips used
-        # UPPER_SNAKE; the replacement service's exports may use camelCase or
-        # kebab-case. Try each spelling rather than assuming one era's file.
-        def _col(row, *names):
-            for n in names:
-                v = row.get(n)
-                if v is not None:
-                    return v
-            return None
+                   if m.lower().endswith(".csv")
+                   and "recommendation" not in m.lower()]
+        if not members:
+            print("[epc] WARNING: no certificate CSVs in the archive — "
+                  f"members: {zf.namelist()[:10]}; continuing without "
+                  "floor areas")
+            return {}
+        print(f"[epc] scanning {len(members)} certificate file(s): "
+              f"{members[:5]}")
+        # Column names also vary by era (UPPER_SNAKE vs camelCase vs kebab):
+        # resolve them per file by normalised name instead of exact spelling.
+        def _normh(h):
+            return re.sub(r"[^a-z0-9]", "", (h or "").lower())
         for m in members:
             with zf.open(m) as fh:
-                for row in csv.DictReader(
-                        io.TextIOWrapper(fh, "utf-8", errors="ignore")):
+                rdr = csv.DictReader(
+                    io.TextIOWrapper(fh, "utf-8", errors="ignore"))
+                cols = {_normh(h): h for h in (rdr.fieldnames or [])}
+                if m == members[0]:
+                    print(f"[epc]   {m}: {len(cols)} columns, "
+                          f"e.g. {list(cols.values())[:10]}")
+                c_pc = cols.get("postcode")
+                c_area = cols.get("totalfloorarea")
+                c_lodge = (cols.get("lodgementdate")
+                           or cols.get("lodgementdatetime"))
+                c_a1 = cols.get("address1")
+                c_a2 = cols.get("address2")
+                if not (c_pc and c_area and c_a1):
+                    print(f"[epc] WARNING: {m} lacks postcode/floor-area/"
+                          "address columns — skipped")
+                    continue
+                for row in rdr:
                     scanned += 1
-                    pc = (_col(row, "POSTCODE", "postcode")
-                          or "").replace(" ", "").upper()
+                    pc = (row.get(c_pc) or "").replace(" ", "").upper()
                     if pc not in pcs_needed:
                         continue
                     try:
-                        area = float(_col(row, "TOTAL_FLOOR_AREA",
-                                          "totalFloorArea",
-                                          "total-floor-area") or 0)
+                        area = float(row.get(c_area) or 0)
                     except ValueError:
                         continue
                     if not 15 <= area <= 600:
                         continue
-                    lodged = (_col(row, "LODGEMENT_DATE", "lodgementDate",
-                                   "lodgement-date", "LODGEMENT_DATETIME")
-                              or "")[:10]
-                    a1 = _col(row, "ADDRESS1", "address1") or ""
-                    a2 = _col(row, "ADDRESS2", "address2") or ""
+                    lodged = ((row.get(c_lodge) if c_lodge else "") or "")[:10]
+                    a1 = row.get(c_a1) or ""
+                    a2 = (row.get(c_a2) if c_a2 else "") or ""
                     for k in {_akey(a1), _akey(a1, a2)}:
                         if not k:
                             continue
