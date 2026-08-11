@@ -1806,6 +1806,18 @@ footer {
 .viab-sens-table td.vs-a { background: rgba(240,140,0,.25); }
 .viab-sens-table td.vs-r { background: rgba(201,42,42,.25); }
 @media (max-width: 900px) { .viab-body { grid-template-columns: 1fr; } .viab-fields { max-height: none; } }
+/* Full-calculation audit modal: one column of numbered steps, each row =
+   label · formula-with-numbers · result. */
+.va-sheet { max-width: 880px; }
+.va-body { display: block; overflow-y: auto; }
+.va-step { margin: 0 0 14px; }
+.va-h { font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); font-weight: 700; margin: 0 0 4px; }
+.va-row { display: grid; grid-template-columns: 160px 1fr auto; gap: 10px; align-items: baseline; padding: 3px 0; border-bottom: 1px dashed var(--ink-line); font-size: 12px; }
+.va-l { color: var(--text); }
+.va-f { font-family: var(--font-data); font-size: 11px; color: var(--text-dim); word-break: break-word; }
+.va-r { font-family: var(--font-data); text-align: right; white-space: nowrap; }
+.va-note { font-size: 11px; color: var(--text-dim); margin: 5px 0 0; }
+@media (max-width: 700px) { .va-row { grid-template-columns: 1fr; gap: 2px; } .va-r { text-align: left; } }
 .compare-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .compare-table th { text-align: left; padding: 8px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); border-bottom: 1px solid var(--ink-line); }
 .compare-table th span { font-weight: 400; opacity: 0.7; }

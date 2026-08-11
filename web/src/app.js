@@ -8006,6 +8006,7 @@ function viabPreviewHTML(r, label) {
     `</div>` +
     `<div class="viab-wf">${wf}</div>` +
     `<div class="viab-sens-h">Sensitivity — profit on cost, build cost × sales value</div>` + sens +
+    `<button type="button" class="ghost" id="viab-audit-btn" style="margin-top:6px">Full calculation — every step with these numbers…</button>` +
     `<p class="hint" style="margin-top:6px">Model: sin² build S-curve, even sales absorption, equity-first funding, monthly interest capitalised on drawn debt, arrangement fee on peak. Every figure above reacts to the fields on the left.</p>`;
 }
 
@@ -8077,7 +8078,167 @@ function openViabilityModal(ctx) {
     if (ctx && ctx.onChange) ctx.onChange();
     persistSiftConfig();
   });
+  // Delegated: the preview's innerHTML is replaced on every keystroke, but the
+  // #viab-preview container survives, so one listener covers every re-render.
+  modal.querySelector("#viab-preview").addEventListener("click", e => {
+    if (e.target && e.target.id === "viab-audit-btn") openCalcAudit(ctx);
+  });
   refreshViabPreview();
+}
+
+// ---- Full-calculation audit modal ------------------------------------------
+// Every step of the residual appraisal with the actual numbers substituted,
+// so anyone can verify the arithmetic line by line — GDV, build, fees, policy,
+// land, finance, returns. Rendered from the engine's own `audit` trace (the
+// intermediates computeAppraisal actually passed through), never re-derived
+// here: the breakdown cannot drift from the calculation it explains.
+function openCalcAudit(ctx) {
+  const modal = document.getElementById("viab-modal");
+  if (!modal || !ctx) return;
+  const a = SIFT.assumptions;
+  const r = computeAppraisal(
+    { units: ctx.units, ppm2: ctx.ppm2, region: ctx.region, areaHa: ctx.areaHa,
+      locationFactor: ctx.locationFactor, landValueHa: ctx.landValueHa },
+    a, { noSens: true });
+  if (!r || r.profitOnCost == null || !r.audit) {
+    alert("No dwelling capacity to appraise yet — turn on the developable-land tool first.");
+    return;
+  }
+  const t = r.audit;
+  const M = v => v == null ? "—"
+    : (Math.abs(v) >= 1e6 ? "£" + (v / 1e6).toFixed(2) + "M"
+                          : "£" + Math.round(v / 1000).toLocaleString() + "k");
+  const N = (v, d) => v == null ? "—"
+    : (+v).toLocaleString(undefined, { maximumFractionDigits: d ?? 2 });
+  const step = (h, rows, noteTxt) => `<div class="va-step"><div class="va-h">${h}</div>` +
+    rows.filter(Boolean).join("") +
+    (noteTxt ? `<p class="va-note">${noteTxt}</p>` : "") + `</div>`;
+  const row = (label, formula, result) =>
+    `<div class="va-row"><span class="va-l">${label}</span>` +
+    `<span class="va-f">${formula}</span><b class="va-r">${result}</b></div>`;
+  const ragCls = r.rag === "viable" ? "sg" : r.rag === "marginal" ? "sa" : "sr";
+  const target = a.profitTargetPct || 17.5;
+
+  const inputs = step("1 · Inputs", [
+    row("homes", `developable land priced at the active density regime`, N(t.units, 0)),
+    row("sales value basis", t.localPsf != null
+      ? `catchment £${N(ctx.ppm2, 0)}/m² (Land Registry × EPC) ÷ 10.764`
+      : `no local £/m² — national fallback £${N(a.salesPsf, 0)}/ft² × regional multiplier`,
+      t.localPsf != null ? "£" + N(t.localPsf) + "/ft²" : "£" + N(t.price) + "/ft²"),
+    row("unit size", `assumption`, N(t.unitFt2, 0) + " ft² (" + N(t.unitM2, 1) + " m²)"),
+    ctx.areaHa ? row("site area", `developable hectares`, N(ctx.areaHa) + " ha") : "",
+    row("build cost index", ctx.locationFactor
+      ? `local factor from the build-cost layer` : `national baseline`,
+      "×" + N(t.locFactor)),
+    ctx.landValueHa ? row("MHCLG land value", `published £/ha for this authority`,
+      M(ctx.landValueHa) + "/ha") : "",
+  ]);
+
+  const gdv = step("2 · GDV (gross development value)", [
+    row("achieved £/ft²", t.localPsf != null
+      ? `£${N(t.localPsf)}/ft² × ${N(a.salesAdjPct ?? 100, 0)}% sales adjustment`
+      : `£${N(a.salesPsf, 0)}/ft² fallback × regional multiplier`,
+      "£" + N(t.price) + "/ft²"),
+    row("affordable blend", `(1 − ${N(a.affordablePct || 0, 0)}%) + ${N(a.affordablePct || 0, 0)}% × ${N(a.affordableValue || 0, 0)}% of market value`,
+      "×" + N(t.blend, 3)),
+    row("sales inflation", `${N(a.salesInflationPct || 0, 1)}%/yr compounded to the sales midpoint (${N(t.midSaleYears, 1)} yrs)`,
+      "×" + N(t.infl, 3)),
+    row("GDV", `${N(t.units, 0)} homes × ${N(t.unitFt2, 0)} ft² × £${N(t.price)}/ft² × ${N(t.blend, 3)} × ${N(t.infl, 3)}`,
+      M(r.gdv)),
+  ]);
+
+  const build = step("3 · Construction", [
+    row("blended build rate", `£${N(a.buildPm2House, 0)}/m² houses × ${N((1 - t.flatFrac) * 100, 0)}% + £${N(a.buildPm2Flat, 0)}/m² flats × ${N(t.flatFrac * 100, 0)}%, × ${N(t.locFactor)} location index`,
+      "£" + N(t.pm2, 0) + "/m²"),
+    row("base build", `${N(t.units, 0)} homes × ${N(t.unitM2, 1)} m² × £${N(t.pm2, 0)}/m²`, M(t.buildBase)),
+    row("abnormals", `${N(a.abnormalsPct || 0, 1)}% of base build`, M(t.abnormals)),
+    row("site prep & infrastructure", `${N(t.units, 0)} homes × (£${N(a.sitePrepPerPlot || 0, 0)}k prep + £${N(a.infraPerPlot || 0, 0)}k infra)`, M(t.prepInfra)),
+    row("hard cost subtotal", `base + abnormals + prep/infra`, M(t.hardCost)),
+  ]);
+
+  const fees = step("4 · Fees & contingency", [
+    row("professional fees", `${N(a.profFeesPct || 0, 1)}% of hard cost`, M(t.fees)),
+    row("contingency", `${N(a.contingencyPct || 0, 1)}% of hard cost`, M(t.contingency)),
+  ]);
+
+  const policy = step("5 · Policy costs (CIL · S106 · BNG)", [
+    row("local value ratio", `achieved £${N(t.price)}/ft² ÷ £${N(t.refPsf, 0)}/ft² national reference (clamped 0.25–6)`,
+      "×" + N(t.valueRatio)),
+    row("policy localisation", `1 + (${N(t.valueRatio)} − 1) × ${N(a.policyLocalisePct ?? 100, 0)}%`,
+      "×" + N(t.policyScale)),
+    row("CIL + S106 + BNG", `${N(t.units, 0)} homes × ((£${N(a.cilPerUnit || 0, 0)}k CIL + £${N(a.s106PerUnit || 0, 0)}k S106) × ${N(t.policyScale)} + £${N(a.bngPerUnit || 0, 0)}k BNG)`,
+      M(t.policyCosts)),
+  ], "CIL and S106 track local sales values — a flat national £/unit would understate them in high-value areas. BNG is priced nationally (habitat units trade in a national market).");
+
+  const sales = step("6 · Sales & marketing", [
+    row("sales costs", `${N(a.salesCostPct || 0, 1)}% of GDV`, M(t.salesCosts)),
+  ]);
+
+  const landRows = [];
+  if (t.mhclgLand != null) {
+    landRows.push(row("land", `${N(ctx.areaHa)} ha × ${M(ctx.landValueHa)}/ha — MHCLG published benchmark for this authority (no further scaling: already local)`,
+      M(t.land)));
+  } else if (r.landBasisUsed === "euvPlus") {
+    landRows.push(row("land (EUV+)", `${N(ctx.areaHa)} ha × £${N(a.euvPerHa || 0, 0)}k/ha × (1 + ${N(a.euvPremiumPct || 0, 0)}% premium) × ${N(r.landScale)} value-link`,
+      M(t.land)));
+  } else {
+    landRows.push(row("land (£/unit)", `${N(t.units, 0)} homes × £${N(a.blvPerUnit || 0, 0)}k/unit × ${N(r.landScale)} value-link`,
+      M(t.land)));
+  }
+  const land = step("7 · Land", landRows,
+    t.mhclgLand == null ? "Value-link = 1 + (local value ratio − 1) × land localisation %. MHCLG published £/ha is used automatically where the authority is covered." : "");
+
+  const fin = step("8 · Finance (from the monthly cashflow)", [
+    row("programme", `${N(t.preCon, 0)}m pre-construction + ${N(t.build, 0)}m build + ${N(t.sell, 0)}m sales (${N(t.overlap, 0)}m overlap)`,
+      N(t.months, 0) + " months"),
+    row("equity cap", `total spend × (1 − ${N(a.ltcPct ?? 85, 0)}% loan-to-cost) — equity drawn first`, M(t.equityCap)),
+    row("interest", `${N(a.debtRatePct || 0, 1)}%/yr ÷ 12, capitalised monthly on the drawn debt balance`, M(t.interest)),
+    row("peak debt", `highest drawn balance across the programme`, M(r.peakDebt)),
+    row("arrangement fee", `${N(a.arrangementFeePct || 0, 1)}% × peak debt`, M(t.financeFee)),
+  ], "Cashflow model: land at month 0, half of fees across pre-construction, CIL/S106/BNG at start on site, build spend on a sin² S-curve (slow start, peak mid-programme), sales received evenly across the sales period, receipts repay debt first.");
+
+  const totals = step("9 · Totals & returns", [
+    row("total cost", `build ${M(t.buildBase)} + abnormals ${M(t.abnormals)} + prep/infra ${M(t.prepInfra)} + fees ${M(t.fees)} + contingency ${M(t.contingency)} + policy ${M(t.policyCosts)} + sales ${M(t.salesCosts)} + land ${M(t.land)} + finance ${M(t.interest + t.financeFee)}`,
+      M(r.totalCost)),
+    row("profit", `GDV ${M(r.gdv)} − total cost ${M(r.totalCost)}`, M(r.profit)),
+    row("profit on cost", `${M(r.profit)} ÷ ${M(r.totalCost)}`,
+      r.profitOnCost.toFixed(1) + "%"),
+    row("profit on GDV", `${M(r.profit)} ÷ ${M(r.gdv)}`,
+      r.profitOnGdv == null ? "n/a" : r.profitOnGdv.toFixed(1) + "%"),
+    row("verdict", `viable ≥ ${N(target, 1)}% on cost · marginal ≥ ${N(target / 2, 1)}% · else unviable`,
+      `<span class="viab-rag ${ragCls}">${r.rag}</span>`),
+  ]);
+
+  const rlv = step("10 · Residual land value & benchmark test", [
+    row("residual land value", `GDV ${M(r.gdv)} − non-land costs ${M(t.nonLand)} − target profit (${N(a.profitTargetGdvPct || 15, 0)}% of GDV = ${M(r.gdv * ((a.profitTargetGdvPct || 15) / 100))})`,
+      M(r.residualLandValue)),
+    row("RLV ÷ benchmark land", `${M(r.residualLandValue)} ÷ ${M(t.land)}`,
+      r.rlvVsBlv == null ? "n/a" : r.rlvVsBlv.toFixed(2) + "×"),
+    r.irr != null ? row("IRR (equity)", `annualised return that zeroes the monthly equity cashflow (bisection)`,
+      r.irr.toFixed(1) + "%") : row("IRR (equity)", `cashflow degenerate (no equity draw or no positive receipts)`, "n/a"),
+  ], "≥1× means the scheme can pay the benchmark land price and still hit the target margin — the standard viability test. A negative RLV means the scheme cannot cover its own costs even with free land.");
+
+  modal.innerHTML = `
+    <div class="compare-backdrop"></div>
+    <div class="compare-sheet va-sheet">
+      <div class="compare-head">
+        <strong>Full calculation — ${escapeSift(ctx.label || "scheme")}</strong>
+        <span class="hint" style="margin-left:8px">every step, actual numbers — the exact arithmetic behind the headline figures</span>
+        <div class="compare-head-actions">
+          <button type="button" class="ghost" id="va-open-vars">Viability variables…</button>
+          <button type="button" class="compare-close" aria-label="Close">×</button>
+        </div>
+      </div>
+      <div class="compare-body va-body">
+        ${inputs}${gdv}${build}${fees}${policy}${sales}${land}${fin}${totals}${rlv}
+        <p class="va-note" style="margin-top:10px">Stated simplifications: sin² build S-curve; even sales absorption; equity before debt; monthly interest capitalised; arrangement fee on pre-fee peak debt (rounding-level circularity). Every assumption above is editable in Viability variables — this breakdown always reflects the current set.</p>
+      </div>
+    </div>`;
+  modal.hidden = false;
+  const close = () => { modal.hidden = true; modal.innerHTML = ""; };
+  modal.querySelector(".compare-close").addEventListener("click", close);
+  modal.querySelector(".compare-backdrop").addEventListener("click", close);
+  modal.querySelector("#va-open-vars").addEventListener("click", () => openViabilityModal(ctx));
 }
 
 function wireCompareModal(modal) {
@@ -9265,6 +9426,7 @@ function buildDeepDivePanel(meta) {
         <div class="dd-block-content">
           <div id="dd-viability-summary"><p class="hint">Turn on the developable-land tool above — the appraisal prices its dwelling capacity.</p></div>
           <button type="button" class="ghost" id="dd-viab-vars">Viability variables…</button>
+          <button type="button" class="ghost" id="dd-viab-calc">Full calculation…</button>
         </div>
       </section>
       <section class="dd-block" data-section="assembly">
@@ -9437,11 +9599,12 @@ function buildDeepDivePanel(meta) {
     }
     setAssembleMode(!deep.assembly.active);
   });
-  const dv = panel.querySelector("#dd-viab-vars");
-  if (dv) dv.addEventListener("click", () => {
+  // One context builder for both viability buttons — variables and the full
+  // calculation audit must describe the same scheme or the audit lies.
+  const ddViabCtx = () => {
     const r = deep.developableResult;
     const regime = activeDevelopableRegime();
-    openViabilityModal({
+    return {
       label: (meta.station && (meta.station.name || meta.station.crs)) || "This catchment",
       units: r ? homesFor(Number(r.developable_ha) || 0, Number(r.inner_ha) || 0, regime) : 0,
       ppm2: deep.ppm2 || null,
@@ -9450,8 +9613,12 @@ function buildDeepDivePanel(meta) {
       locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
       landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
       onChange: () => { renderDeepDiveViability(); if (SIFT.loaded) scoreSiftRows(); },
-    });
-  });
+    };
+  };
+  const dv = panel.querySelector("#dd-viab-vars");
+  if (dv) dv.addEventListener("click", () => openViabilityModal(ddViabCtx()));
+  const dc = panel.querySelector("#dd-viab-calc");
+  if (dc) dc.addEventListener("click", () => openCalcAudit(ddViabCtx()));
 
   // Fill the deprivation headline, breakdown bars and plain-English summary.
   renderDeprivationScore();
@@ -11548,6 +11715,17 @@ function computeAppraisal(inputs, a, opts) {
     landBasisUsed, landScale: landBasisUsed === "mhclg" ? null : landScale,
     cashflow: { out, inn, equityFlow, months, interest, financeFee },
     sensitivity,
+    // Every intermediate the arithmetic passed through, for the "Full
+    // calculation" audit modal — rendered from THIS trace, never re-derived,
+    // so the breakdown a client checks is the arithmetic that actually ran.
+    audit: {
+      units, unitFt2, unitM2, localPsf, price, blend, midSaleYears, infl,
+      flatFrac, pm2, locFactor: inputs.locationFactor || a.costIndexFactor || 1,
+      buildBase, abnormals, prepInfra, hardCost, fees, contingency,
+      refPsf, valueRatio, policyScale, policyCosts, salesCosts,
+      mhclgLand, land, preCon, build, sell, overlap, months,
+      equityCap, interest, financeFee, nonLand,
+    },
     waterfall: [
       ["GDV", gdv], ["Build", -buildBase], ["Abnormals", -abnormals],
       ["Site prep & infra", -prepInfra], ["Fees", -fees],
