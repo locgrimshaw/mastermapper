@@ -8115,7 +8115,33 @@ function openCalcAudit(ctx) {
     alert("No dwelling capacity to appraise yet — turn on the developable-land tool first.");
     return;
   }
-  const t = r.audit;
+  modal.innerHTML = `
+    <div class="compare-backdrop"></div>
+    <div class="compare-sheet va-sheet">
+      <div class="compare-head">
+        <strong>Full calculation — ${escapeSift(ctx.label || "scheme")}</strong>
+        <span class="hint" style="margin-left:8px">every step, actual numbers — the exact arithmetic behind the headline figures</span>
+        <div class="compare-head-actions">
+          <button type="button" class="ghost" id="va-open-vars">Viability variables…</button>
+          <button type="button" class="compare-close" aria-label="Close">×</button>
+        </div>
+      </div>
+      <div class="compare-body va-body">${calcAuditHTML(ctx, a, r)}</div>
+    </div>`;
+  modal.hidden = false;
+  const close = () => { modal.hidden = true; modal.innerHTML = ""; };
+  modal.querySelector(".compare-close").addEventListener("click", close);
+  modal.querySelector(".compare-backdrop").addEventListener("click", close);
+  modal.querySelector("#va-open-vars").addEventListener("click", () => openViabilityModal(ctx));
+}
+
+// Shared builder for the ten audit sections (.va-* classes — styled by
+// styles.css in the modal, and by SITE_REPORT_CSS in the assembler's printed
+// site report, which embeds the same breakdown so the client-facing document
+// carries the identical line-by-line arithmetic).
+function calcAuditHTML(ctx, a, r) {
+  const t = r && r.audit;
+  if (!t) return "";
   const M = v => v == null ? "—"
     : (Math.abs(v) >= 1e6 ? "£" + (v / 1e6).toFixed(2) + "M"
                           : "£" + Math.round(v / 1000).toLocaleString() + "k");
@@ -8127,7 +8153,6 @@ function openCalcAudit(ctx) {
   const row = (label, formula, result) =>
     `<div class="va-row"><span class="va-l">${label}</span>` +
     `<span class="va-f">${formula}</span><b class="va-r">${result}</b></div>`;
-  const ragCls = r.rag === "viable" ? "sg" : r.rag === "marginal" ? "sa" : "sr";
   const target = a.profitTargetPct || 17.5;
 
   const inputs = step("1 · Inputs", [
@@ -8217,7 +8242,7 @@ function openCalcAudit(ctx) {
     row("profit on GDV", `${M(r.profit)} ÷ ${M(r.gdv)}`,
       r.profitOnGdv == null ? "n/a" : r.profitOnGdv.toFixed(1) + "%"),
     row("verdict", `viable ≥ ${N(target, 1)}% on cost · marginal ≥ ${N(target / 2, 1)}% · else unviable`,
-      `<span class="viab-rag ${ragCls}">${r.rag}</span>`),
+      `<span class="va-rag ${r.rag}">${r.rag}</span>`),
   ]);
 
   const rlv = step("10 · Residual land value & benchmark test", [
@@ -8229,27 +8254,8 @@ function openCalcAudit(ctx) {
       r.irr.toFixed(1) + "%") : row("IRR (equity)", `cashflow degenerate (no equity draw or no positive receipts)`, "n/a"),
   ], "≥1× means the scheme can pay the benchmark land price and still hit the target margin — the standard viability test. A negative RLV means the scheme cannot cover its own costs even with free land.");
 
-  modal.innerHTML = `
-    <div class="compare-backdrop"></div>
-    <div class="compare-sheet va-sheet">
-      <div class="compare-head">
-        <strong>Full calculation — ${escapeSift(ctx.label || "scheme")}</strong>
-        <span class="hint" style="margin-left:8px">every step, actual numbers — the exact arithmetic behind the headline figures</span>
-        <div class="compare-head-actions">
-          <button type="button" class="ghost" id="va-open-vars">Viability variables…</button>
-          <button type="button" class="compare-close" aria-label="Close">×</button>
-        </div>
-      </div>
-      <div class="compare-body va-body">
-        ${inputs}${gdv}${build}${fees}${policy}${sales}${land}${fin}${totals}${rlv}
-        <p class="va-note" style="margin-top:10px">Stated simplifications: sin² build S-curve; even sales absorption; equity before debt; monthly interest capitalised; arrangement fee on pre-fee peak debt (rounding-level circularity). Every assumption above is editable in Viability variables — this breakdown always reflects the current set.</p>
-      </div>
-    </div>`;
-  modal.hidden = false;
-  const close = () => { modal.hidden = true; modal.innerHTML = ""; };
-  modal.querySelector(".compare-close").addEventListener("click", close);
-  modal.querySelector(".compare-backdrop").addEventListener("click", close);
-  modal.querySelector("#va-open-vars").addEventListener("click", () => openViabilityModal(ctx));
+  return inputs + gdv + build + fees + policy + sales + land + fin + totals + rlv +
+    `<p class="va-note" style="margin-top:10px">Stated simplifications: sin² build S-curve; even sales absorption; equity before debt; monthly interest capitalised; arrangement fee on pre-fee peak debt (rounding-level circularity). Every assumption above is editable in Viability variables — this breakdown always reflects the current set.</p>`;
 }
 
 function wireCompareModal(modal) {
@@ -8433,6 +8439,16 @@ const SITE_REPORT_CSS = `
   .sr-note { font-size: 10px; color: #8a8574; margin-top: 4px; }
   .sr-rag { font-size: 10px; padding: 2px 10px; border-radius: 9px; color: #fff; text-transform: uppercase; }
   .sr-rag.viable { background: #2f9e44; } .sr-rag.marginal { background: #f08c00; } .sr-rag.unviable { background: #c92a2a; }
+  /* Full-calculation audit (shared .va-* markup from calcAuditHTML), print
+     palette. Each step keeps to one page; rows are label · formula · result. */
+  .va-step { margin: 0 0 12px; page-break-inside: avoid; }
+  .va-h { font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; color: #6a6656; font-weight: 700; margin: 0 0 3px; }
+  .va-row { display: grid; grid-template-columns: 150px 1fr auto; gap: 10px; align-items: baseline; padding: 2.5px 0; border-bottom: 1px dotted #e4e0d4; font-size: 11px; }
+  .va-f { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px; color: #5a5648; word-break: break-word; }
+  .va-r { text-align: right; font-weight: 600; white-space: nowrap; }
+  .va-note { font-size: 10px; color: #8a8574; margin: 4px 0 0; }
+  .va-rag { font-size: 9px; padding: 1px 8px; border-radius: 8px; color: #fff; text-transform: uppercase; }
+  .va-rag.viable { background: #2f9e44; } .va-rag.marginal { background: #f08c00; } .va-rag.unviable { background: #c92a2a; }
 `;
 
 function buildSiteReportHTML(site) {
@@ -8626,6 +8642,14 @@ function buildSiteReportHTML(site) {
     <p style="font-size:12px;margin:8px 0 2px"><strong>Sensitivity — profit on cost, build cost × sales value</strong></p>
     ${sensTable}
     <p class="sr-note">Model: sin² build S-curve over ${SIFT.assumptions.buildMonths} months, even absorption over ${SIFT.assumptions.salesMonths} months, equity-first funding at ${SIFT.assumptions.ltcPct}% LTC, interest capitalised monthly.</p>
+  </section>
+
+  <section class="sr-sec"><h3>10a · Full calculation — every step, actual numbers ${confBadge("model")}</h3>
+    <p style="font-size:12px;margin:0 0 6px">The complete arithmetic behind the headline figures above, with this site's numbers substituted into each formula, so the appraisal can be verified line by line. Identical to the engine that produced section 10 — rendered from the calculation's own trace, not re-derived.</p>
+    ${calcAuditHTML({ units: site.units, ppm2: site.ppm2, areaHa: site.totHa,
+        locationFactor: (site.marketCtx && site.marketCtx.factor) || null,
+        landValueHa: (site.marketCtx && site.marketCtx.landValueHa) || null },
+      SIFT.assumptions, ap)}
   </section>
 
   <section class="sr-sec"><h3>11 · Assumptions appendix</h3>

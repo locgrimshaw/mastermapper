@@ -1817,6 +1817,8 @@ footer {
 .va-f { font-family: var(--font-data); font-size: 11px; color: var(--text-dim); word-break: break-word; }
 .va-r { font-family: var(--font-data); text-align: right; white-space: nowrap; }
 .va-note { font-size: 11px; color: var(--text-dim); margin: 5px 0 0; }
+.va-rag { font-size: 10px; padding: 2px 8px; border-radius: 9px; color: #fff; text-transform: uppercase; }
+.va-rag.viable { background: #2f9e44; } .va-rag.marginal { background: #f08c00; } .va-rag.unviable { background: #c92a2a; }
 @media (max-width: 700px) { .va-row { grid-template-columns: 1fr; gap: 2px; } .va-r { text-align: left; } }
 .compare-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .compare-table th { text-align: left; padding: 8px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); border-bottom: 1px solid var(--ink-line); }
