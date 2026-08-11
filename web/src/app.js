@@ -5236,6 +5236,7 @@ function runDeepDive(catchment, meta) {
   deep.area_km2 = null;
   deep.popPartial = false;
   deep.popFromDb = false;
+  deep.ppm2FromDb = false;
   deep.assessment = null;
   deep.counts = {};
   deep.station = meta.station || null;   // station meta for the station section
@@ -5323,8 +5324,17 @@ function computeCatchmentPopulation() {
   deep.households = res.households;
   deep.area_km2 = res.area_km2;
   deep.popPartial = res.partial;
-  deep.ppm2 = res.ppm2;
-  deep.medianPrice = res.medianPrice;
+  // The precomputed catchment £/m² from station_assessments (loaded async) is
+  // authoritative — it is THE number the sift priced this station with, so the
+  // dive must quote it too. The client-side area-weighted figure only fills in
+  // when no assessment value exists (non-station dives, missing price data):
+  // it depends on which LSOA price zones happen to be streamed into the
+  // viewport, and silently null here meant the appraisal fell back to the
+  // national £350/ft² while the sift used the real local value.
+  if (!deep.ppm2FromDb) {
+    deep.ppm2 = res.ppm2;
+    deep.medianPrice = res.medianPrice;
+  }
   renderCatchmentStats();
   // Any amenity counts already loaded now get a per-1,000 figure.
   refreshAmenityDensities();
@@ -5376,6 +5386,7 @@ function renderCatchmentStats() {
     valEl.title = deep.ppm2 == null
       ? "No local house-price data for this catchment"
       : `${ppm2Fmt(deep.ppm2)} — catchment-weighted HM Land Registry £/m²`
+        + (deep.ppm2FromDb ? " (precomputed — the same figure the sift uses)" : "")
         + (deep.medianPrice != null ? ` · ${priceFmt(deep.medianPrice)} median sale price` : "")
         + ". This is the local sales value the viability appraisal uses for GDV.";
   }
@@ -9645,7 +9656,7 @@ async function loadStationAssessment(crs) {
   if (!sb || !crs) return;
   try {
     const { data, error } = await sb.from("station_assessments")
-      .select("catchment_imd, catchment_pop, catchment_income, catchment_health, catchment_education, regen_score")
+      .select("catchment_imd, catchment_pop, catchment_income, catchment_health, catchment_education, regen_score, catchment_ppm2, catchment_median_price")
       .eq("crs", crs).single();
     if (error) throw error;
     if (!data) return;
@@ -9656,6 +9667,18 @@ async function loadStationAssessment(crs) {
       deep.population = Number(data.catchment_pop);
       deep.popFromDb = true;
       renderCatchmentStats();
+    }
+    // Sales value: the sift priced this station with catchment_ppm2, so the
+    // dive's appraisal MUST use the same number — the client-side estimate
+    // (viewport-dependent, often simply absent) was quietly nulling out and
+    // dropping every appraisal to the national £350/ft² fallback.
+    if (data.catchment_ppm2 != null) {
+      deep.ppm2 = Number(data.catchment_ppm2);
+      if (data.catchment_median_price != null)
+        deep.medianPrice = Number(data.catchment_median_price);
+      deep.ppm2FromDb = true;
+      renderCatchmentStats();
+      renderDeepDiveViability();
     }
     // Re-render the Need headline / breakdown now the DB fallback is available,
     // and the synthesis block — its triad + sentence read the same need value
