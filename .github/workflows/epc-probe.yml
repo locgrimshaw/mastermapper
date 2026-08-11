@@ -1,0 +1,42 @@
+name: EPC endpoint probe
+
+# Diagnostic only: shows exactly what the EPC bulk endpoint returns for our
+# credentials — HTTP status, redirect chain, content type and the first bytes
+# of the body (never the credentials). Used to debug the bulk download without
+# burning a full load-ppd cycle. Safe to run any time.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe bulk endpoints
+        env:
+          EPC_EMAIL: ${{ secrets.EPC_EMAIL }}
+          EPC_API_KEY: ${{ secrets.EPC_API_KEY }}
+        run: |
+          if [ -z "$EPC_EMAIL" ] || [ -z "$EPC_API_KEY" ]; then
+            echo "::error::EPC_EMAIL / EPC_API_KEY secrets not set"; exit 1
+          fi
+          AUTH=$(printf '%s:%s' "$EPC_EMAIL" "$EPC_API_KEY" | base64 -w0)
+          probe () {  # probe <label> <url> <extra curl args...>
+            local label="$1" url="$2"; shift 2
+            echo "===== $label — $url"
+            curl -sS -D /tmp/h -o /tmp/b --max-time 90 -r 0-2047 \
+              -H "Authorization: Basic $AUTH" "$@" "$url" || true
+            cat /tmp/h
+            echo "--- body: $(wc -c < /tmp/b) bytes (first 2KB requested); starts:"
+            head -c 300 /tmp/b | tr -d '\0' | sed 's/[^[:print:]]/./g'; echo; echo
+          }
+          probe "files path, no redirect follow" \
+            "https://epc.opendatacommunities.org/files/all-domestic-certificates.zip"
+          probe "files path, following redirects" \
+            "https://epc.opendatacommunities.org/files/all-domestic-certificates.zip" -L
+          probe "api listing" \
+            "https://epc.opendatacommunities.org/api/v1/files" -H "Accept: application/json"
