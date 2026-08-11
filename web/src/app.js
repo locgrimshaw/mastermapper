@@ -11814,13 +11814,13 @@ function computeViability(row) {
 // on viability; they will return when deliverability is rebuilt.
 function scoreSiftRows() {
   // Effective developable area/yield — two optional narrowings, applied in
-  // order, and every downstream number (step-3 filters, viability units,
+  // order, and every downstream number (step-2 filters, viability units,
   // table, CSV, totals) sees the result. Yield scales proportionally with
   // area since it's area × a flat density floor.
-  //   1. Largest plot only (step 3): base = the single largest contiguous
+  //   1. Largest plot only (step 2): base = the single largest contiguous
   //      plot, so a catchment of scattered slivers stops out-ranking one
   //      clean site. Null (not yet rebuilt) falls back to the total.
-  //   2. Green Belt exclusion (step 4): scale by the NON-Green-Belt share of
+  //   2. Green Belt exclusion (step 3): scale by the NON-Green-Belt share of
   //      the catchment's developable land. On a largest-plot base this is an
   //      approximation — the GB share of that specific plot isn't stored.
   const nogb = SIFT.crit.excludeGreenBelt;
@@ -11917,43 +11917,44 @@ async function loadSiftData() {
 // predicate. Survivors "up to" a step are the rows passing steps 0..step. The UI
 // shows only the current step's controls; the funnel count narrows step by step.
 const SIFT_STEPS = [
-  { key: "connectivity", title: "1 · Connectivity gate",
+  // Steps 1 (connectivity) and 2 (eligibility & tier) were merged 2026-08: the
+  // tier IS the connectivity story told once — Tier A/B are computed from the
+  // same in-settlement / well-connected facts the old step 1 tested, so two
+  // steps meant explaining the same concepts twice. The predicate is the AND
+  // of both old predicates: nothing passes or fails differently.
+  { key: "connectivity", title: "1 · Station gate — connectivity & tier",
     about: {
-      what: "The first filter. Only stations with a genuine turn-up-and-go service pass — unless the station sits inside a settlement, which the draft NPPF treats as a 'default yes' regardless of frequency.",
-      source: "Draft NPPF (2024 consultation), development around well-connected stations. The service test used is 'at least 4 services per hour overall, or 2 per hour in each direction' through the daytime; 'well-connected' additionally requires the station's Travel-to-Work Area to be economically significant.",
-      calc: "meets_frequency = sustained trains/trams ≥ 4 per hour (or ≥ 2 per hour per direction), from the GB rail timetable. well_connected = meets_frequency AND the station's TTWA is in the top 60 by GVA (ONS). With the in-settlement exemption on, these tests apply only to out-of-settlement stations." },
-    // NPPF gives in-settlement stations a "default yes" regardless of service
-    // frequency; exemptInSettlement (default on) mirrors that, so the frequency /
-    // well-connected requirements apply only to out-of-settlement stations. Turn
-    // it off to apply connectivity to every station (stricter than the NPPF).
+      what: "The entry gate. Every station is classed by the draft NPPF's two-tier test: Tier A — inside a settlement, where station-adjacent development is a 'default yes'; Tier B — outside a settlement but well-connected (a genuine turn-up-and-go service in an economically significant area), where the draft NPPF now permits Green Belt release; anything else is ineligible. The tier also sets the density floor used for dwelling capacity: 50 dph for well-connected stations, else 40 dph.",
+      source: "Draft NPPF (2024 consultation), development around well-connected stations. Service test: at least 4 services per hour overall, or 2 per hour in each direction, through the daytime; 'well-connected' additionally requires the station's Travel-to-Work Area to be economically significant (top 60 by GVA, ONS). Density floors: 40 dph baseline, 50 dph in the most accessible locations.",
+      calc: "meets_frequency = sustained trains/trams ≥ 4/hour (or ≥ 2/hour each direction), from the GB rail timetable. well_connected = meets_frequency AND top-60 TTWA. 'In settlement' is deliberately NOT a point-in-polygon test — a station often sits in the railway gap of a built-up-area polygon, which wrongly flagged dense urban stations (e.g. South Bermondsey) as out-of-settlement. Instead we measure the BUILT-UP FRACTION of the 800 m catchment (OS Open Built-Up Areas): in-settlement when ≥ 40% built-up, or ≥ 20% with built-up land within 100 m. Tier A = in-settlement; Tier B = out-of-settlement AND well-connected; else ineligible. Density floor = 50 dph if well-connected, else 40 dph." },
+    // The AND of the two former predicates. In-settlement stations are exempt
+    // from the service tests by default (the NPPF 'default yes'); the strict
+    // toggle applies them everywhere. The tier checkboxes then pick which
+    // classes go forward. Out-of-settlement stations kept via 'include
+    // ineligible' still face the frequency test.
     pred: (r, c) => {
       const exempt = c.exemptInSettlement && r.inSettlement;
-      if (exempt) return true;
-      if (c.requireFrequency && !r.meetsFrequency) return false;
-      if (c.requireWellConnected && !r.wellConnected) return false;
-      return true;
+      if (!exempt) {
+        if (c.requireFrequency && !r.meetsFrequency) return false;
+        if (c.requireWellConnected && !r.wellConnected) return false;
+      }
+      return (r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
+             (r.tier === "ineligible" && c.ineligible);
     } },
-  { key: "eligibility", title: "2 · Eligibility & tier",
-    about: {
-      what: "Assigns each station an NPPF tier and a density floor. Tier A = inside a settlement; Tier B = well-connected but outside a settlement (where the draft NPPF now permits Green Belt release); otherwise ineligible.",
-      source: "Draft NPPF two-tier approach to station-adjacent development. Density floors: 40 dwellings/hectare as a baseline minimum, 50 dph in the most accessible / well-connected locations.",
-      calc: "‘In settlement’ is deliberately NOT a point-in-polygon test — a station often sits in the railway gap of a built-up-area polygon, which wrongly flagged dense urban stations (e.g. South Bermondsey) as out-of-settlement. Instead we measure the BUILT-UP FRACTION of the 800 m catchment: the share of the 800 m circle covered by OS Open Built-Up Areas. A station is in-settlement when that fraction ≥ 40%, OR ≥ 20% with a built-up area within 100 m. Tier A = in-settlement; Tier B = out-of-settlement AND well-connected; else ineligible. Density floor = 50 dph if well-connected, else 40 dph." },
-    pred: (r, c) => (r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
-                    (r.tier === "ineligible" && c.ineligible) },
-  { key: "developable", title: "3 · Developable land",
+  { key: "developable", title: "2 · Developable land",
     about: {
       what: "The net land physically available for homes within an ~800 m (10-minute) walk of the station, and the dwelling capacity that implies.",
       source: "NPPF 'reasonable walking distance' of a station; the net-developable-area method (start from the catchment, erase undevelopable land) is standard practice in Housing & Economic Land Availability Assessments (HELAA).",
-      calc: "800 m circular catchment MINUS (PostGIS ST_Difference) built-up land, green space, transport corridors (roads + railway curtilage), flood zone 3 and hard environmental designations. dwelling_yield = net developable hectares × the density floor from step 2. 'Largest plot only' swaps the catchment total for the single largest contiguous plot (precomputed per station), screening out fragmented catchments; yield scales pro-rata." },
+      calc: "800 m circular catchment MINUS (PostGIS ST_Difference) built-up land, green space, transport corridors (roads + railway curtilage), flood zone 3 and hard environmental designations. dwelling_yield = net developable hectares × the density floor from step 1. 'Largest plot only' swaps the catchment total for the single largest contiguous plot (precomputed per station), screening out fragmented catchments; yield scales pro-rata." },
     pred: (r, c) => (r.effHa ?? r.developableHa) >= c.minDevHa &&
                     (r.effYield ?? r.yield) >= c.minYield },
-  { key: "protected", title: "4 · Protected land %",
+  { key: "protected", title: "3 · Protected land %",
     about: {
       what: "Of the land left after hard exclusions, how much sits under a SOFT heritage or landscape designation — one that doesn't stop development outright but adds planning friction, delay and cost.",
-      source: "NPPF Chapter 16 (heritage — conservation areas, listed-building settings) and Chapter 15 (National Landscapes / AONB, valued landscapes), plus locally registered parks & gardens. These are 'material considerations' weighed in the planning balance, not absolute constraints — unlike SSSIs, SACs, SPAs, Ramsar, ancient woodland and scheduled monuments, which are hard exclusions already removed in step 3.",
-      calc: "Protected land % = the share of the net developable polygon (from step 3) that intersects soft designations — conservation areas, AONB / National Landscapes, registered parks & gardens and listed-building setting buffers — measured by area. The slider caps how much of a site may be so designated." },
+      source: "NPPF Chapter 16 (heritage — conservation areas, listed-building settings) and Chapter 15 (National Landscapes / AONB, valued landscapes), plus locally registered parks & gardens. These are 'material considerations' weighed in the planning balance, not absolute constraints — unlike SSSIs, SACs, SPAs, Ramsar, ancient woodland and scheduled monuments, which are hard exclusions already removed in step 2.",
+      calc: "Protected land % = the share of the net developable polygon (from step 2) that intersects soft designations — conservation areas, AONB / National Landscapes, registered parks & gardens and listed-building setting buffers — measured by area. The slider caps how much of a site may be so designated." },
     pred: (r, c) => r.friction == null || r.friction * 100 <= c.maxProtectedPct },
-  { key: "regen", title: "5 · Regeneration need",
+  { key: "regen", title: "4 · Regeneration need",
     about: {
       what: "Focuses the shortlist on the places that would benefit most from investment — the most deprived station catchments.",
       source: "English Indices of Multiple Deprivation 2019 (MHCLG / ONS), at LSOA level. IMD combines seven domains: income, employment, health, education, crime, barriers to housing & services, and living environment.",
@@ -11964,7 +11965,7 @@ const SIFT_STEPS = [
       if (r.regen == null) return true;            // no score — don't drop
       return r.regen >= (100 - top);               // top X% most deprived
     } },
-  { key: "viability", title: "6 · Viability",
+  { key: "viability", title: "5 · Viability",
     about: {
       what: "A residual land-appraisal test of whether a policy-compliant scheme stacks up financially. This is the final gate — the sift ends here (deliverability will return once rebuilt).",
       source: "NPPF para 58 and Planning Practice Guidance 'Viability': residual appraisal, profit on cost, and benchmark land value.",
@@ -12027,16 +12028,14 @@ function siftStepControlsHTML(key) {
   const chk = v => v ? " checked" : "";
   switch (key) {
     case "connectivity":
-      return `<p class="hint">The first gate keeps only stations meeting the NPPF service-frequency test (4 trains/trams per hour overall, or 2 per hour per direction, through the daytime). Optionally require the full 'well-connected' definition (also within a top-60 Travel-to-Work Area by GVA).</p>` +
-        `<label class="dd-row"><input type="checkbox" id="sc-freq"${chk(C.requireFrequency)}> <span>Require NPPF service frequency</span></label>` +
-        `<label class="dd-row"><input type="checkbox" id="sc-wc"${chk(C.requireWellConnected)}> <span>Require 'well-connected' (frequency + top-60 TTWA)</span></label>` +
-        `<label class="dd-row"><input type="checkbox" id="sc-exempt"${chk(C.exemptInSettlement)}> <span>Exempt in-settlement stations (mirror NPPF 'default yes')</span></label>` +
-        `<p class="hint" style="margin-top:4px">With the exemption on, the tests above apply only to out-of-settlement stations. Turn it off to gate every station on connectivity (stricter than the NPPF).</p>`;
-    case "eligibility":
-      return `<p class="hint">Two-tier NPPF test. 'In settlement' = the 800 m catchment is ≥40% built-up (OS Open Built-Up Areas), or ≥20% with built-up land within 100 m — a robust rule that no longer mislabels dense urban stations. Density floor by connectivity: <strong>50 dph</strong> well-connected, else <strong>40 dph</strong>.</p>` +
-        `<label class="dd-row"><input type="checkbox" id="sift-tierA"${chk(C.tierA)}> <span>Tier A · in-settlement</span></label>` +
+      return `<p class="hint">Every station lands in one of two NPPF tiers — or neither. <strong>Tier A · in-settlement</strong>: the catchment is already built-up, so development is a 'default yes' regardless of service level. <strong>Tier B · well-connected, out-of-settlement</strong>: a genuine turn-up-and-go service (≥4 trains/hour, or 2 each way) in a top-60 economic area — where the draft NPPF permits Green Belt release. Everything else is <strong>ineligible</strong>. The tier also sets the density floor: 50 dph well-connected, else 40 dph. Tick which classes go forward.</p>` +
+        `<label class="dd-row"><input type="checkbox" id="sift-tierA"${chk(C.tierA)}> <span>Tier A · in-settlement ('default yes')</span></label>` +
         `<label class="dd-row"><input type="checkbox" id="sift-tierB"${chk(C.tierB)}> <span>Tier B · well-connected, out-of-settlement (Green Belt permitted)</span></label>` +
-        `<label class="dd-row"><input type="checkbox" id="sift-inelig"${chk(C.ineligible)}> <span>Include ineligible</span></label>`;
+        `<label class="dd-row"><input type="checkbox" id="sift-inelig"${chk(C.ineligible)}> <span>Include ineligible stations (they still face the service-frequency test)</span></label>` +
+        `<p class="hint" style="margin-top:8px"><strong>Stricter than the NPPF</strong> (optional):</p>` +
+        `<label class="dd-row"><input type="checkbox" id="sc-strict"${chk(!C.exemptInSettlement)}> <span>Apply the service-frequency test inside settlements too</span></label>` +
+        `<label class="dd-row"><input type="checkbox" id="sc-wc"${chk(C.requireWellConnected)}> <span>Require full 'well-connected' status (frequency + top-60 TTWA)</span></label>` +
+        `<p class="hint" style="margin-top:4px">The NPPF treats in-settlement stations as a 'default yes' whatever their timetable — the first toggle removes that exemption. The second demands the full well-connected definition wherever the service tests apply.</p>`;
     case "developable":
       return `<p class="hint">Net developable area within 800 m after erasing built-up land, green space, transport (roads + railway curtilage), flood zone 3 and hard environmental designations.</p>` +
         siftNumField("sift-minha", "Min developable ha", C.minDevHa || 0, 1) +
@@ -12044,7 +12043,7 @@ function siftStepControlsHTML(key) {
         `<label class="dd-row"><input type="checkbox" id="sift-largest"${chk(C.largestPlotOnly)}> <span>Largest plot only</span></label>` +
         `<p class="hint" style="margin-top:4px">Sift each station on its single <strong>largest contiguous plot</strong> instead of the catchment total — screens out places whose hectares are really a scatter of small, awkward sites. While on, the filters above, the viability appraisal and all totals use the largest plot (yield scaled pro-rata).</p>`;
     case "protected":
-      return `<p class="hint">Hard designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased in step 3. This caps how much of the remaining developable land sits under a <strong>soft</strong> designation — conservation areas, AONB / National Landscapes, registered parks &amp; gardens and listed-building settings — which don't block development but add planning friction.</p>` +
+      return `<p class="hint">Hard designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased in step 2. This caps how much of the remaining developable land sits under a <strong>soft</strong> designation — conservation areas, AONB / National Landscapes, registered parks &amp; gardens and listed-building settings — which don't block development but add planning friction.</p>` +
         `<label class="sift-field"><span>Max protected land <b id="sift-prot-val">${Math.round(C.maxProtectedPct)}%</b></span><input type="range" id="sift-maxprot" min="0" max="100" step="5" value="${C.maxProtectedPct}"></label>` +
         `<label class="dd-row"><input type="checkbox" id="sift-nogb"${chk(C.excludeGreenBelt)}> <span>Exclude Green Belt land</span></label>` +
         `<p class="hint" style="margin-top:4px">With this on, each station's developable area and dwelling yield are counted <strong>net of Green Belt hectares</strong> — the exclusion flows through the land filters, the viability appraisal and the totals. Off by default because the draft NPPF explicitly permits Green Belt release around well-connected stations (Tier B).</p>`;
@@ -12080,9 +12079,11 @@ function readSiftControls() {
   const g = id => document.getElementById(id);
   const C = SIFT.crit, A = SIFT.assumptions;
   const numv = (id, d) => { const el = g(id); if (!el) return d; const v = parseFloat(el.value); return isNaN(v) ? d : v; };
-  if (g("sc-freq")) C.requireFrequency = g("sc-freq").checked;
+  // Merged step 1: the strict toggle is the INVERSE of the NPPF in-settlement
+  // exemption. requireFrequency stays a stored flag (default true) — no longer
+  // a visible control, but saved configs that disabled it are honoured.
+  if (g("sc-strict")) C.exemptInSettlement = !g("sc-strict").checked;
   if (g("sc-wc")) C.requireWellConnected = g("sc-wc").checked;
-  if (g("sc-exempt")) C.exemptInSettlement = g("sc-exempt").checked;
   if (g("sift-tierA")) C.tierA = g("sift-tierA").checked;
   if (g("sift-tierB")) C.tierB = g("sift-tierB").checked;
   if (g("sift-inelig")) C.ineligible = g("sift-inelig").checked;
@@ -12164,6 +12165,9 @@ function exportShortlistCsv() {
 function renderSiftStep() {
   const crit = document.getElementById("sift-criteria");
   if (!crit) return;
+  // The funnel shrank from 6 steps to 5 (station gate merge) — clamp any
+  // stale index so an in-flight session can't render past the end.
+  if (SIFT.step >= SIFT_STEPS.length) SIFT.step = SIFT_STEPS.length - 1;
   const step = SIFT.step;
   const counts = siftFunnelCounts();
   const stepper = SIFT_STEPS.map((s, i) =>

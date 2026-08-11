@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws91-report-audit" />
+  <link rel="stylesheet" href="src/styles.css?v=ws92-sift-merged-gate" />
 </head>
 <body>
   <div id="app">
@@ -83,7 +83,7 @@
 
           <section class="block" id="sift-block" hidden>
             <h2>Site sift · NPPF station funnel</h2>
-            <p class="hint">Step through the funnel — connectivity first, then eligibility, developable land, constraints, and the three scored axes. Adjust each step's criteria; the running shortlist below updates live at every step. Click a row to profile that station.</p>
+            <p class="hint">Step through the funnel — the station gate (connectivity &amp; tier), developable land, protected land, regeneration need, then viability. Adjust each step's criteria; the running shortlist below updates live at every step. Click a row to profile that station.</p>
             <div id="sift-criteria"></div>
             <div id="sift-summary" class="sift-summary"></div>
             <div id="sift-results" class="sift-results"></div>
@@ -306,6 +306,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws91-report-audit"></script>
+  <script type="module" src="src/app.js?v=ws92-sift-merged-gate"></script>
 </body>
 </html>
