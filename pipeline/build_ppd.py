@@ -44,9 +44,13 @@ PPD_BASE = ("http://prod.publicdata.landregistry.gov.uk.s3-website-eu-west-1"
             ".amazonaws.com/pp-{year}.csv")
 CODEPOINT_URL = ("https://api.os.uk/downloads/v1/products/CodePointOpen/"
                  "downloads?area=GB&format=CSV&redirect")
+# NOTE the path: bulk files are served under /files/ (with API Basic auth
+# accepted); /api/v1/files is a JSON LISTING endpoint — requesting a filename
+# under it returns an empty 200, which is how the 2026-08-11 run produced a
+# 0-byte "zip" and died. Docs: guides.opendatacommunities.org article 40.
 EPC_BULK_URL = os.environ.get(
     "EPC_BULK_URL",
-    "https://epc.opendatacommunities.org/api/v1/files/"
+    "https://epc.opendatacommunities.org/files/"
     "all-domestic-certificates.zip")
 
 # 36 months is the product now: the price layers advertise "last 3 years" and
@@ -140,10 +144,28 @@ def epc_floor_areas(sales):
             dest.unlink(missing_ok=True)
             return {}
         print(f"[epc]   -> {dest.stat().st_size / 1e9:.2f} GB")
+        # The real archive is ~5 GB. A small 200 response is an error page or
+        # an empty body from a wrong endpoint — never a zip. Degrade, don't die.
+        if dest.stat().st_size < 1e8:
+            head = dest.read_bytes()[:200]
+            print(f"[epc] WARNING: response too small to be the bulk archive "
+                  f"({dest.stat().st_size} bytes; starts {head!r}) — check "
+                  "EPC_BULK_URL/credentials; continuing without floor areas")
+            dest.unlink(missing_ok=True)
+            return {}
 
     best = {}                        # key -> (lodgement_date, area)
     scanned = 0
-    with zipfile.ZipFile(dest) as zf:
+    # A corrupt or truncated archive must degrade to the type-mix estimate,
+    # not take the whole PPD build (and the sales load behind it) down.
+    try:
+        zf_test = zipfile.ZipFile(dest)
+    except zipfile.BadZipFile:
+        print("[epc] WARNING: downloaded file is not a valid zip — deleting "
+              "and continuing without floor areas")
+        dest.unlink(missing_ok=True)
+        return {}
+    with zf_test as zf:
         members = [m for m in zf.namelist()
                    if m.lower().endswith("certificates.csv")]
         print(f"[epc] scanning {len(members)} authority files ...")
