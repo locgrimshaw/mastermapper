@@ -1,9 +1,12 @@
 name: EPC endpoint probe
 
-# Diagnostic only: shows exactly what the EPC bulk endpoint returns for our
-# credentials — HTTP status, redirect chain, content type and the first bytes
-# of the body (never the credentials). Used to debug the bulk download without
-# burning a full load-ppd cycle. Safe to run any time.
+# Diagnostic only: shows what the "Get energy performance of buildings data"
+# API returns for our credentials — HTTP status, redirect target host, content
+# type and the first body bytes (never the credentials). The old
+# epc.opendatacommunities.org service was retired 30 May 2026; the new API
+# authenticates with `Authorization: Bearer <token>` (token from the signed-in
+# my-account page) and serves the bulk file via a 302 to a pre-signed S3 URL.
+# Used to verify credentials in ~1 minute instead of a full load-ppd cycle.
 
 on:
   workflow_dispatch:
@@ -21,22 +24,26 @@ jobs:
           EPC_EMAIL: ${{ secrets.EPC_EMAIL }}
           EPC_API_KEY: ${{ secrets.EPC_API_KEY }}
         run: |
-          if [ -z "$EPC_EMAIL" ] || [ -z "$EPC_API_KEY" ]; then
-            echo "::error::EPC_EMAIL / EPC_API_KEY secrets not set"; exit 1
+          if [ -z "$EPC_API_KEY" ]; then
+            echo "::error::EPC_API_KEY secret not set"; exit 1
           fi
-          AUTH=$(printf '%s:%s' "$EPC_EMAIL" "$EPC_API_KEY" | base64 -w0)
+          API=https://api.get-energy-performance-data.communities.gov.uk
           probe () {  # probe <label> <url> <extra curl args...>
             local label="$1" url="$2"; shift 2
             echo "===== $label — $url"
-            curl -sS -D /tmp/h -o /tmp/b --max-time 90 -r 0-2047 \
-              -H "Authorization: Basic $AUTH" "$@" "$url" || true
-            cat /tmp/h
-            echo "--- body: $(wc -c < /tmp/b) bytes (first 2KB requested); starts:"
+            curl -sS -D /tmp/h -o /tmp/b --max-time 90 "$@" "$url" || true
+            # Headers only (status, content-type, location host) — no cookies.
+            grep -iE '^(HTTP|content-type|content-length|location)' /tmp/h || true
+            echo "--- body: $(wc -c < /tmp/b) bytes; starts:"
             head -c 300 /tmp/b | tr -d '\0' | sed 's/[^[:print:]]/./g'; echo; echo
           }
-          probe "files path, no redirect follow" \
-            "https://epc.opendatacommunities.org/files/all-domestic-certificates.zip"
-          probe "files path, following redirects" \
-            "https://epc.opendatacommunities.org/files/all-domestic-certificates.zip" -L
-          probe "api listing" \
-            "https://epc.opendatacommunities.org/api/v1/files" -H "Accept: application/json"
+          probe "bulk file info, Bearer" "$API/api/files/domestic/csv/info" \
+            -H "Authorization: Bearer $EPC_API_KEY" -H "Accept: application/json"
+          probe "bulk file HEAD-ish, Bearer, no redirect follow" \
+            "$API/api/files/domestic/csv" \
+            -H "Authorization: Bearer $EPC_API_KEY" -r 0-0
+          if [ -n "$EPC_EMAIL" ]; then
+            AUTH=$(printf '%s:%s' "$EPC_EMAIL" "$EPC_API_KEY" | base64 -w0)
+            probe "bulk file info, legacy Basic" "$API/api/files/domestic/csv/info" \
+              -H "Authorization: Basic $AUTH" -H "Accept: application/json"
+          fi

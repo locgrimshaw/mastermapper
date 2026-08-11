@@ -15,8 +15,9 @@ Props per sale: price, date, ptype (D/S/T/F/O), newb (Y/N), tenure (F/L),
 addr (PAON + street, trimmed). Geocoded via OS Code-Point Open (no key).
 
 EPC floor areas (optional, transforms the £/m² heatmap from estimate to
-measurement): with EPC_EMAIL + EPC_API_KEY set (free account at
-https://epc.opendatacommunities.org/), the full domestic-certificates bulk
+measurement): with EPC_API_KEY set to the bearer token from a (free) GOV.UK
+One Login account at https://get-energy-performance-data.communities.gov.uk/
+(my-account page), the full domestic-certificates bulk
 file is streamed and each sale is address-matched to its latest certificate
 — normalised SAON+PAON+street against EPC ADDRESS1(+ADDRESS2), within the
 postcode. Matched sales gain m2 (TOTAL_FLOOR_AREA) and ppm2r (price ÷ m2);
@@ -44,14 +45,18 @@ PPD_BASE = ("http://prod.publicdata.landregistry.gov.uk.s3-website-eu-west-1"
             ".amazonaws.com/pp-{year}.csv")
 CODEPOINT_URL = ("https://api.os.uk/downloads/v1/products/CodePointOpen/"
                  "downloads?area=GB&format=CSV&redirect")
-# NOTE the path: bulk files are served under /files/ (with API Basic auth
-# accepted); /api/v1/files is a JSON LISTING endpoint — requesting a filename
-# under it returns an empty 200, which is how the 2026-08-11 run produced a
-# 0-byte "zip" and died. Docs: guides.opendatacommunities.org article 40.
+# The old epc.opendatacommunities.org service was RETIRED 30 May 2026 — every
+# path there now 301s to the replacement, "Get energy performance of buildings
+# data" (get-energy-performance-data.communities.gov.uk). The new bulk
+# endpoint needs `Authorization: Bearer <token>` (token from the signed-in
+# my-account page) and answers with a 302 to a pre-signed S3 URL for one zip
+# (~6.5 GB) holding a single full-column certificates.csv. The S3 URL REJECTS
+# requests still carrying an Authorization header, so the redirect must be
+# followed manually with the header stripped (see epc_floor_areas).
 EPC_BULK_URL = os.environ.get(
     "EPC_BULK_URL",
-    "https://epc.opendatacommunities.org/files/"
-    "all-domestic-certificates.zip")
+    "https://api.get-energy-performance-data.communities.gov.uk"
+    "/api/files/domestic/csv")
 
 # 36 months is the product now: the price layers advertise "last 3 years" and
 # the trend metric compares the last 12 months against the prior 24, so a
@@ -99,8 +104,10 @@ def epc_floor_areas(sales):
     are configured."""
     email = os.environ.get("EPC_EMAIL", "").strip()
     key = os.environ.get("EPC_API_KEY", "").strip()
-    if not email or not key:
-        print("[epc] EPC_EMAIL / EPC_API_KEY not set — £/m² stays a type-mix "
+    # The new service authenticates with the bearer token alone; EPC_EMAIL is
+    # only needed for the legacy Basic fallback and may be absent.
+    if not key:
+        print("[epc] EPC_API_KEY not set — £/m² stays a type-mix "
               "estimate (docs/MANUAL_TASKS.md 5c)")
         return {}
 
@@ -121,14 +128,46 @@ def epc_floor_areas(sales):
 
     dest = RAW / "epc-all-domestic.zip"
     if not dest.exists() or dest.stat().st_size < 1e8:
-        auth = base64.b64encode(f"{email}:{key}".encode()).decode()
-        req = urllib.request.Request(
-            EPC_BULK_URL, headers={"Authorization": f"Basic {auth}",
-                                   "Accept": "application/zip"})
+        # Bearer token first (the new service's scheme); legacy Basic as a
+        # fallback for anyone still carrying old-style credentials. The bulk
+        # endpoint 302s to a pre-signed S3 URL which must be fetched WITHOUT
+        # the Authorization header (S3 rejects a second auth mechanism), so
+        # redirects are caught and followed manually.
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k):
+                return None
+        opener = urllib.request.build_opener(_NoRedirect)
+
+        def _open_bulk(auth_header):
+            req = urllib.request.Request(
+                EPC_BULK_URL, headers={"Authorization": auth_header,
+                                       "Accept": "application/zip"})
+            try:
+                return opener.open(req, timeout=1800)   # direct 200 stream
+            except urllib.error.HTTPError as e:
+                if e.code in (301, 302, 303, 307, 308):
+                    loc = e.headers.get("Location")
+                    if loc:
+                        print(f"[epc]   following redirect to "
+                              f"{loc.split('?')[0]}")
+                        return urllib.request.urlopen(
+                            urllib.request.Request(loc), timeout=1800)
+                raise
+
         print(f"[epc] downloading bulk certificates (several GB) ...")
         try:
-            with urllib.request.urlopen(req, timeout=1800) as r, \
-                 open(dest, "wb") as fh:
+            try:
+                r = _open_bulk(f"Bearer {key}")
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403) and email:
+                    print(f"[epc]   bearer auth rejected ({e.code}) — "
+                          "retrying legacy Basic")
+                    basic = base64.b64encode(
+                        f"{email}:{key}".encode()).decode()
+                    r = _open_bulk(f"Basic {basic}")
+                else:
+                    raise
+            with r, open(dest, "wb") as fh:
                 got = 0
                 while True:
                     chunk = r.read(1 << 22)
@@ -169,24 +208,37 @@ def epc_floor_areas(sales):
         members = [m for m in zf.namelist()
                    if m.lower().endswith("certificates.csv")]
         print(f"[epc] scanning {len(members)} authority files ...")
+        # Header casing varies by vintage: the retired service's zips used
+        # UPPER_SNAKE; the replacement service's exports may use camelCase or
+        # kebab-case. Try each spelling rather than assuming one era's file.
+        def _col(row, *names):
+            for n in names:
+                v = row.get(n)
+                if v is not None:
+                    return v
+            return None
         for m in members:
             with zf.open(m) as fh:
                 for row in csv.DictReader(
                         io.TextIOWrapper(fh, "utf-8", errors="ignore")):
                     scanned += 1
-                    pc = (row.get("POSTCODE") or "").replace(" ", "").upper()
+                    pc = (_col(row, "POSTCODE", "postcode")
+                          or "").replace(" ", "").upper()
                     if pc not in pcs_needed:
                         continue
                     try:
-                        area = float(row.get("TOTAL_FLOOR_AREA") or 0)
+                        area = float(_col(row, "TOTAL_FLOOR_AREA",
+                                          "totalFloorArea",
+                                          "total-floor-area") or 0)
                     except ValueError:
                         continue
                     if not 15 <= area <= 600:
                         continue
-                    lodged = (row.get("LODGEMENT_DATE")
-                              or row.get("LODGEMENT_DATETIME") or "")[:10]
-                    a1 = row.get("ADDRESS1") or ""
-                    a2 = row.get("ADDRESS2") or ""
+                    lodged = (_col(row, "LODGEMENT_DATE", "lodgementDate",
+                                   "lodgement-date", "LODGEMENT_DATETIME")
+                              or "")[:10]
+                    a1 = _col(row, "ADDRESS1", "address1") or ""
+                    a2 = _col(row, "ADDRESS2", "address2") or ""
                     for k in {_akey(a1), _akey(a1, a2)}:
                         if not k:
                             continue
