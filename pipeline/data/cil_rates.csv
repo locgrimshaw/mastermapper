@@ -1,0 +1,233 @@
+# Residential CIL rates by local authority — INDICATIVE, £/m² of net new GIA.
+# Compiled from adopted charging schedules and annual CIL rate summaries,
+# uplifted to ~2025 indexation (BCIS/RICS CIL index). Schedules charge by ZONE
+# within an authority: resi_min/resi_max span the schedule, resi_typ is the
+# representative rate for the main residential zones. mayoral = Mayoral CIL2
+# (London only; 2025-indexed approx of the £80/£60/£25 bands). status:
+#   adopted  - charging schedule in force (rates as columns)
+#   none     - authority has not adopted CIL (charge is genuinely zero)
+# Authorities absent from this file fall back to the engine's regional band.
+# EVERY figure should be verified against the council's current adopted
+# schedule before reliance — rates change with indexation each January and
+# with schedule reviews. Sources: council charging schedules / annual rate
+# summaries (OGL); london.gov.uk MCIL2.
+name,status,resi_min,resi_typ,resi_max,mayoral,asof,note
+Barking and Dagenham,adopted,90,95,95,35,2025,
+Barnet,adopted,180,185,185,35,2025,
+Bexley,adopted,80,105,135,35,2025,
+Brent,adopted,260,270,270,80,2025,
+Bromley,adopted,125,130,135,35,2025,
+Camden,adopted,330,450,640,105,2025,zoned; CAZ highest
+City of London,adopted,95,125,150,105,2025,
+Croydon,adopted,150,155,160,35,2025,
+Ealing,adopted,45,115,135,80,2025,zoned
+Enfield,adopted,55,100,160,35,2025,zoned
+Greenwich,adopted,90,120,185,80,2025,zoned
+Hackney,adopted,240,250,255,80,2025,
+Hammersmith and Fulham,adopted,105,260,530,105,2025,zoned
+Haringey,adopted,20,200,350,80,2025,zoned; west much higher
+Harrow,adopted,140,145,150,35,2025,
+Havering,adopted,150,155,160,35,2025,
+Hillingdon,adopted,120,125,130,35,2025,
+Hounslow,adopted,145,180,265,35,2025,zoned
+Islington,adopted,330,350,400,105,2025,
+Kensington and Chelsea,adopted,330,650,950,105,2025,zoned; among highest in England
+Kingston upon Thames,adopted,110,200,280,35,2025,zoned
+Lambeth,adopted,65,220,350,80,2025,zoned
+Lewisham,adopted,90,110,130,80,2025,
+Merton,adopted,150,190,290,35,2025,zoned
+Newham,adopted,25,65,105,35,2025,zoned
+Redbridge,adopted,90,90,90,35,2025,
+Richmond upon Thames,adopted,325,330,335,35,2025,
+Southwark,adopted,65,220,290,80,2025,zoned
+Sutton,adopted,125,130,160,35,2025,
+Tower Hamlets,adopted,45,175,265,80,2025,zoned
+Waltham Forest,adopted,85,90,95,35,2025,
+Wandsworth,adopted,330,340,780,80,2025,Nine Elms zone far higher
+Westminster,adopted,265,500,750,105,2025,zoned
+Elmbridge,adopted,140,145,150,0,2025,
+Epsom and Ewell,adopted,155,160,165,0,2025,
+Guildford,adopted,185,190,195,0,2025,verify — recent adoption
+Mole Valley,adopted,155,160,165,0,2025,
+Reigate and Banstead,adopted,150,155,160,0,2025,
+Runnymede,adopted,105,225,445,0,2025,zoned; £106-446 span
+Spelthorne,adopted,55,110,145,0,2025,zoned
+Surrey Heath,adopted,140,145,150,0,2025,
+Tandridge,adopted,145,150,155,0,2025,
+Waverley,adopted,245,395,495,0,2025,zoned; among SE highest
+Woking,adopted,165,170,175,0,2025,
+Ashford,adopted,60,100,140,0,2025,zoned
+Canterbury,adopted,110,145,195,0,2025,zoned
+Dartford,adopted,95,100,105,0,2025,
+Dover,adopted,75,80,85,0,2025,
+Folkestone and Hythe,adopted,55,80,110,0,2025,
+Gravesham,adopted,95,100,105,0,2025,
+Maidstone,adopted,110,120,180,0,2025,zoned
+Sevenoaks,adopted,160,165,170,0,2025,
+Tonbridge and Malling,adopted,120,125,130,0,2025,
+Tunbridge Wells,adopted,150,155,160,0,2025,
+Thanet,none,0,0,0,0,2025,no CIL adopted
+Medway,none,0,0,0,0,2025,no CIL adopted
+Swale,none,0,0,0,0,2025,no CIL adopted
+Brighton and Hove,adopted,90,150,240,0,2025,zoned
+Adur,adopted,70,75,80,0,2025,
+Arun,adopted,110,115,120,0,2025,
+Chichester,adopted,150,155,160,0,2025,
+Crawley,adopted,100,105,110,0,2025,
+Horsham,adopted,155,160,165,0,2025,
+Mid Sussex,adopted,150,155,160,0,2025,
+Worthing,adopted,95,100,105,0,2025,
+Eastbourne,adopted,45,50,55,0,2025,
+Hastings,adopted,10,15,20,0,2025,
+Lewes,adopted,105,110,115,0,2025,
+Rother,adopted,105,110,115,0,2025,
+Wealden,adopted,150,155,160,0,2025,
+Basingstoke and Deane,adopted,105,110,115,0,2025,
+East Hampshire,adopted,60,160,265,0,2025,zoned; £59-266 span
+Eastleigh,adopted,80,105,130,0,2025,
+Fareham,adopted,105,110,115,0,2025,
+Havant,adopted,100,105,110,0,2025,
+New Forest,adopted,100,105,110,0,2025,
+Portsmouth,adopted,130,135,140,0,2025,
+Rushmoor,adopted,85,90,95,0,2025,
+Southampton,adopted,90,95,100,0,2025,
+Test Valley,adopted,90,125,160,0,2025,zoned
+Winchester,adopted,120,190,255,0,2025,zoned
+Hart,none,0,0,0,0,2025,no CIL adopted
+Gosport,none,0,0,0,0,2025,no CIL adopted
+Isle of Wight,none,0,0,0,0,2025,no CIL adopted
+Reading,adopted,150,155,160,0,2025,
+Slough,adopted,195,200,205,0,2025,
+West Berkshire,adopted,80,155,220,0,2025,zoned
+Windsor and Maidenhead,adopted,190,240,300,0,2025,zoned
+Wokingham,adopted,300,365,435,0,2025,zoned; strategic sites exempt
+Bracknell Forest,adopted,230,235,240,0,2025,
+Buckinghamshire,adopted,100,180,340,0,2025,legacy district schedules
+Milton Keynes,adopted,60,85,110,0,2025,
+Oxford,adopted,140,145,150,0,2025,
+Cherwell,adopted,120,150,190,0,2025,zoned
+South Oxfordshire,adopted,150,190,240,0,2025,zoned
+Vale of White Horse,adopted,120,160,200,0,2025,zoned
+West Oxfordshire,adopted,100,135,170,0,2025,zoned
+Basildon,adopted,85,95,105,0,2025,
+Braintree,none,0,0,0,0,2025,no CIL adopted
+Brentwood,adopted,125,150,180,0,2025,
+Chelmsford,adopted,150,155,160,0,2025,
+Colchester,adopted,110,120,155,0,2025,
+Epping Forest,none,0,0,0,0,2025,no CIL adopted
+Harlow,adopted,55,60,65,0,2025,
+Southend-on-Sea,adopted,55,60,65,0,2025,
+Thurrock,none,0,0,0,0,2025,no CIL adopted
+Cambridge,adopted,150,155,160,0,2025,
+South Cambridgeshire,adopted,140,145,150,0,2025,
+Huntingdonshire,adopted,105,110,115,0,2025,
+East Cambridgeshire,adopted,50,90,130,0,2025,zoned
+Fenland,none,0,0,0,0,2025,no CIL adopted
+Peterborough,adopted,20,60,145,0,2025,zoned
+Bedford,adopted,100,110,130,0,2025,
+Central Bedfordshire,adopted,80,110,150,0,2025,zoned
+Luton,adopted,40,45,50,0,2025,
+Hertsmere,adopted,150,155,160,0,2025,
+St Albans,adopted,155,160,165,0,2025,verify — recent adoption
+Watford,adopted,150,155,160,0,2025,
+Three Rivers,adopted,150,155,160,0,2025,
+Dacorum,adopted,140,180,320,0,2025,zoned
+East Hertfordshire,adopted,120,180,240,0,2025,zoned
+Welwyn Hatfield,adopted,130,180,230,0,2025,zoned
+Broxbourne,adopted,110,115,120,0,2025,
+Stevenage,adopted,40,45,50,0,2025,
+North Hertfordshire,adopted,120,140,165,0,2025,
+Norwich,adopted,95,115,145,0,2025,
+Broadland,adopted,95,115,145,0,2025,GNDP joint schedule
+South Norfolk,adopted,95,115,145,0,2025,GNDP joint schedule
+Ipswich,adopted,55,80,105,0,2025,zoned
+East Suffolk,adopted,65,105,150,0,2025,zoned
+Mid Suffolk,adopted,95,115,140,0,2025,
+Babergh,adopted,95,115,140,0,2025,
+West Suffolk,adopted,95,120,150,0,2025,zoned
+Bristol City,adopted,90,120,185,0,2025,zoned
+Bath and North East Somerset,adopted,130,215,340,0,2025,zoned
+South Gloucestershire,adopted,105,110,115,0,2025,
+North Somerset,adopted,100,105,110,0,2025,
+Exeter,adopted,95,100,105,0,2025,
+Teignbridge,adopted,85,120,260,0,2025,zoned
+East Devon,adopted,90,125,160,0,2025,zoned
+Plymouth,adopted,35,55,85,0,2025,zoned
+Cornwall,adopted,55,105,255,0,2025,zoned by value area
+Wiltshire,adopted,55,105,140,0,2025,zoned
+Swindon,adopted,45,70,90,0,2025,
+Gloucester,adopted,40,60,80,0,2025,
+Cheltenham,adopted,105,140,175,0,2025,zoned
+Stroud,adopted,90,110,135,0,2025,
+Cotswold,adopted,105,130,160,0,2025,
+Tewkesbury,adopted,40,105,205,0,2025,zoned
+Bournemouth Christchurch and Poole,adopted,110,160,255,0,2025,legacy schedules
+Dorset,adopted,95,130,185,0,2025,legacy district schedules
+Somerset,adopted,60,105,165,0,2025,legacy district schedules
+Torbay,adopted,60,80,105,0,2025,
+Birmingham,adopted,0,45,90,0,2025,zoned; large areas £0
+Coventry,adopted,55,85,115,0,2025,zoned
+Solihull,adopted,90,125,160,0,2025,zoned
+Wolverhampton,none,0,0,0,0,2025,no CIL adopted
+Dudley,none,0,0,0,0,2025,no CIL adopted
+Sandwell,none,0,0,0,0,2025,no CIL adopted
+Walsall,none,0,0,0,0,2025,no CIL adopted
+Warwick,adopted,90,175,250,0,2025,zoned; £90-252 span
+Stratford-on-Avon,adopted,85,110,180,0,2025,zoned
+Rugby,none,0,0,0,0,2025,no CIL adopted
+Nuneaton and Bedworth,none,0,0,0,0,2025,no CIL adopted
+Herefordshire,adopted,80,110,145,0,2025,zoned
+Shropshire,adopted,45,70,100,0,2025,zoned
+Telford and Wrekin,none,0,0,0,0,2025,no CIL adopted
+Stoke-on-Trent,none,0,0,0,0,2025,no CIL adopted
+Nottingham,adopted,15,45,80,0,2025,zoned
+Broxtowe,adopted,15,45,80,0,2025,joint schedule
+Gedling,adopted,15,45,80,0,2025,joint schedule
+Rushcliffe,adopted,35,70,105,0,2025,zoned
+Leicester,none,0,0,0,0,2025,no CIL adopted
+Derby,none,0,0,0,0,2025,no CIL adopted
+Lincoln,adopted,10,20,30,0,2025,joint central lincs
+North Kesteven,adopted,10,20,30,0,2025,joint central lincs
+West Lindsey,adopted,10,20,30,0,2025,joint central lincs
+West Northamptonshire,none,0,0,0,0,2025,no CIL adopted
+Manchester,none,0,0,0,0,2025,no CIL adopted
+Salford,none,0,0,0,0,2025,no CIL adopted
+Trafford,adopted,25,45,85,0,2025,zoned
+Stockport,none,0,0,0,0,2025,no CIL adopted
+Liverpool,none,0,0,0,0,2025,no CIL adopted
+Sefton,none,0,0,0,0,2025,no CIL adopted
+Wirral,none,0,0,0,0,2025,no CIL adopted
+Cheshire West and Chester,adopted,0,35,70,0,2025,zoned
+Cheshire East,adopted,0,30,60,0,2025,zoned
+Warrington,none,0,0,0,0,2025,no CIL adopted
+Preston,adopted,35,45,75,0,2025,City Deal area
+South Ribble,adopted,35,45,75,0,2025,joint schedule
+Chorley,adopted,35,45,75,0,2025,joint schedule
+Lancaster,none,0,0,0,0,2025,no CIL adopted
+Blackpool,none,0,0,0,0,2025,no CIL adopted
+Leeds,adopted,10,55,110,0,2025,zoned
+Bradford,adopted,0,30,60,0,2025,zoned; much £0
+Sheffield,adopted,0,50,80,0,2025,zoned
+Wakefield,adopted,0,35,70,0,2025,zoned
+Kirklees,adopted,0,35,70,0,2025,zoned
+Calderdale,adopted,0,30,60,0,2025,zoned
+York,none,0,0,0,0,2025,no CIL adopted
+Kingston upon Hull,none,0,0,0,0,2025,no CIL adopted
+East Riding of Yorkshire,none,0,0,0,0,2025,no CIL adopted
+Doncaster,none,0,0,0,0,2025,no CIL adopted
+Rotherham,adopted,0,25,50,0,2025,zoned
+Barnsley,adopted,0,25,50,0,2025,zoned
+Newcastle upon Tyne,none,0,0,0,0,2025,no CIL adopted
+Gateshead,adopted,0,25,60,0,2025,zoned; much £0
+Sunderland,none,0,0,0,0,2025,no CIL adopted
+County Durham,none,0,0,0,0,2025,no CIL adopted
+Northumberland,none,0,0,0,0,2025,no CIL adopted
+Middlesbrough,none,0,0,0,0,2025,no CIL adopted
+Stockton-on-Tees,none,0,0,0,0,2025,no CIL adopted
+Cardiff,none,0,0,0,0,2025,no CIL adopted
+Swansea,none,0,0,0,0,2025,no CIL adopted
+Newport,none,0,0,0,0,2025,no CIL adopted
+Caerphilly,adopted,35,40,45,0,2025,
+Merthyr Tydfil,adopted,20,25,30,0,2025,
+Rhondda Cynon Taf,adopted,30,35,40,0,2025,
+Wrexham,none,0,0,0,0,2025,no CIL adopted

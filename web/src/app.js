@@ -1218,6 +1218,7 @@ const MAP_OVERLAYS = [
       ],
     } },
   { key: "build_cost", group: "market2", label: "Build cost index (free proxy)", color: "#e8590c", dataset: "build_cost_index", minZoom: 5 },
+  { key: "cil_rates", group: "market2", label: "CIL rates (residential £/m²)", color: "#5c940d", dataset: "cil_rates", minZoom: 5 },
   // Zoom-banded: district (ASHE pay) wide out, MSOA household income close in
   // — ~7,200 neighbourhood areas, so a village is priced against ITS residents
   // rather than the nearest city's. Same datasetFn pattern as the price grids.
@@ -1413,6 +1414,7 @@ const LAYER_INFO = {
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only. Every cell in view is drawn — no sampling — which is why it needs a close zoom: the full 100 m grid is 159,451 cells and a wider view cannot be served from the database fast enough.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
   la_rents:            { about: "Average monthly private rents by local authority, shaded light (cheapest, ~£500) to deep teal (most expensive, £3,000+). Hover a district for its figure and annual change.", source: "ONS Price Index of Private Rents (OGL v3)" },
   price_trend:         { about: "Whether local sale prices are rising or falling: median of the last 12 months against the median of the 24 months before, per grid cell. Blue = falling, red = rising; cells without at least 5 sales in BOTH windows stay blank rather than faking a flat market.", source: "HM Land Registry Price Paid Data (OGL v3)" },
+  cil_rates:           { about: "Residential Community Infrastructure Levy by charging authority — INDICATIVE typical rates (£/m² of net new floorspace, ~2025-indexed) compiled from adopted charging schedules, incl. the Mayoral CIL in London. Green = £0 (no CIL adopted, or Scotland where no CIL regime exists), deep red = London-borough rates. Grey = not yet compiled: the viability engine falls back to its regional band there. Schedules charge by zone, so verify against the council's current adopted schedule before reliance; enter the exact rate per project in Viability variables.", source: "Council charging schedules / annual CIL rate summaries (OGL), hand-compiled" },
   build_cost:          { about: "Relative construction cost by local authority — a FREE PROXY assembled from ONS construction output indices and openly published regional factors, not BCIS (which is a paid RICS product). Green = cheaper than the national average, red = dearer. Every figure can be overridden per project in Viability variables; a client with BCIS access can paste their own numbers there.", source: "ONS construction output price indices + published regional factors (proxy)" },
   affordability:       { about: "Median sale price (last 12 months) divided by local income. Zoomed out: district level, against residents' median gross pay (ONS ASHE). Zoomed in (z9.5+): neighbourhood level — ~7,200 MSOAs of ~4,000 households — against HOUSEHOLD income (ONS small area income estimates), so a village is measured against its own residents rather than the nearest city's. 4× is the classic mortgageable benchmark; 12×+ severe. Areas with suppressed income data or too few sales stay grey.", source: "HM Land Registry Price Paid + ONS ASHE / ONS small area income estimates (all OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
@@ -2144,6 +2146,13 @@ function renderOverlay(key, def, fc) {
          500000, "#d0ebff", 1500000, "#74c0fc", 3000000, "#4dabf7",
          6000000, "#4263eb", 12000000, "#7048e8", 25000000, "#9c36b5",
          60000000, "#5f2a6e"]
+      : def.dataset === "cil_rates"
+      // Residential CIL: grey = not yet compiled (regional-band fallback);
+      // green £0 (no CIL) sweeping to deep red at London-borough rates.
+      ? ["case", ["!", ["has", "cil_pm2"]], "rgba(160,170,175,0.4)",
+         ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "cil_pm2"]], 0],
+          0, "#2f9e44", 40, "#94d82d", 90, "#ffd43b",
+          150, "#f59f00", 250, "#e8590c", 450, "#c92a2a"]]
       : def.dataset === "build_cost_index"
       // Relative build cost: green cheaper-than-national -> red dearer.
       ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "factor"]], 1],
@@ -3617,6 +3626,19 @@ function hoverContentForOverlay(def, p) {
             row(p.cost_house_pm2 != null ? `£${Number(p.cost_house_pm2).toLocaleString()}/m²` : null, "houses, indicative"),
             row(p.cost_flat_pm2 != null ? `£${Number(p.cost_flat_pm2).toLocaleString()}/m²` : null, "flats, indicative"),
             row("override in Viability variables", "per-project")];
+  } else if (d === "cil_rates") {
+    title = p.name || "Local authority";
+    kind = "Residential CIL — indicative, verify against the adopted schedule";
+    const st = p.status;
+    rows = [row(st === "adopted"
+              ? `£${Number(p.cil_pm2).toLocaleString()}/m²${Number(p.mayoral) > 0 ? ` (incl. £${Number(p.mayoral)} Mayoral)` : ""}`
+              : st === "none" ? "no CIL adopted — charge is £0 (S106 still applies)"
+              : st === "no_regime" ? "no CIL regime in Scotland — S75 obligations instead"
+              : "rate not yet compiled — regional band used", st === "adopted" ? "typical residential zone" : "status"),
+            row(st === "adopted" && p.resi_min != null && Number(p.resi_min) !== Number(p.resi_max)
+              ? `£${Number(p.resi_min)}–£${Number(p.resi_max)}/m²` : null, "schedule span (zoned)"),
+            row(p.note || null, "note"),
+            row(st === "adopted" ? `~${p.asof} indexation · omits future uplift` : null, "vintage")];
   } else if (d === "land_value") {
     title = p.resi_gbp_ha != null
       ? `£${(Number(p.resi_gbp_ha) / 1e6).toFixed(1)}M/ha` : (p.name || "Local authority");
@@ -7050,6 +7072,11 @@ async function renderDeepDiveViability() {
         factorRegion: areas.build_cost_index?.region || null,
         income: Number((areas.msoa_income || areas.lad_income || {}).income_median) || null,
         landValueHa: Number(areas.land_value?.resi_gbp_ha) || null,
+        // Authority CIL row (0059): null cil_pm2/status unknown -> engine
+        // falls back to its regional band; 0 is a real no-CIL value.
+        cilPm2: areas.cil_rates?.cil_pm2 == null ? null : Number(areas.cil_rates.cil_pm2),
+        cilStatus: areas.cil_rates?.status || null,
+        cilName: areas.cil_rates?.name || null,
       };
     } catch (_) { deep._marketCtx = null; }
     if (!document.getElementById("dd-viability-summary")) return;
@@ -7062,6 +7089,7 @@ async function renderDeepDiveViability() {
     areaHa: Number(r.developable_ha) || null,
     locationFactor: (mc && mc.factor) || null,
     landValueHa: (mc && mc.landValueHa) || null,
+    cilAreaPm2: (mc && mc.cilPm2 != null) ? mc.cilPm2 : null,
   }, SIFT.assumptions, { noSens: true });
   if (ap.profitOnCost == null) {
     el.innerHTML = `<p class="hint">No dwelling capacity to appraise yet.</p>`;
@@ -7149,6 +7177,7 @@ function renderAssemblySummary(notice) {
     units, ppm2: deep.ppm2 || null, region: (deep.station && deep.station.region) || null, areaHa: totHa,
     locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
     landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
+    cilAreaPm2: (deep._marketCtx && deep._marketCtx.cilPm2 != null) ? deep._marketCtx.cilPm2 : null,
   }, SIFT.assumptions, { noSens: true });
   const rows = plots.map(p => `
     <div class="dd-pl-row"><span>Plot ${p.properties.plot + 1} · ${(p.properties.area_ha || 0).toFixed(2)} ha</span>
@@ -8027,7 +8056,7 @@ function refreshViabPreview() {
   const r = computeAppraisal(
     { units: _viabCtx.units, ppm2: _viabCtx.ppm2, region: _viabCtx.region,
       areaHa: _viabCtx.areaHa, locationFactor: _viabCtx.locationFactor,
-      landValueHa: _viabCtx.landValueHa },
+      landValueHa: _viabCtx.landValueHa, cilAreaPm2: _viabCtx.cilAreaPm2 ?? null },
     SIFT.assumptions);
   host.innerHTML = viabPreviewHTML(r, _viabCtx.label);
 }
@@ -8109,7 +8138,8 @@ function openCalcAudit(ctx) {
   const a = SIFT.assumptions;
   const r = computeAppraisal(
     { units: ctx.units, ppm2: ctx.ppm2, region: ctx.region, areaHa: ctx.areaHa,
-      locationFactor: ctx.locationFactor, landValueHa: ctx.landValueHa },
+      locationFactor: ctx.locationFactor, landValueHa: ctx.landValueHa,
+      cilAreaPm2: ctx.cilAreaPm2 ?? null },
     a, { noSens: true });
   if (!r || r.profitOnCost == null || !r.audit) {
     alert("No dwelling capacity to appraise yet — turn on the developable-land tool first.");
@@ -8199,11 +8229,13 @@ function calcAuditHTML(ctx, a, r) {
 
   const marketUnits = t.units * (1 - (a.affordablePct || 0) / 100);
   const policy = step("5 · Policy costs (CIL · S106 · BNG)", [
-    row("CIL rate", t.cilBand == null
+    row("CIL rate", t.cilSource === "override"
       ? `council's adopted rate (entered in Viability variables)`
+      : t.cilSource === "authority"
+      ? `this authority's compiled rate (cil_rates dataset — adopted-schedule indicative, incl. Mayoral CIL where due)`
       : `£${N(t.cilBand, 0)}/m² regional indicative band × ${N(t.cilScale)} within-region value adjustment`,
       "£" + N(t.cilRate, 0) + "/m²"),
-    t.cilBand != null ? row("within-region value position", `achieved £${N(t.price)}/ft² ÷ regional average (clamped ×0.6–1.8), applied at ${N(a.policyLocalisePct ?? 100, 0)}%`,
+    t.cilSource === "band" ? row("within-region value position", `achieved £${N(t.price)}/ft² ÷ regional average (clamped ×0.6–1.8), applied at ${N(a.policyLocalisePct ?? 100, 0)}%`,
       "×" + N(t.inRegionRatio)) : "",
     row("CIL", `${N(marketUnits, 0)} market homes (affordable exempt — social housing relief) × ${N(t.unitM2, 1)} m² × £${N(t.cilRate, 0)}/m²`,
       M(t.cil)),
@@ -8396,6 +8428,7 @@ async function _generateSiteReport() {
       units, ppm2: deep.ppm2 || null, region: (deep.station && deep.station.region) || null, areaHa: totHa,
       locationFactor: mc.factor || null,
       landValueHa: mc.landValueHa || null,
+      cilAreaPm2: mc.cilPm2 != null ? mc.cilPm2 : null,
     }, SIFT.assumptions);
 
     const site = {
@@ -8657,7 +8690,8 @@ function buildSiteReportHTML(site) {
     <p style="font-size:12px;margin:0 0 6px">The complete arithmetic behind the headline figures above, with this site's numbers substituted into each formula, so the appraisal can be verified line by line. Identical to the engine that produced section 10 — rendered from the calculation's own trace, not re-derived.</p>
     ${calcAuditHTML({ units: site.units, ppm2: site.ppm2, areaHa: site.totHa,
         locationFactor: (site.marketCtx && site.marketCtx.factor) || null,
-        landValueHa: (site.marketCtx && site.marketCtx.landValueHa) || null },
+        landValueHa: (site.marketCtx && site.marketCtx.landValueHa) || null,
+        cilAreaPm2: (site.marketCtx && site.marketCtx.cilPm2 != null) ? site.marketCtx.cilPm2 : null },
       SIFT.assumptions, ap)}
   </section>
 
@@ -9656,6 +9690,7 @@ function buildDeepDivePanel(meta) {
       areaHa: r ? Number(r.developable_ha) : null,
       locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
       landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
+      cilAreaPm2: (deep._marketCtx && deep._marketCtx.cilPm2 != null) ? deep._marketCtx.cilPm2 : null,
       onChange: () => { renderDeepDiveViability(); if (SIFT.loaded) scoreSiftRows(); },
     };
   };
@@ -11546,7 +11581,7 @@ const VIAB_SCHEMA = [
   // the South East). S106 is itemised into its usual heads of terms so each
   // can be pinned to a council's published figure.
   { key: "cilPm2", group: "policy", label: "CIL rate (0 = regional band)", unit: "£/m²", step: 5, default: 0,
-    tip: "Community Infrastructure Levy, charged per m² of net new GIA (CIL Regs 2010 reg.40: R × A × Ip/Ic). Enter the council's ADOPTED rate from its charging schedule to pin it. At 0 an indicative regional band is used (London ~£250 incl. Mayoral CIL, South East ~£130, Midlands ~£50-60, much of the North £0-30, Scotland £0 — no CIL regime), scaled to the scheme's value position within its region. Affordable homes are exempt (social housing relief). Indexation is omitted, so treat the auto figure as a floor.", source: "Adopted charging schedules (2025-indexed midpoints)" },
+    tip: "Community Infrastructure Levy, charged per m² of net new GIA (CIL Regs 2010 reg.40: R × A × Ip/Ic). Enter the council's ADOPTED rate from its charging schedule to pin it. At 0, the authority's compiled rate from the CIL rates dataset is used where covered (see the map layer), else an indicative regional band (London ~£250 incl. Mayoral CIL, South East ~£130, Midlands ~£50-60, much of the North £0-30, Scotland £0 — no CIL regime), scaled to the scheme's value position within its region. Affordable homes are exempt (social housing relief). Indexation is omitted, so treat the auto figure as a floor.", source: "Adopted charging schedules (2025-indexed midpoints)" },
   { key: "s106EducationPerUnit", group: "policy", label: "S106 · education", unit: "£k/unit", step: 0.5, default: 6,
     tip: "School places: pupil yield (~0.2-0.4/dwelling by type) × DfE benchmark cost per place (~£25k primary, ~£31k secondary, far more for SEND). Blended requests typically £4-8k+/dwelling on houses, less on flats. Scaled by the regional build-cost index (DfE applies location multipliers).", source: "DfE 'Securing developer contributions for education' + school delivery cost benchmarking" },
   { key: "s106HealthPerUnit", group: "policy", label: "S106 · healthcare", unit: "£k/unit", step: 0.1, default: 0.8,
@@ -11708,9 +11743,15 @@ function computeAppraisal(inputs, a, opts) {
   const regionMult = regionPriceMult(inputs.region);
   const inRegionRatio = refPsf > 0 && regionMult > 0
     ? Math.min(1.8, Math.max(0.6, price / (refPsf * regionMult))) : 1;
-  const cilScale = (a.cilPm2 || 0) > 0 ? 1
+  // Rate priority: the user's pinned adopted rate, else the AUTHORITY's
+  // compiled rate (cil_rates dataset — already local, no scaling), else the
+  // regional band scaled by within-region value position.
+  const cilAuthority = inputs.cilAreaPm2 == null ? null : Number(inputs.cilAreaPm2);
+  const cilScale = ((a.cilPm2 || 0) > 0 || cilAuthority != null) ? 1
     : 1 + (inRegionRatio - 1) * ((a.policyLocalisePct ?? 100) / 100);
-  const cilRate = (a.cilPm2 || 0) > 0 ? a.cilPm2 : regionCilPm2(inputs.region) * cilScale;
+  const cilRate = (a.cilPm2 || 0) > 0 ? a.cilPm2
+    : cilAuthority != null ? cilAuthority
+    : regionCilPm2(inputs.region) * cilScale;
   const cil = units * (1 - affFrac) * unitM2 * cilRate;
   const s106PerUnitK = (a.s106EducationPerUnit || 0) + (a.s106HealthPerUnit || 0)
                      + (a.s106OpenSpacePerUnit || 0) + (a.s106TransportPerUnit || 0);
@@ -11853,7 +11894,9 @@ function computeAppraisal(inputs, a, opts) {
       buildBase, abnormals, prepInfra, hardCost, fees, contingency,
       refPsf, valueRatio, policyCosts, salesCosts,
       cil, cilRate, cilScale, inRegionRatio, s106, s106PerUnitK, bng,
-      cilBand: (a.cilPm2 || 0) > 0 ? null : regionCilPm2(inputs.region),
+      cilSource: (a.cilPm2 || 0) > 0 ? "override"
+               : cilAuthority != null ? "authority" : "band",
+      cilBand: regionCilPm2(inputs.region),
       mhclgLand, land, preCon, build, sell, overlap, months,
       equityCap, interest, financeFee, nonLand,
     },
@@ -11884,6 +11927,7 @@ function computeViability(row) {
       // Without this the two surfaces contradicted each other on land cost.
       areaHa: row.effHa ?? row.developableHa ?? null,
       landValueHa: row.landValueHa ?? null,
+      cilAreaPm2: row.cilPm2 ?? null,
       // Localise BUILD costs too, not just sales: the regional index from the
       // build-cost proxy, so a Yorkshire scheme isn't costed at London rates.
       locationFactor: regionCostFactor(row.region) },
@@ -11952,6 +11996,11 @@ async function loadSiftData() {
     const landValuesP = sb.rpc("station_land_values")
       .then(r => new Map(Object.entries(r.data || {}).map(([k, v]) => [k, Number(v) || null])))
       .catch(() => new Map());
+    // Authority CIL £/m² per station (0059) — same uncapped-jsonb pattern.
+    // 0 is a REAL value (no CIL adopted); absent keys fall back to the band.
+    const cilRatesP = sb.rpc("station_cil_rates")
+      .then(r => new Map(Object.entries(r.data || {}).map(([k, v]) => [k, v == null ? null : Number(v)])))
+      .catch(() => new Map());
     const PAGE = 1000;
     let data = [], from = 0;
     for (;;) {
@@ -11966,9 +12015,11 @@ async function loadSiftData() {
       from += PAGE;
     }
     const landValues = await landValuesP;
+    const cilRates = await cilRatesP;
     SIFT.rows = (data || []).map(r => ({
       crs: r.crs, country: r.country || "england", tier: r.tier, inSettlement: !!r.in_settlement, densityFloor: r.density_floor,
       landValueHa: landValues.get(r.crs) ?? null,
+      cilPm2: cilRates.get(r.crs) ?? null,
       developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
       largestPlotHa: r.largest_plot_ha == null ? null : Number(r.largest_plot_ha),
       wellConnected: !!(r.stations && r.stations.well_connected),
@@ -12295,6 +12346,7 @@ function renderSiftStep() {
       units: top.effYield ?? (top.yield || 0), ppm2: top.catchmentPpm2, region: top.region,
       areaHa: top.effHa ?? top.developableHa ?? null,
       landValueHa: top.landValueHa ?? null,
+      cilAreaPm2: top.cilPm2 ?? null,
       locationFactor: regionCostFactor(top.region),   // preview = sift arithmetic
       onChange: () => { scoreSiftRows(); updateSiftFunnel(); },
     } : null);

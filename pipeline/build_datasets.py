@@ -225,6 +225,7 @@ ALL_DATASETS = [
     "ofcom_fibre", "census_students", "student_accom",
     "building_height",
     "build_cost_index", "lad_income", "msoa_income", "land_value",
+    "cil_rates",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -2060,6 +2061,135 @@ def build_land_value():
     return {key: rows}
 
 
+def build_cil_rates():
+    """Residential CIL rates by charging authority — dataset cil_rates.
+
+    The rates table is COMMITTED (pipeline/data/cil_rates.csv): one row per
+    authority with resi_min/typ/max (£/m², ~2025-indexed) spanning the adopted
+    charging schedule's zones, plus the Mayoral CIL2 line for London, and
+    explicit status 'none' rows for authorities that never adopted CIL (a real
+    £0, distinct from no-data). CIL_RATES_SRC (URL or path) overrides it with
+    the same column shape. Joined to LAD polygons BY NORMALISED NAME (the CSV
+    is hand-compiled from council documents, which use names not ONS codes).
+
+    Every LAD polygon is emitted so the layer reads completely:
+      matched adopted  -> rates + cil_pm2 = resi_typ + mayoral
+      matched none     -> cil_pm2 = 0 (genuinely no CIL)
+      Scottish LADs    -> cil_pm2 = 0, status no_regime (S75 instead of CIL)
+      anything else    -> status unknown, cil_pm2 null (engine falls back to
+                          its regional band; renders as no-data, not zero)
+
+    All figures are indicative midpoints of zoned schedules and omit future
+    indexation — the viability engine frames them as a floor and lets an exact
+    adopted rate override per project."""
+    key = "cil_rates"
+    bpath, bhow = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries to join CIL rates onto")
+        _note(key, "no LAD boundaries")
+        return {}
+    fpath, fhow = _resolve_source(key, ["CIL_RATES_SRC"], None, "cil-rates.csv")
+    if fpath is None:
+        committed = ROOT / "pipeline" / "data" / "cil_rates.csv"
+        if committed.exists():
+            fpath, fhow = committed, "committed rates table"
+        else:
+            _warn(key, "no CIL rates CSV (committed file missing and "
+                       "CIL_RATES_SRC unset)")
+            _note(key, "no rates table")
+            return {}
+    import pandas as pd
+    print(f"  [{key}] reading {fpath.name} ({fhow}) ...")
+    df = pd.read_csv(fpath, comment="#", dtype=str).fillna("")
+    need = {"name", "status", "resi_typ"}
+    if not need.issubset(set(df.columns)):
+        _warn(key, f"rates CSV needs {sorted(need)} columns, got "
+                   f"{list(df.columns)}")
+        _note(key, "unrecognised rates CSV")
+        return {}
+
+    def _norm_name(s):
+        s = re.sub(r"[^a-z0-9 ]", " ", str(s).lower())
+        s = re.sub(r"\b(city of|county of|royal borough of|london borough of|"
+                   r"district|borough|council|ua|the|city)\b", " ", s)
+        return re.sub(r"\s+", " ", s.replace(" and ", " ")).strip()
+
+    by_norm = {}
+    for _, r in df.iterrows():
+        nm = _norm_name(r["name"])
+        if nm:
+            by_norm[nm] = r
+
+    gdf = gpd.read_file(bpath)
+    code_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*cd", str(c).lower()):
+            code_col = c
+            break
+    code_col = code_col or _find_col(gdf, ["lad_code", "code", "areacd"],
+                                     contains=True)
+    name_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*nm", str(c).lower()):
+            name_col = c
+            break
+
+    SRC_ADOPTED = ("adopted charging schedule, ~2025-indexed INDICATIVE "
+                   "midpoints — verify against the council's current schedule")
+    n_hit = n_unknown = 0
+
+    def _num(r, k):
+        try:
+            v = float(str(r.get(k, "")).strip())
+            return v if v == v else 0.0   # NaN guard
+        except (TypeError, ValueError):
+            return 0.0
+
+    def cil_props(f):
+        nonlocal n_hit, n_unknown
+        code = str(_cell(f, code_col) or "").strip()
+        nm = str(_cell(f, name_col) or "").strip()
+        r = by_norm.get(_norm_name(nm))
+        if r is None:
+            if code.startswith("S"):
+                return {"lad_code": code, "status": "no_regime", "cil_pm2": 0,
+                        "asof": "2025",
+                        "src": "Scotland has no CIL regime — planning "
+                               "obligations run through S75 instead"}
+            n_unknown += 1
+            return {"lad_code": code, "status": "unknown", "cil_pm2": None,
+                    "src": "rate not yet compiled — the viability engine "
+                           "falls back to its regional band here"}
+        n_hit += 1
+        status = str(r["status"]).strip()
+        if status == "none":
+            return {"lad_code": code, "status": "none", "cil_pm2": 0,
+                    "asof": str(r.get("asof", "")).strip() or None,
+                    "src": "authority has not adopted CIL — the charge is "
+                           "genuinely zero (S106 still applies)"}
+        typ, mn, mx = _num(r, "resi_typ"), _num(r, "resi_min"), _num(r, "resi_max")
+        may = _num(r, "mayoral")
+        note = str(r.get("note", "")).strip()
+        return {"lad_code": code, "status": status,
+                "resi_min": round(mn), "resi_typ": round(typ),
+                "resi_max": round(mx), "mayoral": round(may),
+                "cil_pm2": round(typ + may),
+                "asof": str(r.get("asof", "")).strip() or None,
+                "note": note or None, "src": SRC_ADOPTED}
+
+    rows = _emit(gdf, key, name_col=name_col, id_col=code_col, want="polygon",
+                 props_fn=cil_props)
+    print(f"  [{key}] {n_hit} authorities matched from the table, "
+          f"{n_unknown} unmatched (regional-band fallback)")
+    if n_hit < 100:
+        _warn(key, f"only {n_hit} authorities matched by name — check the "
+                   "CSV's name spellings against the boundary file")
+    _note(key, f"{fhow}; {n_hit} authorities matched", len(rows))
+    return {key: rows}
+
+
 def build_income():
     """Household earnings on LAD polygons — dataset lad_income.
 
@@ -2652,6 +2782,7 @@ GROUPS = (
         (["lad_income"], build_income, []),
         (["msoa_income"], build_msoa_income, []),
         (["land_value"], build_land_value, []),
+        (["cil_rates"], build_cil_rates, []),
     ]
 )
 
