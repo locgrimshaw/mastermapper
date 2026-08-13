@@ -1420,7 +1420,7 @@ const LAYER_INFO = {
   land_hes:               { about: "Properties in the care of Historic Environment Scotland.", source: "Historic Environment Scotland open data (OGL v3)" },
   lpa_boundary:        { about: "Local planning authority boundaries — who decides planning applications where. Complete for England.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   local_plan_boundary: { about: "Adopted and emerging local plan areas. Coverage is still partial — only LPAs that have published to the platform.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
-  local_plan_housing:  { about: "How much housing each local plan still has to find: the plan's requirement minus what it has already allocated to sites and what already holds permission. Green = the requirement is covered; yellow through deep red = the shortfall in homes, up to 30,000+. Grey = no usable numbers — either the plan publishes none or no plan is recorded for that area. Coverage is honest, not total: of 364 plan areas, 338 have a plan record and 190 publish enough to compute a gap. NOTE this is PLAN-LEVEL arithmetic on the plan boundary, not allocated site polygons — there is no national dataset of those, they remain a per-council publication. Hover for the requirement, the allocated/committed split, adoption date and whether the plan is past its 5-year review.", source: "MHCLG planning.data.gov.uk: local-plan, local-plan-housing, local-plan-timetable (OGL v3)" },
+  local_plan_housing:  { about: "How much housing each local plan still has to find: the plan's requirement minus its published supply (sites allocated, schemes already committed, plus the windfall and broad-location allowances where given). Green = the requirement is covered; yellow through deep red = the shortfall in homes, up to ~11,000. Grey = no gap can be stated — no plan record, no housing figures, or only ONE side of the supply published, and a blank cell means 'not published', never zero. Coverage is honest, not total: of 364 plan areas, 338 have a plan record, 143 publish enough to compute a gap and 134 publish only part of their supply. NOTE this is PLAN-LEVEL arithmetic on the plan boundary, not allocated site polygons — there is no national dataset of those, they remain a per-council publication. Hover for the requirement, the supply split, adoption date and whether the plan is past its 5-year review.", source: "MHCLG planning.data.gov.uk: local-plan, local-plan-housing, local-plan-timetable (OGL v3)" },
   article4:            { about: "Article 4 directions removing permitted development rights — often HMO conversion, so a strong student-housing pressure signal.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   tpo_zone:            { about: "Tree preservation order zones.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   design_code_area:    { about: "Areas covered by an adopted design code.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
@@ -2196,18 +2196,20 @@ function renderOverlay(key, def, fc) {
           150, "#f59f00", 250, "#e8590c", 450, "#c92a2a"]]
       : def.dataset === "local_plan_housing"
       // Three genuinely different states, and they must not be confusable:
-      //   no gap key   -> grey: the plan publishes no usable numbers (or there
-      //                   is no plan record at all). Absence of evidence.
-      //   gap == 0     -> green: the requirement is fully covered by
-      //                   allocations + commitments.
+      //   no gap key   -> grey: the plan publishes no usable numbers, only one
+      //                   side of its supply, or there is no plan record at
+      //                   all. Absence of evidence, and it stays that way.
+      //   gap == 0     -> green: the requirement is fully covered by the
+      //                   published supply.
       //   gap  > 0     -> the shortfall in homes, yellow through to deep red.
-      // Steps, not an interpolation: the top authority is 30,700 homes short
-      // while the median is ~2,000, so a linear ramp would leave almost
-      // everywhere the same pale colour.
+      // Steps, not an interpolation: the worst authority is 11,000 homes short
+      // against a ~1,900 median, so a linear ramp would leave almost
+      // everywhere the same pale colour. Breaks are octiles of the non-zero
+      // gaps, so the colours divide the country into real groups.
       ? ["case", ["!", ["has", "gap"]], "rgba(160,170,175,0.4)",
          ["step", ["coalesce", ["to-number", ["get", "gap"]], 0],
-          "#2f9e44", 1, "#94d82d", 500, "#ffd43b", 1500, "#ffa94d",
-          3000, "#f76707", 6000, "#e8590c", 10000, "#c92a2a", 20000, "#7f0000"]]
+          "#2f9e44", 1, "#94d82d", 300, "#ffd43b", 750, "#ffa94d",
+          1500, "#f76707", 3000, "#e8590c", 5500, "#c92a2a", 9000, "#7f0000"]]
       : def.dataset === "build_cost_index"
       // Relative build cost: green cheaper-than-national -> red dearer.
       ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "factor"]], 1],
@@ -3745,19 +3747,27 @@ function hoverContentForOverlay(def, p) {
       ? "Local plan — no plan recorded on the platform"
       : p.gap != null
       ? "Local plan housing — requirement vs supply"
+      : p.status === "partial_supply"
+      ? "Local plan housing — supply only part-published"
       : "Local plan — no housing numbers published";
     rows = [row(p.gap != null
                 ? (Number(p.gap) > 0
                    ? `${num(p.gap)} homes still to find`
-                   : "requirement covered by allocations + commitments")
+                   : "requirement covered by the published supply")
                 : null, p.pct_met != null ? `${p.pct_met}% of the requirement met` : "shortfall"),
             row(num(p.required), "requirement (plan period)"),
-            row(p.allocated != null || p.committed != null
+            row(p.allocated != null || p.committed != null || p.windfall != null
                 ? [p.allocated != null ? `${num(p.allocated)} allocated` : null,
                    p.committed != null ? `${num(p.committed)} committed` : null,
-                   p.windfall != null ? `${num(p.windfall)} windfall` : null]
+                   p.windfall != null ? `${num(p.windfall)} windfall` : null,
+                   p.broad_locations != null ? `${num(p.broad_locations)} broad locations` : null]
                   .filter(Boolean).join(" · ")
                 : null, "supply as published"),
+            // A blank cell is "not published", never zero — so no gap is shown
+            // and the hover says which side is missing rather than implying
+            // the authority has allocated nothing.
+            row(p.missing ? `no ${p.missing} figure published — gap not shown` : null,
+                "why no shortfall"),
             row(p.plan_name && p.plan_name !== p.name ? p.plan_name : null, "plan"),
             row(p.adopted
                 ? `adopted ${p.adopted}${p.plan_age_yrs != null ? ` · ${p.plan_age_yrs} yrs old` : ""}` +
@@ -3767,7 +3777,7 @@ function hoverContentForOverlay(def, p) {
                 "plan period"),
             row(p.last_event ? `${p.last_event.replace(/-/g, " ")}${p.last_event_date ? ` (${p.last_event_date})` : ""}` : null,
                 "latest milestone"),
-            row(p.gap == null && p.status !== "no_plan_record"
+            row(p.status === "plan_only"
                 ? "plan on the platform, but no housing figures published" : null, "coverage")];
   } else if (d === "land_value") {
     title = p.resi_gbp_ha != null

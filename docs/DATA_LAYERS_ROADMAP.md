@@ -141,8 +141,11 @@ Three tiers were scoped:
    allocated, committed, windfall, broad locations → the **gap** each plan
    still has to close, plus adoption date, plan age against the 5-year review,
    stage and latest milestone. National, OGL, one pipeline pass. Coverage: 364
-   boundaries, 338 with a plan record, 190 with numbers good enough to compute
-   a gap. No site geometry — the polygon is the plan area.
+   boundaries, 338 with a plan record, **143** with numbers good enough to
+   compute a gap and 134 publishing only part of their supply (shown, but with
+   no gap — a blank cell is "not published", not zero, and treating it as zero
+   put the wrong authorities at the top of the ranking). No site geometry —
+   the polygon is the plan area.
 2. **Better brownfield surfacing (not started).** Every LPA must publish a
    brownfield land register; `brownfield-land` (points, national) and
    `brownfield-site` (polygons, mostly London) are already loaded but are not

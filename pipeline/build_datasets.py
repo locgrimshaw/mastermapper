@@ -2265,9 +2265,11 @@ def build_local_plan_housing():
       local-plan-timetable  milestone events (latest = current stage)
 
     Coverage is honest, not total: ~338 of 364 boundaries have a plan record
-    and ~238 have the housing numbers. Boundaries with a plan but no numbers
-    still carry name/adopted-date/stage and are flagged has_numbers=false, so
-    the map distinguishes 'no gap' from 'not published'."""
+    and ~150 publish enough to compute a gap. Boundaries with a plan but no
+    usable numbers still carry name/adopted-date/stage and are flagged
+    has_numbers=false, so the map distinguishes 'no gap' from 'not
+    published' — and a plan that publishes only ONE side of its supply is
+    'partial_supply', shown with its components but no gap."""
     key = "local_plan_housing"
     bpath, bhow = _resolve_source(
         "local_plan_boundary", ["LOCAL_PLAN_BOUNDARY_SRC"],
@@ -2304,7 +2306,11 @@ def build_local_plan_housing():
         with open(hpath, newline="", encoding="utf-8-sig") as fh:
             for r in csv.DictReader(fh):
                 hous[r.get("local-plan", "")] = r
-    events = {}
+    # Most timetable rows carry no event-date (323 of 2,700), so the "latest
+    # milestone" is thin by nature — but the dated ADOPTION events are worth
+    # harvesting separately: the plan table only fills adopted-date for 104 of
+    # 987 plans, and the timetable recovers a handful more.
+    events, adopted_ev = {}, {}
     tpath, _thow = _resolve_source(key, ["LOCAL_PLAN_TIMETABLE_SRC"],
                                    PLANNING_DATA_BASE + "local-plan-timetable.csv",
                                    "local-plan-timetable.csv")
@@ -2312,8 +2318,13 @@ def build_local_plan_housing():
         with open(tpath, newline="", encoding="utf-8-sig") as fh:
             for r in csv.DictReader(fh):
                 lp, d = r.get("local-plan", ""), (r.get("event-date") or "")[:10]
-                if lp and d and d > (events.get(lp, ("", ""))[0]):
-                    events[lp] = (d, r.get("local-plan-event", ""))
+                ev = r.get("local-plan-event", "")
+                if not (lp and d):
+                    continue
+                if d > (events.get(lp, ("", ""))[0]):
+                    events[lp] = (d, ev)
+                if ev in ("plan-adopted", "adopted") and d > adopted_ev.get(lp, ""):
+                    adopted_ev[lp] = d
 
     # boundary reference -> the plan that best speaks for it: prefer one with
     # housing numbers, then the furthest-progressed stage, then most recent.
@@ -2323,18 +2334,27 @@ def build_local_plan_housing():
         if b:
             by_boundary.setdefault(b, []).append(pl)
 
-    def _plan_key(pl):
-        return (1 if pl["reference"] in hous else 0,
-                LOCAL_PLAN_STAGE_RANK.get(
-                    (pl.get("local-plan-process") or "").strip(), 0),
-                (pl.get("adopted-date") or "")[:10],
-                (pl.get("period-end-date") or "")[:10])
-
     def _int(v):
         try:
             return int(float(str(v).replace(",", "").strip()))
         except (TypeError, ValueError):
             return None
+
+    def _complete(ref):
+        """Does this plan's housing row support a trustworthy gap? — a
+        requirement AND BOTH core supply components."""
+        h = hous.get(ref)
+        return bool(h) and all(_int(h.get(k)) is not None for k in
+                               ("required-housing", "allocated-housing",
+                                "committed-housing"))
+
+    def _plan_key(pl):
+        return (1 if _complete(pl["reference"]) else 0,
+                1 if pl["reference"] in hous else 0,
+                LOCAL_PLAN_STAGE_RANK.get(
+                    (pl.get("local-plan-process") or "").strip(), 0),
+                (pl.get("adopted-date") or "")[:10],
+                (pl.get("period-end-date") or "")[:10])
 
     today = _dt.date.today()
     n_plan = n_num = 0
@@ -2356,7 +2376,7 @@ def build_local_plan_housing():
         comm = _int(h.get("committed-housing"))
         wind = _int(h.get("windfall-housing"))
         broad = _int(h.get("broad-locations-housing"))
-        adopted = (pl.get("adopted-date") or "")[:10]
+        adopted = (pl.get("adopted-date") or "")[:10] or adopted_ev.get(pl["reference"], "")
         age = None
         if len(adopted) == 10:
             try:
@@ -2381,11 +2401,21 @@ def build_local_plan_housing():
             "src": "planning.data.gov.uk local-plan + local-plan-housing "
                    "(OGL v3) — plan-level figures as published by the LPA",
         }
-        # The number that matters: what the plan still has to find. Only
-        # computed where a requirement AND at least one supply side exist —
-        # never inferred from a missing figure.
-        if req is not None and (alloc is not None or comm is not None):
-            supply = (alloc or 0) + (comm or 0)
+        # The number that matters: what the plan still has to find. It needs
+        # the requirement AND BOTH core supply components — allocations and
+        # commitments. A blank cell means the LPA published no figure, NOT
+        # zero, and treating it as zero is not a conservative assumption, it
+        # is a wrong one: it was inventing 30,748 homes of shortfall for
+        # Cornwall (no allocations published) and 24,325 for Sheffield (no
+        # commitments published), which put exactly the wrong authorities at
+        # the top of the ranking. 47 of 190 areas were affected, so a quarter
+        # of the map — and the loudest quarter. Those now read as
+        # 'partial_supply': the published components are kept and shown, the
+        # gap is withheld.
+        # Windfall and broad locations ARE counted where published: they are
+        # supply components of the plan's own trajectory, not extras.
+        if req is not None and alloc is not None and comm is not None:
+            supply = alloc + comm + (wind or 0) + (broad or 0)
             out["supply"] = supply
             out["gap"] = max(0, req - supply)
             out["pct_met"] = round(100.0 * supply / req, 1) if req > 0 else None
@@ -2394,7 +2424,14 @@ def build_local_plan_housing():
             n_num += 1
         else:
             out["has_numbers"] = False
-            out["status"] = "plan_only"
+            out["status"] = ("partial_supply"
+                             if any(v is not None
+                                    for v in (req, alloc, comm, wind, broad))
+                             else "plan_only")
+            missing = [n for n, v in (("requirement", req), ("allocations", alloc),
+                                      ("commitments", comm)) if v is None]
+            if missing:
+                out["missing"] = ", ".join(missing)
         return out
 
     gdf = gpd.read_file(bpath)
