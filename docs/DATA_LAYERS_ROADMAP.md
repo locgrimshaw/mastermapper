@@ -115,3 +115,47 @@ designations = a "DC site screen", again mirroring the sift-funnel pattern.
 5. **OS Terrain 50 slope tiles** — flatness for DC siting (raster route).
 6. **CCOD "Local Authority" + INSPIRE join** — council-owned land polygons.
 7. Rents, FHRS amenity density, water availability, NSIP pipeline, HMO registers.
+
+---
+
+## Local plan housing allocations — what is and is not available (Aug 2026)
+
+Asked whether LPA-designated housing sites can be mapped nationally. Probed
+`files.planning.data.gov.uk` directly rather than trusting the dataset index:
+
+| Slug | Result |
+|---|---|
+| `site-allocation`, `housing-allocation`, `local-plan-site`, `site-allocations` | **403** — object does not exist (S3 returns 403, not 404, for a missing key) |
+| `local-plan-boundary`, `brownfield-land`, `brownfield-site` | 206 — exists |
+| `local-plan`, `local-plan-housing`, `local-plan-timetable` | 206 — exists (CSV) |
+
+**There is no national dataset of allocated housing site polygons.** The
+platform models allocations as a per-council publication, and only a minority
+of LPAs have published anything conforming. That is a hard constraint, not an
+ingestion problem to engineer around.
+
+Three tiers were scoped:
+
+1. **Plan-level arithmetic (BUILT — dataset `local_plan_housing`).** The three
+   plan CSVs joined onto `local-plan-boundary` polygons: requirement,
+   allocated, committed, windfall, broad locations → the **gap** each plan
+   still has to close, plus adoption date, plan age against the 5-year review,
+   stage and latest milestone. National, OGL, one pipeline pass. Coverage: 364
+   boundaries, 338 with a plan record, 190 with numbers good enough to compute
+   a gap. No site geometry — the polygon is the plan area.
+2. **Better brownfield surfacing (not started).** Every LPA must publish a
+   brownfield land register; `brownfield-land` (points, national) and
+   `brownfield-site` (polygons, mostly London) are already loaded but are not
+   presented as *deliverable capacity*. The registers carry
+   `minimum-net-dwellings` / `maximum-net-dwellings` and a planning-status
+   field that we currently drop.
+3. **Harvesting allocation polygons council-by-council (not started).** Many
+   LPAs publish policies-map allocations on their own ArcGIS/GeoServer
+   endpoints. Real coverage, real geometry, but no common schema — a
+   per-authority harvester with a hand-maintained endpoint registry, and it
+   goes stale as plans are replaced. London first (the London Datastore and
+   the boroughs' Local Plan policies maps are the most consistently published).
+
+Deliberately **not** wired into the station sift: a plan-level shortfall is an
+authority-wide policy signal, not a site attribute, and averaging it into a
+per-station score would launder a coarse number into a precise-looking one.
