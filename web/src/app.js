@@ -9858,11 +9858,26 @@ function catchmentZoneFeatures() {
 // Stable id for a zone feature: England LSOA code or Scotland Data Zone code.
 function zoneId(props) { return (props && (props.lsoa_code || props.data_zone)) || null; }
 
+// Cheap bbox-overlap gate in front of turf.intersect. intersect costs
+// milliseconds per polygon, and at national zoom the loaded tiles hold tens
+// of thousands of zones — running it on every one froze the UI for 30s+ on
+// each deep-dive open. A single-pass bbox reject cuts the intersect set to
+// the handful of zones actually near the (sub-km) catchment.
+function _zoneBboxHits(catchment) {
+  const cb = turf.bbox(catchment);
+  return f => {
+    let fb;
+    try { fb = turf.bbox(f); } catch (_) { return false; }
+    return fb[0] <= cb[2] && cb[0] <= fb[2] && fb[1] <= cb[3] && cb[1] <= fb[3];
+  };
+}
+
 function areaWeightedScore(catchment) {
   if (!window.turf) return { domains: null, parts: 0 };
   const feats = catchmentZoneFeatures();
   if (!feats.length) return { domains: null, parts: 0 };
 
+  const near = _zoneBboxHits(catchment);
   const seen = new Set();
   let totalArea = 0;
   const contribs = [];   // { a, props }
@@ -9870,6 +9885,7 @@ function areaWeightedScore(catchment) {
     const code = zoneId(f.properties);
     if (!code || seen.has(code)) continue;
     seen.add(code);
+    if (!near(f)) continue;
     let inter;
     try {
       inter = turf.intersect(turf.featureCollection([catchment, f]));
@@ -9928,11 +9944,13 @@ function areaWeightedPopulation(catchment) {
   // House-price value over the catchment, area-weighted by each LSOA's overlap
   // (the polygons carry price_ppm2 / price_median from build_price_choropleth).
   let ppmSum = 0, ppmW = 0, mpSum = 0, mpW = 0;
+  const near = _zoneBboxHits(catchment);
   for (const f of feats) {
     const props = f.properties || {};
     const code = zoneId(props);
     if (!code || seen.has(code)) continue;
     seen.add(code);
+    if (!near(f)) continue;
 
     let inter;
     try {
