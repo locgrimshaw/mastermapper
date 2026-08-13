@@ -225,7 +225,7 @@ ALL_DATASETS = [
     "ofcom_fibre", "census_students", "student_accom",
     "building_height",
     "build_cost_index", "lad_income", "msoa_income", "land_value",
-    "cil_rates",
+    "cil_rates", "lsoa_boundary",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -2190,6 +2190,51 @@ def build_cil_rates():
     return {key: rows}
 
 
+def build_lsoa_boundary():
+    """LSOA boundaries into the database — dataset lsoa_boundary.
+
+    The polygons already ship with the app for the deprivation tiles
+    (web/data/lsoa_imd.geojson, ~33.7k features, committed), but they existed
+    ONLY as tiles: the lsoa_imd TABLE holds centroids, so nothing server-side
+    could assign a sale to its neighbourhood. rebuild_lsoa_prices() needs real
+    polygons to point-in-polygon 2M Land Registry comparables, so they are
+    loaded here through the ordinary dataset path.
+
+    Local file, no download: LSOA_BOUNDARY_SRC overrides it if a newer
+    vintage is ever dropped in."""
+    key = "lsoa_boundary"
+    fpath, fhow = _resolve_source(key, ["LSOA_BOUNDARY_SRC"], None,
+                                  "lsoa-boundaries.geojson")
+    if fpath is None:
+        committed = ROOT / "web" / "data" / "lsoa_imd.geojson"
+        if committed.exists():
+            fpath, fhow = committed, "committed app layer"
+        else:
+            _warn(key, "no LSOA polygon file (web/data/lsoa_imd.geojson "
+                       "missing and LSOA_BOUNDARY_SRC unset)")
+            _note(key, "no boundary file")
+            return {}
+    print(f"  [{key}] reading {fpath.name} ({fhow}) ...")
+    gdf = gpd.read_file(fpath)
+    code_col = _find_col(gdf, ["lsoa_code", "lsoa11cd", "lsoa21cd", "code"],
+                         contains=True)
+    lad_col = _find_col(gdf, ["lad_name", "lad_nm", "authority"], contains=True)
+    if code_col is None:
+        _warn(key, f"no LSOA code column, got {list(gdf.columns)[:12]}")
+        _note(key, "no code column")
+        return {}
+
+    def lsoa_props(f):
+        return {"lsoa_code": str(_cell(f, code_col) or "").strip(),
+                "lad_name": (str(_cell(f, lad_col)).strip()
+                             if lad_col is not None else None)}
+
+    rows = _emit(gdf, key, name_col=lad_col, id_col=code_col, want="polygon",
+                 props_fn=lsoa_props)
+    _note(key, f"{fhow}; {len(rows)} LSOA polygons", len(rows))
+    return {key: rows}
+
+
 def build_income():
     """Household earnings on LAD polygons — dataset lad_income.
 
@@ -2783,6 +2828,7 @@ GROUPS = (
         (["msoa_income"], build_msoa_income, []),
         (["land_value"], build_land_value, []),
         (["cil_rates"], build_cil_rates, []),
+        (["lsoa_boundary"], build_lsoa_boundary, []),
     ]
 )
 

@@ -41,19 +41,37 @@ jobs:
             echo ""
           done
           # Sold-price choropleths on real boundaries (LSOA close in, LAD
-          # nationally) — every Land Registry comparable inside each area,
-          # medians + EPC-measured £/m² + national percentile ranks. Minutes
-          # each: a 2M-point-in-polygon join. MUST run here rather than from a
-          # SQL client, whose disconnect rolls the transaction back.
-          for fn in rebuild_lad_prices rebuild_lsoa_prices; do
-            echo "— $fn"
-            curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/$fn" \
+          # nationally): every Land Registry comparable inside each area ->
+          # medians, EPC-measured £/m², houses/flats split, trend.
+          # CHUNKED: a 2M-point-in-polygon join over all areas exceeds the API
+          # gateway's ~120 s ceiling and returns 504 even though the statement
+          # is healthy (same lesson as the four-band price grid). Each call
+          # takes a hash-slice; part 0 clears the dataset first. National
+          # percentile ranks span every area, so they cannot be computed
+          # inside a slice — finalise_price_pct ranks the finished dataset.
+          rebuild_chunked () {   # rebuild_chunked <fn> <dataset> <parts>
+            local fn="$1" ds="$2" parts="$3" p
+            for p in $(seq 0 $((parts - 1))); do
+              echo "— $fn part $p/$parts"
+              curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/$fn" \
+                -H "apikey: $SUPABASE_SERVICE_KEY" \
+                -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{\"p_part\": $p, \"p_parts\": $parts}" --max-time 1500 \
+                || { echo "::error::$fn part $p failed — $ds is INCOMPLETE"; fail=1; }
+              echo ""
+            done
+            echo "— finalise_price_pct $ds"
+            curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/finalise_price_pct" \
               -H "apikey: $SUPABASE_SERVICE_KEY" \
               -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-              -H "Content-Type: application/json" -d '{}' --max-time 1500 \
-              || { echo "::error::$fn failed — that choropleth is STALE"; fail=1; }
+              -H "Content-Type: application/json" -d "{\"p_dataset\": \"$ds\"}" \
+              --max-time 1500 \
+              || { echo "::error::finalise_price_pct $ds failed — the choropleth has no colour basis"; fail=1; }
             echo ""
-          done
+          }
+          rebuild_chunked rebuild_lad_prices  lad_prices   6
+          rebuild_chunked rebuild_lsoa_prices lsoa_prices 12
           curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_lad_affordability" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
