@@ -2306,25 +2306,43 @@ def build_local_plan_housing():
         with open(hpath, newline="", encoding="utf-8-sig") as fh:
             for r in csv.DictReader(fh):
                 hous[r.get("local-plan", "")] = r
-    # Most timetable rows carry no event-date (323 of 2,700), so the "latest
-    # milestone" is thin by nature — but the dated ADOPTION events are worth
-    # harvesting separately: the plan table only fills adopted-date for 104 of
-    # 987 plans, and the timetable recovers a handful more.
+    # Milestones come from TWO timetables, because the platform is migrating
+    # between them and each is thin on its own:
+    #   local-plan-timetable  the older collection — 2,700 rows but only 323
+    #                         carry an event-date at all
+    #   plan-timetable        the current one (keyed `plan`/`plan-event`, with
+    #                         actual-date AND predicted-date) — 8,797 rows,
+    #                         3,749 dated
+    # Adoption dates matter most: the plan table fills adopted-date for just
+    # 104 of 987 plans, and the 5-year-review flag is useless without one. The
+    # new timetable adds 253 dated adoptions on top, so the flag goes from
+    # mostly silent to mostly answerable. Read old first, new second — later
+    # writes win where both have an opinion.
     events, adopted_ev = {}, {}
-    tpath, _thow = _resolve_source(key, ["LOCAL_PLAN_TIMETABLE_SRC"],
-                                   PLANNING_DATA_BASE + "local-plan-timetable.csv",
-                                   "local-plan-timetable.csv")
-    if tpath is not None:
-        with open(tpath, newline="", encoding="utf-8-sig") as fh:
+
+    def _timetable(env, slug, plan_col, event_col, date_cols):
+        path, _ = _resolve_source(key, [env], PLANNING_DATA_BASE + slug, slug)
+        if path is None:
+            return
+        with open(path, newline="", encoding="utf-8-sig") as fh:
             for r in csv.DictReader(fh):
-                lp, d = r.get("local-plan", ""), (r.get("event-date") or "")[:10]
-                ev = r.get("local-plan-event", "")
+                lp = (r.get(plan_col) or "").strip()
+                d = next((v for v in ((r.get(c) or "").strip()[:10]
+                                      for c in date_cols) if v), "")
+                ev = (r.get(event_col) or "").strip()
                 if not (lp and d):
                     continue
                 if d > (events.get(lp, ("", ""))[0]):
                     events[lp] = (d, ev)
                 if ev in ("plan-adopted", "adopted") and d > adopted_ev.get(lp, ""):
                     adopted_ev[lp] = d
+
+    _timetable("LOCAL_PLAN_TIMETABLE_SRC", "local-plan-timetable.csv",
+               "local-plan", "local-plan-event", ("event-date",))
+    # predicted-date is deliberately NOT read: a plan the council HOPES to
+    # adopt next year has not been adopted, and dating it would age it.
+    _timetable("PLAN_TIMETABLE_SRC", "plan-timetable.csv",
+               "plan", "plan-event", ("actual-date", "event-date"))
 
     # boundary reference -> the plan that best speaks for it: prefer one with
     # housing numbers, then the furthest-progressed stage, then most recent.
