@@ -40,6 +40,20 @@ jobs:
               || { echo "::error::price_grid rebuild @ $res failed"; fail=1; }
             echo ""
           done
+          # Sold-price choropleths on real boundaries (LSOA close in, LAD
+          # nationally) — every Land Registry comparable inside each area,
+          # medians + EPC-measured £/m² + national percentile ranks. Minutes
+          # each: a 2M-point-in-polygon join. MUST run here rather than from a
+          # SQL client, whose disconnect rolls the transaction back.
+          for fn in rebuild_lad_prices rebuild_lsoa_prices; do
+            echo "— $fn"
+            curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/$fn" \
+              -H "apikey: $SUPABASE_SERVICE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+              -H "Content-Type: application/json" -d '{}' --max-time 1500 \
+              || { echo "::error::$fn failed — that choropleth is STALE"; fail=1; }
+            echo ""
+          done
           curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/rebuild_lad_affordability" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
