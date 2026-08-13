@@ -1,0 +1,25 @@
+-- 0062: price choropleths — join REAL polygons, chunk past the gateway, and
+-- rank percentiles with joins rather than correlated subqueries.
+--
+-- Three defects, all found by running it (see git history for the full text
+-- of the functions as applied):
+--  1. rebuild_lsoa_prices joined public.lsoa_imd, whose geom column holds LSOA
+--     CENTROIDS, not boundaries — st_intersects(point, point) is never true,
+--     so it inserted 0 rows. Boundaries now live in map_features as dataset
+--     'lsoa_boundary' (build_lsoa_boundary, from the app's committed polygon
+--     layer) and the join uses those.
+--  2. Both rebuilds exceeded the Supabase API gateway's ~120 s ceiling and
+--     came back 504 even though the statement was healthy — the four-band
+--     price-grid lesson (0052) again. Both now take (p_part, p_parts) and the
+--     workflow loops hash-slices (LAD 6, LSOA 12); part 0 clears the dataset.
+--  3. finalise_price_pct looked up the houses/flats CTEs with a CORRELATED
+--     SUBQUERY per row. Invisible over 318 authorities, quadratic over 33.7k
+--     LSOAs. Rewritten as LEFT JOINs — same result, one pass.
+--
+-- National percentile ranks span the whole country, so they cannot be
+-- computed inside a slice: the chunks insert raw aggregates and
+-- finalise_price_pct() ranks the finished dataset afterwards.
+--
+-- This file is a NOTE, not the source of truth: the three functions were
+-- applied live (migrations price_choropleths_chunked and
+-- finalise_price_pct_joined). Read them with pg_get_functiondef.
