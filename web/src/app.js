@@ -1184,14 +1184,30 @@ const MAP_OVERLAYS = [
   { key: "price_heat", group: "market", label: "Sold prices (3-yr median)", color: "#d73027", dataset: "lad_prices", minZoom: 4, lim: 8000,
     datasetFn: z => z < 9 ? "lad_prices" : "lsoa_prices",
     choro: {
-      pctFn: pt => pt === "houses" ? "pct_h" : pt === "flats" ? "pct_f" : "pct",
-      ramp: ["#fff7ec", "#fee8c8", "#fdbb84", "#fc8d59", "#e34a33", "#b30000", "#6b0000"],
+      keyFn: pt => pt === "houses" ? "med_h" : pt === "flats" ? "med_f" : "med",
+      // National DECILE breakpoints of the actual values (measured over the
+      // 33.7k LSOA medians). Classing by quantile is what gives the
+      // deprivation map its even spread; doing it with breakpoints on the raw
+      // figure means nothing extra has to be stored per area.
+      breaks: {
+        med:   [154000, 191000, 225000, 260000, 296500, 337500, 388000, 450000, 565000, 785000],
+        med_h: [160000, 200000, 235000, 272500, 314250, 360000, 418000, 499950, 664000, 1110000],
+        med_f: [99000, 124000, 145000, 167500, 192500, 225000, 265000, 323500, 430000, 612500],
+      },
+      ramp: ["#fff7ec", "#fee8c8", "#fdd49e", "#fdbb84", "#fc8d59", "#ef6548",
+             "#e34a33", "#d7301f", "#b30000", "#7f0000", "#4d0000"],
     } },
   { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr median)", color: "#7048e8", dataset: "lad_prices", minZoom: 4, lim: 8000,
     datasetFn: z => z < 9 ? "lad_prices" : "lsoa_prices",
     choro: {
-      pctFn: pt => pt === "houses" ? "pct_ppm2_h" : pt === "flats" ? "pct_ppm2_f" : "pct_ppm2",
-      ramp: ["#f7f4f9", "#e7e1ef", "#d4b9da", "#c994c7", "#Df65b0", "#ce1256", "#67001f"],
+      keyFn: pt => pt === "houses" ? "ppm2_h" : pt === "flats" ? "ppm2_f" : "ppm2",
+      breaks: {
+        ppm2:   [1956, 2388, 2726, 3049, 3380, 3768, 4279, 4972, 6024, 8362],
+        ppm2_h: [1966, 2409, 2753, 3076, 3405, 3794, 4300, 5000, 6014, 8382],
+        ppm2_f: [1761, 2184, 2537, 2914, 3320, 3814, 4438, 5218, 6697, 9250],
+      },
+      ramp: ["#f7f4f9", "#e7e1ef", "#d4b9da", "#c994c7", "#df65b0", "#e7298a",
+             "#ce1256", "#980043", "#67001f", "#49000f", "#2d0009"],
     } },
   // Individual transactions stay for comparables work — close zooms only.
   { key: "ppd_sales",    group: "market", label: "Individual sales (comparables)",  color: "#d64550", dataset: "ppd_sales", render: "point", minZoom: 14, lim: 6000,
@@ -1438,6 +1454,17 @@ let marketPtype = (() => {
   catch (_) { return "all"; }
 })();
 
+// Classed-choropleth fill: a step ramp on the RAW value at national decile
+// breakpoints. Areas without the metric are fully transparent, never a colour
+// — too-few-sales is absence of evidence, not a cheap area.
+function choroPaint(def, ptype) {
+  const key = def.choro.keyFn(ptype);
+  const brk = def.choro.breaks[key] || def.choro.breaks[def.choro.keyFn("all")];
+  const step = ["step", ["to-number", ["get", key]], def.choro.ramp[0]];
+  brk.forEach((b, i) => step.push(b, def.choro.ramp[i + 1]));
+  return ["case", ["!", ["has", key]], "rgba(0,0,0,0)", step];
+}
+
 function setMarketPtype(v) {
   marketPtype = v === "houses" || v === "flats" ? v : "all";
   try { localStorage.setItem("mm.marketPtype", marketPtype); } catch (_) {}
@@ -1448,13 +1475,7 @@ function setMarketPtype(v) {
     if (!o.choro) continue;
     const id = `ov-${o.key}-fill`;
     if (!map.getLayer(id)) continue;
-    const key = o.choro.pctFn(marketPtype);
-    map.setPaintProperty(id, "fill-color",
-      ["case", ["!", ["has", key]], "rgba(0,0,0,0)",
-       ["interpolate", ["linear"], ["to-number", ["get", key]],
-        0,  o.choro.ramp[0], 20, o.choro.ramp[1], 40, o.choro.ramp[2],
-        60, o.choro.ramp[3], 80, o.choro.ramp[4], 92, o.choro.ramp[5],
-        100, o.choro.ramp[6]]]);
+    map.setPaintProperty(id, "fill-color", choroPaint(o, marketPtype));
   }
   // Individual sales: a client-side layer filter. The row cap applies BEFORE
   // this filter, so a flats-only view in a dense area may undersample — the
@@ -2129,19 +2150,14 @@ function renderOverlay(key, def, fc) {
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "rent_mean"]], 0],
           500, "#d5eef0", 800, "#a3d8dc", 1100, "#6dbcc5", 1500, "#3c96a6",
           2000, "#20707f", 3000, "#0d4a5c"]]
-      : (def.dataset === "lsoa_prices" || def.dataset === "lad_prices")
+      : (def.dataset === "lsoa_prices" || def.dataset === "lad_prices" || def.choro)
       // Sold prices / £-per-m² / trend on real boundaries. Prices key on the
       // national percentile (even spread, the deprivation-map look); trend
       // keys on the raw % because its zero is meaningful. Areas without the
       // metric are fully transparent, never grey — grey would read as a real
       // value, and too-few-sales is absence of evidence, not evidence.
       ? (def.choro
-         ? ["case", ["!", ["has", def.choro.pctFn(marketPtype)]], "rgba(0,0,0,0)",
-            ["interpolate", ["linear"],
-             ["to-number", ["get", def.choro.pctFn(marketPtype)]],
-             0,  def.choro.ramp[0], 20, def.choro.ramp[1], 40, def.choro.ramp[2],
-             60, def.choro.ramp[3], 80, def.choro.ramp[4], 92, def.choro.ramp[5],
-             100, def.choro.ramp[6]]]
+         ? choroPaint(def, marketPtype)
          : ["case", ["!", ["has", "trend_pct"]], "rgba(0,0,0,0)",
             ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "trend_pct"]], 0],
              -10, "#1864ab", -5, "#74c0fc", -1.5, "#d8e2e8", 0, "#e9e5e5",
@@ -3611,14 +3627,21 @@ function hoverContentForOverlay(def, p) {
     const epcReal = p.epc === true || p.epc === "true";
     const psf = v => `£${Math.round(Number(v) / 10.7639).toLocaleString()}/ft²`;
     const tr = p.trend_pct != null ? Number(p.trend_pct) : null;
-    const rank = v => v == null ? null :
-      `dearer than ${Number(v).toFixed(0)}% of England`;
+    // Which national decile this area's median falls in — derived from the
+    // same breakpoints the colour uses, so the legend and the map agree.
+    const MED_BREAKS = [154000, 191000, 225000, 260000, 296500, 337500,
+                        388000, 450000, 565000, 785000];
+    const rank = v => {
+      if (v == null) return null;
+      const d = MED_BREAKS.filter(b => Number(v) >= b).length;
+      return d >= 10 ? "top 3% of England" : `national decile ${d + 1} of 10`;
+    };
     rows = [row(p.name || null, lsoa ? "authority" : "area"),
             row(p.ppm2 != null
                 ? `${epcReal ? "" : "~"}£${Number(p.ppm2).toLocaleString()}/m² · ${psf(p.ppm2)}`
                 : null,
                 epcReal ? `measured (${p.m2n} EPC-matched sales)` : "est. by type mix"),
-            row(rank(p.pct), "price rank (colour basis)"),
+            row(rank(p.med), "price band (colour basis)"),
             row(p.med_h != null
                 ? `£${Number(p.med_h).toLocaleString()}` +
                   (p.ppm2_h != null ? ` · £${Number(p.ppm2_h).toLocaleString()}/m²` : "")

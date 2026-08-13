@@ -48,7 +48,11 @@ jobs:
           # is healthy (same lesson as the four-band price grid). Each call
           # takes a hash-slice; part 0 clears the dataset first. National
           # percentile ranks span every area, so they cannot be computed
-          # inside a slice — finalise_price_pct ranks the finished dataset.
+          # inside a slice. NOTE: nothing is stamped afterwards — the map
+          # classes colour by NATIONAL DECILE BREAKPOINTS held in the
+          # frontend, so no per-area percentile has to be written (updating
+          # 33.7k geometry-bearing rows rewrote the whole table and could not
+          # finish inside the gateway window).
           rebuild_chunked () {   # rebuild_chunked <fn> <dataset> <parts>
             local fn="$1" ds="$2" parts="$3" p
             for p in $(seq 0 $((parts - 1))); do
@@ -61,14 +65,6 @@ jobs:
                 || { echo "::error::$fn part $p failed — $ds is INCOMPLETE"; fail=1; }
               echo ""
             done
-            echo "— finalise_price_pct $ds"
-            curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/finalise_price_pct" \
-              -H "apikey: $SUPABASE_SERVICE_KEY" \
-              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-              -H "Content-Type: application/json" -d "{\"p_dataset\": \"$ds\"}" \
-              --max-time 1500 \
-              || { echo "::error::finalise_price_pct $ds failed — the choropleth has no colour basis"; fail=1; }
-            echo ""
           }
           rebuild_chunked rebuild_lad_prices  lad_prices   6
           rebuild_chunked rebuild_lsoa_prices lsoa_prices 12
