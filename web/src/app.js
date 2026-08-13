@@ -1154,7 +1154,11 @@ const MAP_OVERLAYS = [
            "6a", "#cc4c02", "6b", "#8c2d04", "#f03e3e"] } },
   // Market & boundaries
   { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
-  // Sold-price heatmaps: one server-side grid dataset at four resolutions
+  // Sold-price CHOROPLETHS (see the layer entries below). The four-band
+  // price_grid dataset they used to render as bilinear surfaces is retained
+  // in the database and still feeds nothing else; the surface renderer below
+  // is likewise unused now that no registry entry carries `surface:`.
+  // Historical note on why the grid exists at four resolutions:
   // (~35 km -> ~550 m cells); the numFilter picks the resolution for the
   // zoom, so the same toggle reads cleanly from a national view down to
   // street blocks. Borderless fills — the colour IS the story.
@@ -1168,23 +1172,26 @@ const MAP_OVERLAYS = [
   // switching type is a re-rasterise of props already on the client, never a
   // refetch. A cell lacking the selected split (its per-type count missed the
   // privacy floor) goes transparent, rather than lying with the pooled number.
-  { key: "price_heat", group: "market", label: "Sold prices (3-yr heatmap)", color: "#d73027", dataset: "price_grid", minZoom: 4, lim: 8000,
-    datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
-                  : z < 11  ? "price_grid_m" : "price_grid_f",
-    surface: {
-      keyFn: pt => pt === "houses" ? "med_h" : pt === "flats" ? "med_f" : "med",
-      // Median price -> ramp position (blue ~£80k ... red £1.5M+).
-      stops: [[60000, 0.06], [130000, 0.2], [200000, 0.34], [300000, 0.48],
-              [450000, 0.62], [700000, 0.76], [1100000, 0.88], [1800000, 1]],
+  // Sold prices and £/m² render as CHOROPLETHS on real boundaries — the
+  // visual language of the deprivation map, which reads as analysis where an
+  // interpolated surface reads as decoration. Zoom-banded like affordability:
+  // authority polygons nationally, LSOA neighbourhoods from z9 (33,755 LSOAs
+  // are sub-pixel at national zoom, and features_in_bbox drops sub-pixel
+  // features — which would blank the dense urban areas that matter most).
+  // Paint keys on the NATIONAL PERCENTILE, not the raw £: an absolute ramp
+  // leaves most of England one flat colour while London saturates it. Raw
+  // values stay in the props for the popup and legend.
+  { key: "price_heat", group: "market", label: "Sold prices (3-yr median)", color: "#d73027", dataset: "lad_prices", minZoom: 4, lim: 8000,
+    datasetFn: z => z < 9 ? "lad_prices" : "lsoa_prices",
+    choro: {
+      pctFn: pt => pt === "houses" ? "pct_h" : pt === "flats" ? "pct_f" : "pct",
+      ramp: ["#fff7ec", "#fee8c8", "#fdbb84", "#fc8d59", "#e34a33", "#b30000", "#6b0000"],
     } },
-  { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr heatmap)", color: "#7048e8", dataset: "price_grid", minZoom: 4, lim: 8000,
-    datasetFn: z => z < 6.5 ? "price_grid_c" : z < 8.5 ? "price_grid_l"
-                  : z < 11  ? "price_grid_m" : "price_grid_f",
-    surface: {
-      keyFn: pt => pt === "houses" ? "ppm2_h" : pt === "flats" ? "ppm2_f" : "ppm2",
-      // £/m² -> ramp position (blue ~£1k ... red £10k+/m²).
-      stops: [[800, 0.06], [1500, 0.2], [2200, 0.34], [3000, 0.48],
-              [4200, 0.62], [5800, 0.76], [8000, 0.88], [12000, 1]],
+  { key: "ppm2_heat", group: "market", label: "£ per m² (3-yr median)", color: "#7048e8", dataset: "lad_prices", minZoom: 4, lim: 8000,
+    datasetFn: z => z < 9 ? "lad_prices" : "lsoa_prices",
+    choro: {
+      pctFn: pt => pt === "houses" ? "pct_ppm2_h" : pt === "flats" ? "pct_ppm2_f" : "pct_ppm2",
+      ramp: ["#f7f4f9", "#e7e1ef", "#d4b9da", "#c994c7", "#Df65b0", "#ce1256", "#67001f"],
     } },
   // Individual transactions stay for comparables work — close zooms only.
   { key: "ppd_sales",    group: "market", label: "Individual sales (comparables)",  color: "#d64550", dataset: "ppd_sales", render: "point", minZoom: 14, lim: 6000,
@@ -1200,23 +1207,8 @@ const MAP_OVERLAYS = [
   // measure has a meaningful zero that a sequential ramp would bury. Only
   // cells with enough sales in BOTH windows carry trend_pct; the rest are
   // holes the surface fades out around.
-  { key: "price_trend", group: "market2", label: "Price trend (12m vs prior 24m)", color: "#2b8a3e", dataset: "price_grid", minZoom: 5, lim: 8000,
-    datasetFn: z => z < 8.5 ? "price_grid_l" : z < 11 ? "price_grid_m" : "price_grid_f",
-    surface: {
-      keyFn: () => "trend_pct",
-      // % change -> ramp position; the flat middle (±1.5%) stays pale and
-      // translucent so only genuine movement draws the eye.
-      stops: [[-10, 0], [-5, 0.2], [-1.5, 0.4], [0, 0.5], [1.5, 0.6], [5, 0.8], [10, 1]],
-      colors: [
-        [0,   [24, 100, 171, 235]],
-        [0.2, [116, 192, 252, 215]],
-        [0.4, [214, 226, 235, 150]],
-        [0.5, [225, 223, 223, 130]],
-        [0.6, [235, 216, 216, 150]],
-        [0.8, [255, 135, 135, 215]],
-        [1,   [201, 42, 42, 235]],
-      ],
-    } },
+  { key: "price_trend", group: "market2", label: "Price trend (12m vs prior 24m)", color: "#2b8a3e", dataset: "lad_prices", minZoom: 4, lim: 8000,
+    datasetFn: z => z < 9 ? "lad_prices" : "lsoa_prices" },
   { key: "build_cost", group: "market2", label: "Build cost index (free proxy)", color: "#e8590c", dataset: "build_cost_index", minZoom: 5 },
   { key: "cil_rates", group: "market2", label: "CIL rates (residential £/m²)", color: "#5c940d", dataset: "cil_rates", minZoom: 5 },
   // Zoom-banded: district (ASHE pay) wide out, MSOA household income close in
@@ -1371,8 +1363,8 @@ const LAYER_INFO = {
   conservation_area:  { about: "Areas of special architectural or historic interest where extra planning controls apply.", source: "Historic England via planning.data.gov.uk (OGL v3)" },
   aonb:               { about: "Areas of Outstanding Natural Beauty / National Landscapes — nationally protected landscapes.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity. Sites in public ownership are flagged in the tooltip.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
-  price_heat:         { about: "Median sold price over the last 3 years as one continuous value surface — deep blue cheap through green and yellow to red expensive, resolving from ~35 km countrywide down to ~550 m street blocks as you zoom. Hover anywhere for the exact local median and sale count. Areas with under 3–5 sales fade out rather than guess.", source: "HM Land Registry Price Paid Data © Crown copyright (display use, with attribution)" },
-  ppm2_heat:          { about: "£ per m² over the last 3 years as one continuous value surface (blue ~£1k/m² through green/yellow to red £10k+/m²). Where sales address-match an EPC certificate the local value is the median of REAL price ÷ measured floor area (hover says how many matched sales); thin-coverage areas fall back to a property-type estimate marked with ~. EPC matching needs the free account secrets — MANUAL_TASKS 5c.", source: "HM Land Registry Price Paid Data © Crown copyright; MHCLG EPC register (floor areas)" },
+  price_heat:         { about: "Median sold price over the last 3 years, mapped on real boundaries — local authorities nationally, neighbourhood (LSOA) areas from z9 in. Every Land Registry comparable inside the area feeds its median. Colour is the NATIONAL PERCENTILE (pale = cheapest, deep red = dearest) rather than the raw £: an absolute ramp leaves most of England one flat colour while London saturates it. The popup gives the actual median, the houses/flats split and the sale count. Areas with under 3 sales stay blank rather than publish a one-sale 'median'.", source: "HM Land Registry Price Paid Data © Crown copyright (display use, with attribution)" },
+  ppm2_heat:          { about: "£ per m² over the last 3 years on real boundaries (authorities nationally, LSOA neighbourhoods from z9 in), shaded by NATIONAL PERCENTILE so the map reads evenly rather than saturating on London. Where sales address-match an EPC certificate the value is the median of REAL price ÷ measured floor area — 95% of sales now match, and the popup says how many; thin-coverage areas fall back to a property-type estimate marked with ~.", source: "HM Land Registry Price Paid Data © Crown copyright; MHCLG EPC register (floor areas)" },
   spen_sites:         { about: "SP Energy Networks substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "SP Energy Networks open data portal (CC-BY/OGL-style licence)" },
   npg_sites:          { about: "Northern Powergrid substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "Northern Powergrid open data portal" },
   enwl_sites:         { about: "Electricity North West grid & primary substations with published demand headroom — click a dot for the full record.", source: "Electricity North West open data portal" },
@@ -1413,7 +1405,7 @@ const LAYER_INFO = {
   uni_building:        { about: "Individual university building footprints. Zoom in close — these are dense.", source: "© OpenStreetMap contributors (ODbL)" },
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only. Every cell in view is drawn — no sampling — which is why it needs a close zoom: the full 100 m grid is 159,451 cells and a wider view cannot be served from the database fast enough.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
   la_rents:            { about: "Average monthly private rents by local authority, shaded light (cheapest, ~£500) to deep teal (most expensive, £3,000+). Hover a district for its figure and annual change.", source: "ONS Price Index of Private Rents (OGL v3)" },
-  price_trend:         { about: "Whether local sale prices are rising or falling: median of the last 12 months against the median of the 24 months before, per grid cell. Blue = falling, red = rising; cells without at least 5 sales in BOTH windows stay blank rather than faking a flat market.", source: "HM Land Registry Price Paid Data (OGL v3)" },
+  price_trend:         { about: "Whether local sale prices are rising or falling: median of the last 12 months against the median of the 24 months before, on the same boundaries as the price layers. Blue = falling, red = rising, pale = flat — a diverging ramp on the RAW percentage, because unlike price level this measure has a meaningful zero. Areas without enough sales in BOTH windows stay blank rather than faking a flat market.", source: "HM Land Registry Price Paid Data (OGL v3)" },
   cil_rates:           { about: "Residential Community Infrastructure Levy by charging authority — INDICATIVE typical rates (£/m² of net new floorspace, ~2025-indexed) compiled from adopted charging schedules, incl. the Mayoral CIL in London. Green = £0 (no CIL adopted, or Scotland where no CIL regime exists), deep red = London-borough rates. Grey = not yet compiled: the viability engine falls back to its regional band there. Schedules charge by zone, so verify against the council's current adopted schedule before reliance; enter the exact rate per project in Viability variables.", source: "Council charging schedules / annual CIL rate summaries (OGL), hand-compiled" },
   build_cost:          { about: "Relative construction cost by local authority — a FREE PROXY assembled from ONS construction output indices and openly published regional factors, not BCIS (which is a paid RICS product). Green = cheaper than the national average, red = dearer. Every figure can be overridden per project in Viability variables; a client with BCIS access can paste their own numbers there.", source: "ONS construction output price indices + published regional factors (proxy)" },
   affordability:       { about: "Median sale price (last 12 months) divided by local income. Zoomed out: district level, against residents' median gross pay (ONS ASHE). Zoomed in (z9.5+): neighbourhood level — ~7,200 MSOAs of ~4,000 households — against HOUSEHOLD income (ONS small area income estimates), so a village is measured against its own residents rather than the nearest city's. 4× is the classic mortgageable benchmark; 12×+ severe. Areas with suppressed income data or too few sales stay grey.", source: "HM Land Registry Price Paid + ONS ASHE / ONS small area income estimates (all OGL v3)" },
@@ -1449,12 +1441,20 @@ let marketPtype = (() => {
 function setMarketPtype(v) {
   marketPtype = v === "houses" || v === "flats" ? v : "all";
   try { localStorage.setItem("mm.marketPtype", marketPtype); } catch (_) {}
-  // Surface layers: re-rasterise from the cached cells — the per-type
-  // medians are already in the loaded features, so this never refetches.
+  // Choropleths: swap the property the fill keys on. Every per-type
+  // percentile is already in the loaded features, so this never refetches —
+  // and repainting is instant where re-rasterising a surface was not.
   for (const o of MAP_OVERLAYS) {
-    const st = overlayState[o.key];
-    if (o.surface && st && st.on && st.surfaceFC)
-      renderGridSurface(o.key, o, st.surfaceFC);
+    if (!o.choro) continue;
+    const id = `ov-${o.key}-fill`;
+    if (!map.getLayer(id)) continue;
+    const key = o.choro.pctFn(marketPtype);
+    map.setPaintProperty(id, "fill-color",
+      ["case", ["!", ["has", key]], "rgba(0,0,0,0)",
+       ["interpolate", ["linear"], ["to-number", ["get", key]],
+        0,  o.choro.ramp[0], 20, o.choro.ramp[1], 40, o.choro.ramp[2],
+        60, o.choro.ramp[3], 80, o.choro.ramp[4], 92, o.choro.ramp[5],
+        100, o.choro.ramp[6]]]);
   }
   // Individual sales: a client-side layer filter. The row cap applies BEFORE
   // this filter, so a flats-only view in a dense area may undersample — the
@@ -2129,9 +2129,26 @@ function renderOverlay(key, def, fc) {
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "rent_mean"]], 0],
           500, "#d5eef0", 800, "#a3d8dc", 1100, "#6dbcc5", 1500, "#3c96a6",
           2000, "#20707f", 3000, "#0d4a5c"]]
+      : (def.dataset === "lsoa_prices" || def.dataset === "lad_prices")
+      // Sold prices / £-per-m² / trend on real boundaries. Prices key on the
+      // national percentile (even spread, the deprivation-map look); trend
+      // keys on the raw % because its zero is meaningful. Areas without the
+      // metric are fully transparent, never grey — grey would read as a real
+      // value, and too-few-sales is absence of evidence, not evidence.
+      ? (def.choro
+         ? ["case", ["!", ["has", def.choro.pctFn(marketPtype)]], "rgba(0,0,0,0)",
+            ["interpolate", ["linear"],
+             ["to-number", ["get", def.choro.pctFn(marketPtype)]],
+             0,  def.choro.ramp[0], 20, def.choro.ramp[1], 40, def.choro.ramp[2],
+             60, def.choro.ramp[3], 80, def.choro.ramp[4], 92, def.choro.ramp[5],
+             100, def.choro.ramp[6]]]
+         : ["case", ["!", ["has", "trend_pct"]], "rgba(0,0,0,0)",
+            ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "trend_pct"]], 0],
+             -10, "#1864ab", -5, "#74c0fc", -1.5, "#d8e2e8", 0, "#e9e5e5",
+             1.5, "#e9d8d8", 5, "#ff8787", 10, "#c92a2a"]])
       : def.dataset === "price_grid"
-      // Only the trend layer renders price_grid cells as FILL (the heatmaps
-      // take the surface path), so this case is the trend ramp: diverging,
+      // Legacy price_grid fill (no registry entry uses this dataset now that
+      // prices render on LSOA/LAD boundaries): the trend ramp — diverging,
       // blue falling -> grey flat -> red rising. Cells without a trustworthy
       // trend (either window under 5 sales) are fully transparent, not grey:
       // grey would read as "flat market", and absence of evidence isn't that.
@@ -3585,6 +3602,36 @@ function hoverContentForOverlay(def, p) {
     const band = hp < 75 ? "presumption in favour applies" : hp < 85 ? "20% buffer" : hp < 95 ? "action plan" : "passing";
     rows = [row(p.hdt_pct != null ? `${p.hdt_pct}%` : null, "delivery vs target"),
             row(p.consequence || band, "consequence")];
+  } else if (d === "lsoa_prices" || d === "lad_prices") {
+    // Choropleth popup: the comparables actually inside this boundary.
+    const lsoa = d === "lsoa_prices";
+    title = p.med != null ? `£${Number(p.med).toLocaleString()} median` : "Sold prices";
+    kind = (lsoa ? "Neighbourhood (LSOA)" : "Local authority") +
+           " — median of sales in the last 3 years";
+    const epcReal = p.epc === true || p.epc === "true";
+    const psf = v => `£${Math.round(Number(v) / 10.7639).toLocaleString()}/ft²`;
+    const tr = p.trend_pct != null ? Number(p.trend_pct) : null;
+    const rank = v => v == null ? null :
+      `dearer than ${Number(v).toFixed(0)}% of England`;
+    rows = [row(p.name || null, lsoa ? "authority" : "area"),
+            row(p.ppm2 != null
+                ? `${epcReal ? "" : "~"}£${Number(p.ppm2).toLocaleString()}/m² · ${psf(p.ppm2)}`
+                : null,
+                epcReal ? `measured (${p.m2n} EPC-matched sales)` : "est. by type mix"),
+            row(rank(p.pct), "price rank (colour basis)"),
+            row(p.med_h != null
+                ? `£${Number(p.med_h).toLocaleString()}` +
+                  (p.ppm2_h != null ? ` · £${Number(p.ppm2_h).toLocaleString()}/m²` : "")
+                : null, `houses (${p.n_h ?? "?"} sales)`),
+            row(p.med_f != null
+                ? `£${Number(p.med_f).toLocaleString()}` +
+                  (p.ppm2_f != null ? ` · £${Number(p.ppm2_f).toLocaleString()}/m²` : "")
+                : null, `flats (${p.n_f ?? "?"} sales)`),
+            row(tr != null
+                ? `${tr > 0 ? "▲ +" : tr < 0 ? "▼ " : ""}${tr}%`
+                : null, `12m vs prior 24m (${p.n_r12 ?? "?"}/${p.n_p24 ?? "?"} sales)`),
+            row(p.n != null ? `${Number(p.n).toLocaleString()} comparables` : null,
+                lsoa ? "in this neighbourhood" : "in this authority")];
   } else if (d === "price_grid") {
     title = p.med != null ? `£${Number(p.med).toLocaleString()} median` : "Price cell";
     kind = "Sold prices — last 3 years";
