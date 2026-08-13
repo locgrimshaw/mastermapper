@@ -3766,8 +3766,8 @@ function hoverContentForOverlay(def, p) {
             // A blank cell is "not published", never zero — so no gap is shown
             // and the hover says which side is missing rather than implying
             // the authority has allocated nothing.
-            row(p.missing ? `no ${p.missing} figure published — gap not shown` : null,
-                "why no shortfall"),
+            row(p.missing ? `not published: ${p.missing}` : null,
+                "why no shortfall is shown"),
             row(p.plan_name && p.plan_name !== p.name ? p.plan_name : null, "plan"),
             row(p.adopted
                 ? `adopted ${p.adopted}${p.plan_age_yrs != null ? ` · ${p.plan_age_yrs} yrs old` : ""}` +

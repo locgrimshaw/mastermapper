@@ -2428,10 +2428,10 @@ def build_local_plan_housing():
                              if any(v is not None
                                     for v in (req, alloc, comm, wind, broad))
                              else "plan_only")
-            missing = [n for n, v in (("requirement", req), ("allocations", alloc),
-                                      ("commitments", comm)) if v is None]
-            if missing:
-                out["missing"] = ", ".join(missing)
+            if out["status"] == "partial_supply":
+                out["missing"] = ", ".join(
+                    n for n, v in (("requirement", req), ("allocations", alloc),
+                                   ("commitments", comm)) if v is None)
         return out
 
     gdf = gpd.read_file(bpath)
