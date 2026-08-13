@@ -7058,7 +7058,7 @@ async function renderDeepDiveViability() {
   const units = homesFor(Number(r.developable_ha) || 0, Number(r.inner_ha) || 0, regime);
   const mc = deep._marketCtx || null;
   const ap = computeAppraisal({
-    units, ppm2: deep.ppm2 || null, region: deep.stationRegion || null,
+    units, ppm2: deep.ppm2 || null, region: (deep.station && deep.station.region) || null,
     areaHa: Number(r.developable_ha) || null,
     locationFactor: (mc && mc.factor) || null,
     landValueHa: (mc && mc.landValueHa) || null,
@@ -7146,7 +7146,7 @@ function renderAssemblySummary(notice) {
   const totInner = plots.reduce((s, p) => s + (p.properties.inner_ha || 0), 0);
   const units = homesFor(totHa, totInner, regime);
   const ap = computeAppraisal({
-    units, ppm2: deep.ppm2 || null, region: null, areaHa: totHa,
+    units, ppm2: deep.ppm2 || null, region: (deep.station && deep.station.region) || null, areaHa: totHa,
     locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
     landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
   }, SIFT.assumptions, { noSens: true });
@@ -8197,14 +8197,23 @@ function calcAuditHTML(ctx, a, r) {
     row("contingency", `${N(a.contingencyPct || 0, 1)}% of hard cost`, M(t.contingency)),
   ]);
 
+  const marketUnits = t.units * (1 - (a.affordablePct || 0) / 100);
   const policy = step("5 · Policy costs (CIL · S106 · BNG)", [
-    row("local value ratio", `achieved £${N(t.price)}/ft² ÷ £${N(t.refPsf, 0)}/ft² national reference (clamped 0.25–6)`,
-      "×" + N(t.valueRatio)),
-    row("policy localisation", `1 + (${N(t.valueRatio)} − 1) × ${N(a.policyLocalisePct ?? 100, 0)}%`,
-      "×" + N(t.policyScale)),
-    row("CIL + S106 + BNG", `${N(t.units, 0)} homes × ((£${N(a.cilPerUnit || 0, 0)}k CIL + £${N(a.s106PerUnit || 0, 0)}k S106) × ${N(t.policyScale)} + £${N(a.bngPerUnit || 0, 0)}k BNG)`,
-      M(t.policyCosts)),
-  ], "CIL and S106 track local sales values — a flat national £/unit would understate them in high-value areas. BNG is priced nationally (habitat units trade in a national market).");
+    row("CIL rate", t.cilBand == null
+      ? `council's adopted rate (entered in Viability variables)`
+      : `£${N(t.cilBand, 0)}/m² regional indicative band × ${N(t.cilScale)} within-region value adjustment`,
+      "£" + N(t.cilRate, 0) + "/m²"),
+    t.cilBand != null ? row("within-region value position", `achieved £${N(t.price)}/ft² ÷ regional average (clamped ×0.6–1.8), applied at ${N(a.policyLocalisePct ?? 100, 0)}%`,
+      "×" + N(t.inRegionRatio)) : "",
+    row("CIL", `${N(marketUnits, 0)} market homes (affordable exempt — social housing relief) × ${N(t.unitM2, 1)} m² × £${N(t.cilRate, 0)}/m²`,
+      M(t.cil)),
+    row("S106 heads of terms", `£${N(a.s106EducationPerUnit || 0, 1)}k education + £${N(a.s106HealthPerUnit || 0, 1)}k healthcare + £${N(a.s106OpenSpacePerUnit || 0, 1)}k open space + £${N(a.s106TransportPerUnit || 0, 1)}k transport/other`,
+      "£" + N(t.s106PerUnitK, 1) + "k/home"),
+    row("S106", `${N(t.units, 0)} homes × £${N(t.s106PerUnitK, 1)}k × ${N(t.locFactor)} build-cost location index`,
+      M(t.s106)),
+    row("BNG", `${N(t.units, 0)} homes × £${N(a.bngPerUnit || 0, 1)}k (not value-scaled)`, M(t.bng)),
+    row("total policy costs", `CIL + S106 + BNG`, M(t.policyCosts)),
+  ], "CIL is statutory (CIL Regs 2010 reg.40: rate × net new GIA × indexation) and set per authority — the regional band is an adopted-schedule midpoint and omits indexation, so read it as a floor and pin the real rate when known. S106 is negotiated case by case under the reg.122 tests; education uses pupil yield × DfE benchmark place costs with location multipliers. Scotland has no CIL (S75 obligations carried in the S106 lines).");
 
   const sales = step("6 · Sales & marketing", [
     row("sales costs", `${N(a.salesCostPct || 0, 1)}% of GDV`, M(t.salesCosts)),
@@ -8384,7 +8393,7 @@ async function _generateSiteReport() {
 
     const mc = deep._marketCtx || {};
     const appraisal = computeAppraisal({
-      units, ppm2: deep.ppm2 || null, region: null, areaHa: totHa,
+      units, ppm2: deep.ppm2 || null, region: (deep.station && deep.station.region) || null, areaHa: totHa,
       locationFactor: mc.factor || null,
       landValueHa: mc.landValueHa || null,
     }, SIFT.assumptions);
@@ -9643,7 +9652,7 @@ function buildDeepDivePanel(meta) {
       label: (meta.station && (meta.station.name || meta.station.crs)) || "This catchment",
       units: r ? homesFor(Number(r.developable_ha) || 0, Number(r.inner_ha) || 0, regime) : 0,
       ppm2: deep.ppm2 || null,
-      region: null,
+      region: (deep.station && deep.station.region) || null,
       areaHa: r ? Number(r.developable_ha) : null,
       locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
       landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
@@ -11433,6 +11442,28 @@ function regionCostFactor(region) {
   return k ? REGION_COST_FACTORS[k] : 1.0;
 }
 
+// Indicative residential CIL rates (£/m² of net new GIA) by region — midpoints
+// across ADOPTED charging schedules, 2025-indexed. CIL is set per authority
+// (and usually per zone within it), so these are honest ballparks, not quotes:
+// e.g. Runnymede £106-446/m², East Hants £59-266, Warwick £90-252, while
+// Manchester and Liverpool charge £0 and most Welsh councils never adopted
+// CIL. London includes the Mayoral CIL2 on top of borough rates. Scotland has
+// NO CIL regime at all (S75 obligations instead — carried in the S106 lines).
+// The engine scales the band by the scheme's value position WITHIN its region
+// and lets a known adopted rate override everything (cilPm2 assumption).
+const REGION_CIL_PM2 = {
+  "London": 250, "South East": 130, "East of England": 110, "East": 110,
+  "South West": 90, "West Midlands": 60, "East Midlands": 50,
+  "North West": 25, "Yorkshire and The Humber": 30, "Yorkshire": 30,
+  "North East": 10, "Wales": 15, "Scotland": 0,
+};
+function regionCilPm2(region) {
+  if (!region) return 80;   // unknown region: modest national-ish midpoint
+  if (REGION_CIL_PM2[region] != null) return REGION_CIL_PM2[region];
+  const k = Object.keys(REGION_CIL_PM2).find(x => region.indexOf(x) !== -1);
+  return k ? REGION_CIL_PM2[k] : 80;
+}
+
 // ---------------------------------------------------------------------------
 // Viability assumption schema — the single source of truth. Drives the
 // defaults, the Viability variables modal (fields are GENERATED from this,
@@ -11510,15 +11541,24 @@ const VIAB_SCHEMA = [
     tip: "Absorption: first completion to final sale.", source: "assumption" },
   { key: "salesOverlapMonths", group: "finance", label: "Sales overlap", unit: "months", step: 1, default: 6,
     tip: "How far sales completions start before build completion (off-plan / phased handover).", source: "assumption" },
-  // Policy costs
-  { key: "cilPerUnit", group: "policy", label: "CIL", unit: "£k/unit", step: 1, default: 5,
-    tip: "Community Infrastructure Levy — zone-specific; check the charging schedule. n/a Scotland.", source: "LPA charging schedule" },
-  { key: "s106PerUnit", group: "policy", label: "S106 / S75", unit: "£k/unit", step: 1, default: 5,
-    tip: "Education, healthcare, transport, open space heads of terms.", source: "LPA precedent" },
+  // Policy costs. CIL is statutory-style — £/m² of net new floorspace, not a
+  // flat per-dwelling figure (the old £5k/unit ran ~half the real charge in
+  // the South East). S106 is itemised into its usual heads of terms so each
+  // can be pinned to a council's published figure.
+  { key: "cilPm2", group: "policy", label: "CIL rate (0 = regional band)", unit: "£/m²", step: 5, default: 0,
+    tip: "Community Infrastructure Levy, charged per m² of net new GIA (CIL Regs 2010 reg.40: R × A × Ip/Ic). Enter the council's ADOPTED rate from its charging schedule to pin it. At 0 an indicative regional band is used (London ~£250 incl. Mayoral CIL, South East ~£130, Midlands ~£50-60, much of the North £0-30, Scotland £0 — no CIL regime), scaled to the scheme's value position within its region. Affordable homes are exempt (social housing relief). Indexation is omitted, so treat the auto figure as a floor.", source: "Adopted charging schedules (2025-indexed midpoints)" },
+  { key: "s106EducationPerUnit", group: "policy", label: "S106 · education", unit: "£k/unit", step: 0.5, default: 6,
+    tip: "School places: pupil yield (~0.2-0.4/dwelling by type) × DfE benchmark cost per place (~£25k primary, ~£31k secondary, far more for SEND). Blended requests typically £4-8k+/dwelling on houses, less on flats. Scaled by the regional build-cost index (DfE applies location multipliers).", source: "DfE 'Securing developer contributions for education' + school delivery cost benchmarking" },
+  { key: "s106HealthPerUnit", group: "policy", label: "S106 · healthcare", unit: "£k/unit", step: 0.1, default: 0.8,
+    tip: "GP / primary-care capacity contributions, typically £300-1,100/dwelling where sought; case-negotiated and still legally contested territory for acute trusts.", source: "ICB requests / case precedent" },
+  { key: "s106OpenSpacePerUnit", group: "policy", label: "S106 · open space & play", unit: "£k/unit", step: 0.1, default: 1.8,
+    tip: "Parks, play, outdoor sport — on-site provision or commuted sums, commonly £900-2,500/dwelling (e.g. Cornwall ~£2k combined, Nottingham ~£1.3k).", source: "Council open-space standards" },
+  { key: "s106TransportPerUnit", group: "policy", label: "S106 · transport & other", unit: "£k/unit", step: 0.1, default: 1.5,
+    tip: "Highways works, bus service support, travel plans, community facilities and monitoring — the residual heads of terms, highly scheme-specific.", source: "LPA precedent" },
   { key: "bngPerUnit", group: "policy", label: "BNG", unit: "£k/unit", step: 0.5, default: 2,
-    tip: "10% biodiversity net gain — cheap where on-site delivery works, £20k+/unit where off-site units must be bought.", source: "assumption" },
-  { key: "policyLocalisePct", group: "policy", label: "Localise CIL/S106 to values", unit: "%", step: 10, default: 100,
-    tip: "CIL charging schedules and S106 asks broadly track local values (London boroughs charge multiples of northern authorities; no free national rates table exists). At 100% the CIL and S106 figures scale with the scheme's sales value vs the £/ft² reference; at 0% they are flat national figures. BNG is NOT scaled — habitat cost isn't value-linked. Pin the real charging-schedule rate and set this to 0 when you know it.", source: "model (value-linked)" },
+    tip: "10% biodiversity net gain — cheap where on-site delivery works, £20k+/unit where off-site units must be bought. Not value-scaled: habitat cost isn't value-linked.", source: "assumption" },
+  { key: "policyLocalisePct", group: "policy", label: "Localise CIL within region", unit: "%", step: 10, default: 100,
+    tip: "Charging schedules zone by value WITHIN an authority too. At 100% the regional CIL band scales with the scheme's £/ft² vs its regional average (clamped ×0.6-1.8); at 0% the flat band applies. Ignored when an adopted rate is entered above. S106 items scale by the regional build-cost index instead (they are cost-side), and BNG is never scaled.", source: "model (value-linked within region)" },
   // Targets
   { key: "profitTargetPct", group: "targets", label: "Profit target (on cost)", unit: "%", step: 0.5, default: 17.5,
     tip: "The viability threshold: schemes below half this read unviable.", source: "PPG: 15–20% of GDV typical" },
@@ -11536,7 +11576,10 @@ const VIABILITY_DEFAULTS = Object.fromEntries(
   VIAB_SCHEMA.map(f => [f.key, f.default]));
 // Saved assumptions from the OLD flat model (buildPsf/softCostPct era) are not
 // meaningfully translatable — discard them once, keep everything else.
-VIABILITY_DEFAULTS._v = 2;
+// v3: CIL went statutory-style (£/m² floor-area on regional bands, affordable
+// exempt) and S106 became itemised heads of terms — the old flat cilPerUnit /
+// s106PerUnit cannot be translated, so v2 saves reset to defaults (crit kept).
+VIABILITY_DEFAULTS._v = 3;
 
 const SIFT = {
   loaded: false,
@@ -11650,9 +11693,30 @@ function computeAppraisal(inputs, a, opts) {
   const refPsf = a.salesPsf || 350;
   const valueRatio = Math.min(6, Math.max(0.25, refPsf > 0 ? price / refPsf : 1));
   const landScale = 1 + (valueRatio - 1) * ((a.landLocalisePct ?? 100) / 100);
-  const policyScale = 1 + (valueRatio - 1) * ((a.policyLocalisePct ?? 100) / 100);
-  const policyCosts = units * (((a.cilPerUnit || 0) + (a.s106PerUnit || 0)) * policyScale
-                              + (a.bngPerUnit || 0)) * 1000;
+  // Policy costs, statutory-style rather than flat per-dwelling:
+  //  CIL  = market floorspace × £/m² rate. The rate is the council's adopted
+  //         figure when supplied (a.cilPm2 > 0), else the regional band scaled
+  //         by the scheme's value position WITHIN its region (schedules zone
+  //         by value locally too; clamped ×0.6–1.8). Affordable homes are
+  //         exempt — social housing relief, CIL Regs reg.49. Indexation is
+  //         deliberately omitted, so the auto figure reads as a floor.
+  //  S106 = itemised heads of terms (education / health / open space /
+  //         transport) × the build-cost location index — these are cost-side
+  //         asks (DfE applies location multipliers), not value-side.
+  //  BNG  = flat per unit; habitat cost is not value-linked.
+  const locFactor = inputs.locationFactor || a.costIndexFactor || 1;
+  const regionMult = regionPriceMult(inputs.region);
+  const inRegionRatio = refPsf > 0 && regionMult > 0
+    ? Math.min(1.8, Math.max(0.6, price / (refPsf * regionMult))) : 1;
+  const cilScale = (a.cilPm2 || 0) > 0 ? 1
+    : 1 + (inRegionRatio - 1) * ((a.policyLocalisePct ?? 100) / 100);
+  const cilRate = (a.cilPm2 || 0) > 0 ? a.cilPm2 : regionCilPm2(inputs.region) * cilScale;
+  const cil = units * (1 - affFrac) * unitM2 * cilRate;
+  const s106PerUnitK = (a.s106EducationPerUnit || 0) + (a.s106HealthPerUnit || 0)
+                     + (a.s106OpenSpacePerUnit || 0) + (a.s106TransportPerUnit || 0);
+  const s106 = units * s106PerUnitK * 1000 * locFactor;
+  const bng = units * (a.bngPerUnit || 0) * 1000;
+  const policyCosts = cil + s106 + bng;
   // Land, best evidence first: the published MHCLG per-hectare benchmark for
   // the authority when the caller holds it (deep dive / assembler / report —
   // already local, so the value-ratio scaling must NOT stack on top), else
@@ -11785,9 +11849,11 @@ function computeAppraisal(inputs, a, opts) {
     // so the breakdown a client checks is the arithmetic that actually ran.
     audit: {
       units, unitFt2, unitM2, localPsf, price, blend, midSaleYears, infl,
-      flatFrac, pm2, locFactor: inputs.locationFactor || a.costIndexFactor || 1,
+      flatFrac, pm2, locFactor,
       buildBase, abnormals, prepInfra, hardCost, fees, contingency,
-      refPsf, valueRatio, policyScale, policyCosts, salesCosts,
+      refPsf, valueRatio, policyCosts, salesCosts,
+      cil, cilRate, cilScale, inRegionRatio, s106, s106PerUnitK, bng,
+      cilBand: (a.cilPm2 || 0) > 0 ? null : regionCilPm2(inputs.region),
       mhclgLand, land, preCon, build, sell, overlap, months,
       equityCap, interest, financeFee, nonLand,
     },
@@ -12070,7 +12136,7 @@ function siftStepControlsHTML(key) {
         `<label class="sift-field"><span>Show top <b id="sift-depriv-val">${Math.round(C.deprivedTopPct)}%</b> most deprived</span><input type="range" id="sift-depriv" min="5" max="100" step="5" value="${C.deprivedTopPct}"></label>` +
         `<p class="hint" style="margin-top:4px">100% keeps every station; 10% keeps only catchments in the most-deprived national decile.</p>`;
     case "viability":
-      return `<p class="hint"><strong>Viability</strong> runs a full residual appraisal per scheme — GDV from the <strong>local sales value</strong> (catchment-weighted Land Registry £/m² × EPC floor areas within 800 m), against typology build costs on a location index, abnormals, fees, policy costs (CIL/S106/BNG), an explicit finance line from a monthly cashflow, and land priced at the <strong>published MHCLG £/ha for the station's authority</strong> (the same basis the deep dive uses; localised £/unit fallback where uncovered). Headline levers below; <strong>every</strong> assumption is tweakable in Viability variables.</p>` +
+      return `<p class="hint"><strong>Viability</strong> runs a full residual appraisal per scheme — GDV from the <strong>local sales value</strong> (catchment-weighted Land Registry £/m² × EPC floor areas within 800 m), against typology build costs on a location index, abnormals, fees, statutory-style policy costs (CIL per m² of net floorspace at the council band with affordable exempt, itemised S106 heads of terms, BNG), an explicit finance line from a monthly cashflow, and land priced at the <strong>published MHCLG £/ha for the station's authority</strong> (the same basis the deep dive uses; localised £/unit fallback where uncovered). Headline levers below; <strong>every</strong> assumption is tweakable in Viability variables.</p>` +
         siftNumField("v-salesadj", "New-build premium %", A.salesAdjPct, 5,
           "Applied to the local market £/ft² from Land Registry data. 100% = resale parity; new build typically 105–115.") +
         siftNumField("v-buildh", "Build £/m² (houses)", A.buildPm2House, 25,
