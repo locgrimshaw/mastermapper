@@ -1122,6 +1122,13 @@ const MAP_OVERLAYS = [
   // Plans & policy areas (planning.data.gov.uk sweep)
   { key: "lpa_boundary",        group: "policy", label: "Planning authority boundaries", color: "#495057", dataset: "lpa_boundary",        render: "line",  minZoom: 5 },
   { key: "local_plan_boundary", group: "policy", label: "Local plan boundaries",         color: "#5f3dc4", dataset: "local_plan_boundary", render: "line",  minZoom: 6 },
+  // Where the plan still has to FIND homes. There is no national dataset of
+  // allocated housing SITE polygons — allocations remain a per-council
+  // publication — but the plan-level arithmetic IS national, and for judging
+  // where land is worth promoting it is arguably the more useful half:
+  // requirement minus (allocated + committed) = the shortfall the authority
+  // has to close. Painted on the plan boundary, not a site.
+  { key: "local_plan_housing", group: "policy", label: "Local plan housing gap", color: "#862e9c", dataset: "local_plan_housing", minZoom: 5 },
   { key: "article4",            group: "policy", label: "Article 4 direction areas",     color: "#c2255c", dataset: "article4",            minZoom: 8 },
   { key: "tpo_zone",            group: "policy", label: "Tree preservation zones",       color: "#2b8a3e", dataset: "tpo_zone",            minZoom: 9 },
   { key: "design_code_area",    group: "policy", label: "Design code areas",             color: "#e8590c", dataset: "design_code_area",    minZoom: 8 },
@@ -1413,6 +1420,7 @@ const LAYER_INFO = {
   land_hes:               { about: "Properties in the care of Historic Environment Scotland.", source: "Historic Environment Scotland open data (OGL v3)" },
   lpa_boundary:        { about: "Local planning authority boundaries — who decides planning applications where. Complete for England.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   local_plan_boundary: { about: "Adopted and emerging local plan areas. Coverage is still partial — only LPAs that have published to the platform.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  local_plan_housing:  { about: "How much housing each local plan still has to find: the plan's requirement minus what it has already allocated to sites and what already holds permission. Green = the requirement is covered; yellow through deep red = the shortfall in homes, up to 30,000+. Grey = no usable numbers — either the plan publishes none or no plan is recorded for that area. Coverage is honest, not total: of 364 plan areas, 338 have a plan record and 190 publish enough to compute a gap. NOTE this is PLAN-LEVEL arithmetic on the plan boundary, not allocated site polygons — there is no national dataset of those, they remain a per-council publication. Hover for the requirement, the allocated/committed split, adoption date and whether the plan is past its 5-year review.", source: "MHCLG planning.data.gov.uk: local-plan, local-plan-housing, local-plan-timetable (OGL v3)" },
   article4:            { about: "Article 4 directions removing permitted development rights — often HMO conversion, so a strong student-housing pressure signal.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   tpo_zone:            { about: "Tree preservation order zones.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   design_code_area:    { about: "Areas covered by an adopted design code.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
@@ -2186,6 +2194,20 @@ function renderOverlay(key, def, fc) {
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "cil_pm2"]], 0],
           0, "#2f9e44", 40, "#94d82d", 90, "#ffd43b",
           150, "#f59f00", 250, "#e8590c", 450, "#c92a2a"]]
+      : def.dataset === "local_plan_housing"
+      // Three genuinely different states, and they must not be confusable:
+      //   no gap key   -> grey: the plan publishes no usable numbers (or there
+      //                   is no plan record at all). Absence of evidence.
+      //   gap == 0     -> green: the requirement is fully covered by
+      //                   allocations + commitments.
+      //   gap  > 0     -> the shortfall in homes, yellow through to deep red.
+      // Steps, not an interpolation: the top authority is 30,700 homes short
+      // while the median is ~2,000, so a linear ramp would leave almost
+      // everywhere the same pale colour.
+      ? ["case", ["!", ["has", "gap"]], "rgba(160,170,175,0.4)",
+         ["step", ["coalesce", ["to-number", ["get", "gap"]], 0],
+          "#2f9e44", 1, "#94d82d", 500, "#ffd43b", 1500, "#ffa94d",
+          3000, "#f76707", 6000, "#e8590c", 10000, "#c92a2a", 20000, "#7f0000"]]
       : def.dataset === "build_cost_index"
       // Relative build cost: green cheaper-than-national -> red dearer.
       ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "factor"]], 1],
@@ -3709,6 +3731,44 @@ function hoverContentForOverlay(def, p) {
               ? `£${Number(p.resi_min)}–£${Number(p.resi_max)}/m²` : null, "schedule span (zoned)"),
             row(p.note || null, "note"),
             row(st === "adopted" ? `~${p.asof} indexation · omits future uplift` : null, "vintage")];
+  } else if (d === "local_plan_housing") {
+    const num = v => v == null ? null : Number(v).toLocaleString();
+    const STAGE = { "regulation-18": "Reg 18 consultation",
+                    "regulation-19": "Reg 19 publication", "submitted": "submitted",
+                    "examination": "at examination", "found-sound": "found sound",
+                    "adopted": "adopted", "draft": "draft" };
+    // A plan over 5 years past adoption must be reviewed (Reg 10A) and its
+    // housing policies risk being out of date — the tilted balance in waiting.
+    const stale = p.plan_age_yrs != null && Number(p.plan_age_yrs) > 5;
+    title = p.name || p.plan_name || "Local plan area";
+    kind = p.status === "no_plan_record"
+      ? "Local plan — no plan recorded on the platform"
+      : p.gap != null
+      ? "Local plan housing — requirement vs supply"
+      : "Local plan — no housing numbers published";
+    rows = [row(p.gap != null
+                ? (Number(p.gap) > 0
+                   ? `${num(p.gap)} homes still to find`
+                   : "requirement covered by allocations + commitments")
+                : null, p.pct_met != null ? `${p.pct_met}% of the requirement met` : "shortfall"),
+            row(num(p.required), "requirement (plan period)"),
+            row(p.allocated != null || p.committed != null
+                ? [p.allocated != null ? `${num(p.allocated)} allocated` : null,
+                   p.committed != null ? `${num(p.committed)} committed` : null,
+                   p.windfall != null ? `${num(p.windfall)} windfall` : null]
+                  .filter(Boolean).join(" · ")
+                : null, "supply as published"),
+            row(p.plan_name && p.plan_name !== p.name ? p.plan_name : null, "plan"),
+            row(p.adopted
+                ? `adopted ${p.adopted}${p.plan_age_yrs != null ? ` · ${p.plan_age_yrs} yrs old` : ""}` +
+                  (stale ? " — past 5-yr review" : "")
+                : (STAGE[p.stage] || p.stage || null), p.adopted ? "status" : "plan stage"),
+            row(p.period_start && p.period_end ? `${p.period_start.slice(0, 4)}–${p.period_end.slice(0, 4)}` : null,
+                "plan period"),
+            row(p.last_event ? `${p.last_event.replace(/-/g, " ")}${p.last_event_date ? ` (${p.last_event_date})` : ""}` : null,
+                "latest milestone"),
+            row(p.gap == null && p.status !== "no_plan_record"
+                ? "plan on the platform, but no housing figures published" : null, "coverage")];
   } else if (d === "land_value") {
     title = p.resi_gbp_ha != null
       ? `£${(Number(p.resi_gbp_ha) / 1e6).toFixed(1)}M/ha` : (p.name || "Local authority");

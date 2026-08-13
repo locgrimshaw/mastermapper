@@ -85,6 +85,7 @@ Run (or let the Action run it — see .github/workflows/load-datasets.yml):
 
 import argparse
 import csv
+import datetime as _dt
 import hashlib
 import json
 import os
@@ -225,7 +226,7 @@ ALL_DATASETS = [
     "ofcom_fibre", "census_students", "student_accom",
     "building_height",
     "build_cost_index", "lad_income", "msoa_income", "land_value",
-    "cil_rates", "lsoa_boundary",
+    "cil_rates", "lsoa_boundary", "local_plan_housing",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -2235,6 +2236,182 @@ def build_lsoa_boundary():
     return {key: rows}
 
 
+# Local plan process stages, worst -> best evidence of a settled plan. Used to
+# pick which plan speaks for a boundary when several are recorded.
+LOCAL_PLAN_STAGE_RANK = {
+    "": 0, "draft": 1, "regulation-18": 2, "regulation-19": 3,
+    "submitted": 4, "examination": 5, "found-sound": 6, "adopted": 7,
+}
+
+
+def build_local_plan_housing():
+    """Local plan housing requirement vs allocation, on plan boundaries —
+    dataset local_plan_housing.
+
+    There is NO national dataset of allocated housing SITE polygons: probing
+    the planning data platform for site-allocation / housing-allocation /
+    local-plan-site slugs returns nothing, and allocations remain a per-council
+    publication. What IS national is the plan-level arithmetic, and for finding
+    where land is worth promoting it is arguably the more useful half:
+
+      required-housing   what the plan must deliver
+      allocated-housing  what it has allocated to sites
+      committed-housing  what already has permission
+      -> gap             what the authority still has to find
+
+    Three CSVs joined onto the local-plan-boundary polygons we already carry:
+      local-plan            plan metadata: name, adopted date, period, process
+      local-plan-housing    the housing numbers above
+      local-plan-timetable  milestone events (latest = current stage)
+
+    Coverage is honest, not total: ~338 of 364 boundaries have a plan record
+    and ~238 have the housing numbers. Boundaries with a plan but no numbers
+    still carry name/adopted-date/stage and are flagged has_numbers=false, so
+    the map distinguishes 'no gap' from 'not published'."""
+    key = "local_plan_housing"
+    bpath, bhow = _resolve_source(
+        "local_plan_boundary", ["LOCAL_PLAN_BOUNDARY_SRC"],
+        PLANNING_DATA_BASE + "local-plan-boundary.geojson",
+        "local-plan-boundary.geojson")
+    if bpath is None:
+        _warn(key, "no local plan boundaries to join onto")
+        _note(key, "no boundaries")
+        return {}
+
+    def _csv(slug, env):
+        path, how = _resolve_source(key, [env],
+                                    PLANNING_DATA_BASE + f"{slug}.csv",
+                                    f"{slug}.csv")
+        if path is None:
+            return {}, how
+        rows = {}
+        with open(path, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                rows[r.get("reference", "")] = r
+        return rows, how
+
+    plans, phow = _csv("local-plan", "LOCAL_PLAN_SRC")
+    if not plans:
+        _warn(key, f"no local-plan.csv ({phow})")
+        _note(key, "no plan table")
+        return {}
+    # housing + timetable are keyed by the PLAN reference, not their own
+    hous, _ = {}, None
+    hpath, _hhow = _resolve_source(key, ["LOCAL_PLAN_HOUSING_SRC"],
+                                   PLANNING_DATA_BASE + "local-plan-housing.csv",
+                                   "local-plan-housing.csv")
+    if hpath is not None:
+        with open(hpath, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                hous[r.get("local-plan", "")] = r
+    events = {}
+    tpath, _thow = _resolve_source(key, ["LOCAL_PLAN_TIMETABLE_SRC"],
+                                   PLANNING_DATA_BASE + "local-plan-timetable.csv",
+                                   "local-plan-timetable.csv")
+    if tpath is not None:
+        with open(tpath, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                lp, d = r.get("local-plan", ""), (r.get("event-date") or "")[:10]
+                if lp and d and d > (events.get(lp, ("", ""))[0]):
+                    events[lp] = (d, r.get("local-plan-event", ""))
+
+    # boundary reference -> the plan that best speaks for it: prefer one with
+    # housing numbers, then the furthest-progressed stage, then most recent.
+    by_boundary = {}
+    for ref, pl in plans.items():
+        b = (pl.get("local-plan-boundary") or "").strip()
+        if b:
+            by_boundary.setdefault(b, []).append(pl)
+
+    def _plan_key(pl):
+        return (1 if pl["reference"] in hous else 0,
+                LOCAL_PLAN_STAGE_RANK.get(
+                    (pl.get("local-plan-process") or "").strip(), 0),
+                (pl.get("adopted-date") or "")[:10],
+                (pl.get("period-end-date") or "")[:10])
+
+    def _int(v):
+        try:
+            return int(float(str(v).replace(",", "").strip()))
+        except (TypeError, ValueError):
+            return None
+
+    today = _dt.date.today()
+    n_plan = n_num = 0
+
+    def lph_props(f):
+        nonlocal n_plan, n_num
+        ref = str(_cell(f, "reference") or "").strip()
+        cands = by_boundary.get(ref) or []
+        if not cands:
+            return {"plan_ref": None, "status": "no_plan_record",
+                    "has_numbers": False,
+                    "src": "planning.data.gov.uk local-plan (OGL) — no plan "
+                           "recorded for this boundary"}
+        pl = sorted(cands, key=_plan_key)[-1]
+        n_plan += 1
+        h = hous.get(pl["reference"], {})
+        req = _int(h.get("required-housing")) or _int(pl.get("required-housing"))
+        alloc = _int(h.get("allocated-housing"))
+        comm = _int(h.get("committed-housing"))
+        wind = _int(h.get("windfall-housing"))
+        broad = _int(h.get("broad-locations-housing"))
+        adopted = (pl.get("adopted-date") or "")[:10]
+        age = None
+        if len(adopted) == 10:
+            try:
+                age = round((today - _dt.date.fromisoformat(adopted)).days / 365.25, 1)
+            except ValueError:
+                age = None
+        ev = events.get(pl["reference"])
+        out = {
+            "plan_ref": pl["reference"],
+            "plan_name": (pl.get("name") or "").strip() or None,
+            "adopted": adopted or None,
+            "plan_age_yrs": age,
+            "period_start": (pl.get("period-start-date") or "")[:10] or None,
+            "period_end": (pl.get("period-end-date") or "")[:10] or None,
+            "stage": (pl.get("local-plan-process") or "").strip() or None,
+            "last_event": ev[1] if ev else None,
+            "last_event_date": ev[0] if ev else None,
+            "plan_url": (pl.get("documentation-url")
+                         or pl.get("document-url") or "").strip() or None,
+            "required": req, "allocated": alloc, "committed": comm,
+            "windfall": wind, "broad_locations": broad,
+            "src": "planning.data.gov.uk local-plan + local-plan-housing "
+                   "(OGL v3) — plan-level figures as published by the LPA",
+        }
+        # The number that matters: what the plan still has to find. Only
+        # computed where a requirement AND at least one supply side exist —
+        # never inferred from a missing figure.
+        if req is not None and (alloc is not None or comm is not None):
+            supply = (alloc or 0) + (comm or 0)
+            out["supply"] = supply
+            out["gap"] = max(0, req - supply)
+            out["pct_met"] = round(100.0 * supply / req, 1) if req > 0 else None
+            out["has_numbers"] = True
+            out["status"] = "has_numbers"
+            n_num += 1
+        else:
+            out["has_numbers"] = False
+            out["status"] = "plan_only"
+        return out
+
+    gdf = gpd.read_file(bpath)
+    ref_col = _find_col(gdf, ["reference"])
+    if ref_col is None:
+        _warn(key, "no reference column on the boundary file")
+        _note(key, "no boundary reference")
+        return {}
+    name_col = _find_col(gdf, ["name"])
+    rows = _emit(gdf, key, name_col=name_col, id_col=ref_col, want="polygon",
+                 props_fn=lph_props)
+    print(f"  [{key}] {len(rows)} plan boundaries; {n_plan} with a plan "
+          f"record, {n_num} with housing numbers")
+    _note(key, f"{phow}; {n_num} areas with requirement vs supply", len(rows))
+    return {key: rows}
+
+
 def build_income():
     """Household earnings on LAD polygons — dataset lad_income.
 
@@ -2829,6 +3006,7 @@ GROUPS = (
         (["land_value"], build_land_value, []),
         (["cil_rates"], build_cil_rates, []),
         (["lsoa_boundary"], build_lsoa_boundary, []),
+        (["local_plan_housing"], build_local_plan_housing, []),
     ]
 )
 
