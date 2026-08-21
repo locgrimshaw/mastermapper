@@ -309,15 +309,161 @@ how the appraisal presents policy costs.
 
 ---
 
-## Suggested order
+## Part 4 — constraint and register layers the Framework relies on
 
-1. ~~**§0.3 Golden Rules**~~ — **done**.
-2. ~~**§1.1 + §1.2 standard-method need and the requirement ratio**~~ — **done**.
-3. **§1.4 + §1.5 site-size classes and small-site supply** — pure derivation
-   from data already held.
-4. **§2.1 trains per hour**, then **§0.1 top-80 TTWA** — both need the station
-   assessments rebuilt, so do them in one deliberate pass rather than two.
-5. **§1.3 HDT unmet-need flag**, **§1.6 grey belt restatement**, **§1.7
-   affordable value split** — small corrections, best batched.
-6. **§2.2 Connectivity Tool** — send the access email first; the build depends
-   entirely on the answer.
+A separate class of work from the metrics above: policies that turn on whether
+a site sits inside a designated area. Each is a boundary set we do not hold,
+and every one below is already published on planning.data.gov.uk under OGL —
+they drop straight into the existing dataset framework with no new
+infrastructure. Sizes are the published GeoJSON.
+
+### 4.1 The delivery blockers — build these first
+
+| Layer | Policy | Size | Why it matters |
+|---|---|---|---|
+| **Nutrient neutrality catchments** | N6 | 2.1 MB | The single biggest stalling mechanism in English housing. Inside one of these, a scheme needs mitigation before permission — schemes have sat for years. A site that is otherwise perfect and inside a catchment is a different proposition, and we currently show no difference at all. |
+| **Minerals & waste safeguarding areas** | M2 | 21.4 + 19.1 MB | Safeguarded mineral resource blocks or complicates housing over it, and it is invisible on every other layer we draw. A genuine surprise-at-planning-stage constraint. |
+| **Air quality management areas** | P3 | 7.4 MB | Declared AQMAs bring assessment requirements and mitigation cost, and cluster exactly where station-adjacent development is most attractive. |
+| **Flood storage areas** | F2, S4 | 1.9 MB | Policy S4(2)(b) singles out land used for water storage or flood risk management: losing it is one of the named ways benefits are "substantially outweighed". Distinct from the flood zones we already draw. |
+
+### 4.2 Heritage and nature, completing sets we have started
+
+We draw conservation areas, listed buildings, scheduled monuments, SSSI, SAC,
+SPA, Ramsar and ancient woodland. The Framework's heritage and nature policies
+reach further, and the gaps are all small files:
+
+- **Archaeological priority areas** (3.1 MB) and **heritage at risk** (11.8 MB)
+  — HE-series. Heritage at risk cuts both ways: a constraint, but also an
+  enabling-development argument.
+- **Locally listed buildings** (0.3 MB) — policy HE7 handles non-designated
+  assets on a balanced judgement, not the designated-asset test. Today they are
+  invisible until someone objects.
+- **Battlefields**, **certificates of immunity**, **building preservation
+  notices** (~1 MB together) — rare, but a certificate of immunity is a
+  positive signal worth surfacing, not just a constraint.
+- **Local nature reserves** (14.9 MB) and **nature improvement areas** (2.5 MB)
+  — N-series, and both feed the N2(1)(c) ecological-network test.
+
+### 4.3 Context layers that change the reading of a site
+
+- **Educational establishments** (31.5 MB) — school locations and capacity are
+  the denominator of the education contribution the appraisal already charges
+  for. Also the HO4(1)(b) "access to services" test for strategic sites.
+- **Development corporation boundaries** (0.2 MB) — a different consenting
+  regime and often a different affordable requirement.
+- **Central activities zone** (0.1 MB) — drives London policy that overrides
+  borough norms.
+
+### 4.4 Ground conditions — policy P2, and the one gap not on the platform
+
+P2 requires sites to be suitable "taking into account ground conditions,
+including any risks arising from land instability or contamination (whether
+due to natural hazards or current and former activities such as mining or fuel
+storage)". Our site report flags this as desk-study work, which is honest but
+unhelpful — the two big national datasets exist:
+
+- **Coal mining development high risk areas** (Mining Remediation Authority,
+  formerly the Coal Authority). Roughly a quarter of England sits over former
+  coalfield, and a high risk area means a mining report and often grouting.
+  **Source needs confirming** — their open data platform, licence unchecked.
+- **Radon affected areas** (UKHSA/BGS). Protective measures are a build-cost
+  item we do not currently model. Licensing is likely to be the obstacle.
+
+Both are honest "needs a source check" items rather than costed builds.
+
+### 4.5 Annex C — let the Framework write our further-work list
+
+Annex C is a table of the information an application must supply, by policy:
+planning statement, viability assessment, transport statement or assessment,
+travel plan, site investigation by a competent person, flood risk assessment,
+SuDS statement, coastal change vulnerability assessment, heritage impact
+assessment, protected-landscape assessment, open space assessment, town centre
+impact assessment.
+
+Our site report already carries a "risks and further work" section built from
+whatever fields we flagged as desk-study. Driving it from Annex C instead —
+and switching each item on from the constraints we actually detected on the
+site — turns a list we invented into the Framework's own, cited by policy. It
+is the cheapest credibility win left in the document: no new data, one mapping
+table, and it makes the report read as a planning document rather than a
+data summary.
+
+### 4.6 Watch item — Environmental Delivery Plans
+
+Policy N6 introduces a second route where a habitats site is affected: the
+impact "is being addressed through an Environmental Delivery Plan which has
+been made and the developer has committed to paying the nature restoration
+levy". This is the intended successor to bespoke nutrient and recreation
+mitigation. No national register exists yet. When one appears it becomes a
+first-class layer, because inside an EDP area a levy payment replaces an
+open-ended mitigation problem — which is precisely the difference between a
+site being developable and not.
+
+---
+
+## Roadmap
+
+Six phases, ordered by cost and by what shares a rebuild. Phases 1-3 are all
+buildable now from data in hand or free sources.
+
+### Phase 1 — finish the corrections (small, and two share one rebuild)
+
+| Item | Cost |
+|---|---|
+| §1.3 HDT unmet-need flag — surface the sub-75% S5(1)(j) unlock as a flag, not a colour band | frontend only |
+| §1.6 grey belt restated against GB2 purposes (a), (b), (d) only | model + copy |
+| §1.7 split affordable value into rented and intermediate (Annex B's ≥20% discount floor) | one schema entry |
+| §2.1 trains per hour from the timetable pass we already run | pipeline |
+| §0.1 top-80 TTWA — 86 stations sitting a tier low | one constant |
+
+The last two both need `station_assessments` rebuilt, so they go together in
+one deliberate pass rather than two.
+
+### Phase 2 — site-level policy classification (no new data at all)
+
+| Item | Cost |
+|---|---|
+| §1.4 major / medium / minor classification from area and capacity | derivation |
+| §1.5 small-site supply per catchment against HO6's 10% + 10% | derivation |
+| §4.5 Annex C information requirements driving the report's further-work list | mapping table |
+
+Highest value per hour of anything left: all three are arithmetic or copy over
+data already loaded, and together they move the site report from "here is what
+we found" to "here is what the Framework asks of this site".
+
+### Phase 3 — the missing constraint layers (free, OGL, existing framework)
+
+Start with §4.1's four delivery blockers — nutrient neutrality especially,
+which changes whether a site is developable at all. Then §4.2's heritage and
+nature sets, then §4.3's context layers. Each is a builder function and a
+registry entry; the pattern is now well worn.
+
+### Phase 4 — ground conditions
+
+§4.4 coal and radon. Source and licence checks first — do not scope a build
+before those answers.
+
+### Phase 5 — the open questions
+
+- The DfT **Connectivity Tool's own scores** (§2.2). The published metric is
+  now in the tool at authority, neighbourhood and Output Area level; what
+  remains is whether the tool's finer internal scores are obtainable. One
+  email answers it, and the same email should settle the metric's licence,
+  which its own metadata still records as "TBA".
+- **Local Nature Recovery Strategies** (§2.4) — publishing authority by
+  authority; a watching brief.
+- **S106 calibration** (§2.5) — blocked until a dwelling-count denominator
+  appears; do not attempt without one.
+
+### Phase 6 — reframing, not building
+
+§3.1 lead the calculation audit with the DM5 question it actually answers —
+"is a policy-compliant scheme viable here at a benchmark land value?" — rather
+than "what is the profit?". §3.2 present contributions as single figures, as
+PM12(3)(c) now requires plans to.
+
+Worth stating once somewhere prominent: policy **PM9** requires plan-makers to
+assess land for "availability, suitability and achievability (including likely
+viability)". That is a description of what this tool does. The sift and the
+site report together are a HELAA in miniature, and saying so in the
+Framework's own words is a stronger claim than any feature list.
