@@ -11791,7 +11791,10 @@ const SIFT = {
   crit: { requireFrequency: true, requireWellConnected: false, exemptInSettlement: true,
           tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
           maxProtectedPct: 100, deprivedTopPct: 100, minProfitOnCost: -30,
-          excludeGreenBelt: false, largestPlotOnly: false },
+          excludeGreenBelt: false, largestPlotOnly: false,
+          // Density basis: "floor" = each station's own NPPF-derived density
+          // floor; "custom" = one dph applied everywhere (dphCustom).
+          dphMode: "floor", dphCustom: 0, strategicOnly: false },
   sort: "viability",   // yield | regen | viability
   country: mmStore.get("siftCountry", "england"),  // england | scotland (sifted separately)
   assumptions: Object.assign({}, VIABILITY_DEFAULTS),
@@ -11845,6 +11848,12 @@ function toggleShortlist(crs) {
 // computed before the fee (the circularity is a rounding error at 1%); IRR is
 // on the equity cashflow, annualised from the monthly rate.
 // ---------------------------------------------------------------------------
+// NPPF (August 2026), Annex B: "Typically, for a residential-led development,
+// strategic sites would have capacity for at least 1,500 dwellings". The
+// Framework hedges deliberately — capacity "can vary depending on the mix of
+// uses" — so this is a marker of scale, never a hard planning classification.
+const STRATEGIC_MIN_UNITS = 1500;
+
 const FT2_PER_M2 = 10.7639;
 const M2_PER_FT2 = 1 / FT2_PER_M2;
 
@@ -12121,14 +12130,28 @@ function scoreSiftRows() {
   //      approximation — the GB share of that specific plot isn't stored.
   const nogb = SIFT.crit.excludeGreenBelt;
   const lgOnly = SIFT.crit.largestPlotOnly;
+  //   3. Density. The stored dwelling_yield is hectares × each station's own
+  //      density floor. The NPPF sets those densities as MINIMA to be
+  //      exceeded where possible (policy S5(3)), so a fixed floor understates
+  //      what a well-connected site can carry — the custom mode applies one
+  //      dph to every station instead, which is how you test a denser scheme
+  //      across the whole shortlist at once.
+  const dphOverride = SIFT.crit.dphMode === "custom" && Number(SIFT.crit.dphCustom) > 0
+    ? Number(SIFT.crit.dphCustom) : null;
   for (const r of SIFT.rows) {
     const base = lgOnly && r.largestPlotHa != null
       ? Math.min(r.largestPlotHa, r.developableHa) : r.developableHa;
     const gbScale = nogb && r.developableHa > 0
       ? Math.max(0, 1 - (r.greenBeltHa || 0) / r.developableHa) : 1;
     r.effHa = base * gbScale;
-    r.effYield = r.developableHa > 0
-      ? Math.round((r.yield || 0) * (r.effHa / r.developableHa)) : (r.yield || 0);
+    r.effDph = dphOverride ?? (r.densityFloor || null);
+    // Recomputing from hectares × dph keeps the override honest; the
+    // proportional fallback covers rows with no stored floor at all.
+    r.effYield = r.effDph != null
+      ? Math.round(r.effHa * r.effDph)
+      : (r.developableHa > 0
+          ? Math.round((r.yield || 0) * (r.effHa / r.developableHa)) : (r.yield || 0));
+    r.strategic = r.effYield >= STRATEGIC_MIN_UNITS;
     r._viab = computeViability(r);
   }
 }
@@ -12227,8 +12250,8 @@ const SIFT_STEPS = [
   // of both old predicates: nothing passes or fails differently.
   { key: "connectivity", title: "1 · Station gate — connectivity & tier",
     about: {
-      what: "The entry gate. Every station is classed by the draft NPPF's two-tier test: Tier A — inside a settlement, where station-adjacent development is a 'default yes'; Tier B — outside a settlement but well-connected (a genuine turn-up-and-go service in an economically significant area), where the draft NPPF now permits Green Belt release; anything else is ineligible. The tier also sets the density floor used for dwelling capacity: 50 dph for well-connected stations, else 40 dph.",
-      source: "Draft NPPF (2024 consultation), development around well-connected stations. Service test: at least 4 services per hour overall, or 2 per hour in each direction, through the daytime; 'well-connected' additionally requires the station's Travel-to-Work Area to be economically significant (top 60 by GVA, ONS). Density floors: 40 dph baseline, 50 dph in the most accessible locations.",
+      what: "The entry gate. Every station is classed by the NPPF's two-tier test: Tier A — inside a settlement, where station-adjacent development is a 'default yes'; Tier B — outside a settlement but well-connected (a genuine turn-up-and-go service in an economically significant area), where the NPPF permits Green Belt release (policy GB7(1)(h), subject to the GB8 Golden Rules); anything else is ineligible. The tier also sets the density floor used for dwelling capacity: 50 dph for well-connected stations, else 40 dph.",
+      source: "NPPF (August 2026), policies S5(1)(h), L3 and GB7(1)(h) — residential development within reasonable walking distance of a well-connected station — with 'well-connected station' defined in Annex B. Service test: at least 4 trains or trams per hour overall, or 2 per hour in any one direction, through the normal weekday daytime timetable. KNOWN CONSERVATISM: the published definition requires a top-80 Travel to Work Area by GVA, while our stored classification still applies the 2024 draft's top 60 — so 86 stations that the Framework would now treat as well-connected are being held back a tier here. Correcting it needs the station assessments rebuilt, so it is queued rather than quietly patched. Density floors of 40/50 dph are our own planning assumption, set above the Framework's minima of 35/45 dph.",
       calc: "meets_frequency = sustained trains/trams ≥ 4/hour (or ≥ 2/hour each direction), from the GB rail timetable. well_connected = meets_frequency AND top-60 TTWA. 'In settlement' is deliberately NOT a point-in-polygon test — a station often sits in the railway gap of a built-up-area polygon, which wrongly flagged dense urban stations (e.g. South Bermondsey) as out-of-settlement. Instead we measure the BUILT-UP FRACTION of the 800 m catchment (OS Open Built-Up Areas): in-settlement when ≥ 40% built-up, or ≥ 20% with built-up land within 100 m. Tier A = in-settlement; Tier B = out-of-settlement AND well-connected; else ineligible. Density floor = 50 dph if well-connected, else 40 dph." },
     // The AND of the two former predicates. In-settlement stations are exempt
     // from the service tests by default (the NPPF 'default yes'); the strict
@@ -12244,13 +12267,14 @@ const SIFT_STEPS = [
       return (r.tier === "A" && c.tierA) || (r.tier === "B" && c.tierB) ||
              (r.tier === "ineligible" && c.ineligible);
     } },
-  { key: "developable", title: "2 · Developable land",
+  { key: "developable", title: "2 · Developable land & capacity",
     about: {
-      what: "The net land physically available for homes within an ~800 m (10-minute) walk of the station, and the dwelling capacity that implies.",
-      source: "NPPF 'reasonable walking distance' of a station; the net-developable-area method (start from the catchment, erase undevelopable land) is standard practice in Housing & Economic Land Availability Assessments (HELAA).",
-      calc: "800 m circular catchment MINUS (PostGIS ST_Difference) built-up land, green space, transport corridors (roads + railway curtilage), flood zone 3 and hard environmental designations. dwelling_yield = net developable hectares × the density floor from step 1. 'Largest plot only' swaps the catchment total for the single largest contiguous plot (precomputed per station), screening out fragmented catchments; yield scales pro-rata." },
+      what: "The net land physically available for homes within an ~800 m (10-minute) walk of the station, the dwelling capacity that implies at a chosen density, and whether that capacity reaches the NPPF's strategic-site scale.",
+      source: "NPPF (August 2026): 'reasonable walking distance' of a well-connected station is defined in Annex B as around 800 m or a 10-minute walk. Policy S5(2)(c) sets MINIMUM densities near a well-connected station — at least 35 dwellings per hectare, rising to at least 45 dph where service frequency is at least twice the well-connected minimum — and S5(3) requires those minima to be exceeded where possible. Annex B defines a strategic site as one implemented in multiple phases, with significant infrastructure requirements and a masterplan, typically with capacity for at least 1,500 dwellings; policy HO4 asks plans to identify locations for exactly this kind of housing-led development. The net-developable-area method is standard HELAA practice.",
+      calc: "800 m circular catchment MINUS (PostGIS ST_Difference) built-up land, green space, transport corridors (roads + railway curtilage), flood zone 3 and hard environmental designations. Dwelling capacity = net developable hectares × density. Density is each station's own floor by default (a planning assumption set ABOVE the NPPF minimum), or one dph of your choosing applied everywhere. 'Largest plot only' swaps the catchment total for the single largest contiguous plot (precomputed per station), screening out fragmented catchments. Strategic scale = capacity ≥ 1,500 dwellings — a marker of scale, not a planning designation: the Framework itself says the number varies with the mix of uses." },
     pred: (r, c) => (r.effHa ?? r.developableHa) >= c.minDevHa &&
-                    (r.effYield ?? r.yield) >= c.minYield },
+                    (r.effYield ?? r.yield) >= c.minYield &&
+                    (!c.strategicOnly || (r.effYield ?? r.yield) >= STRATEGIC_MIN_UNITS) },
   { key: "protected", title: "3 · Protected land %",
     about: {
       what: "Of the land left after hard exclusions, how much sits under a SOFT heritage or landscape designation — one that doesn't stop development outright but adds planning friction, delay and cost.",
@@ -12325,13 +12349,41 @@ function siftNumField(id, label, val, step, tip) {
     `<input type="number" id="${id}" step="${step}" value="${val}"></label>`;
 }
 
+// What the minimum-hectares threshold actually MEANS in homes, recomputed as
+// the field is typed. A hectares figure is an abstraction to most people; the
+// dwelling count it implies is the thing they are really choosing. With a
+// custom density it is one number; on the per-station floors it is a range,
+// because the floor differs by station — quoting a single figure there would
+// be a false precision.
+function siftHaYieldEchoHTML() {
+  const C = SIFT.crit;
+  const ha = Number(C.minDevHa) || 0;
+  if (ha <= 0) return "No minimum — every station's land goes through.";
+  const custom = C.dphMode === "custom" && Number(C.dphCustom) > 0
+    ? Number(C.dphCustom) : null;
+  if (custom) {
+    return `≈ <strong>${Math.round(ha * custom).toLocaleString()} homes</strong> ` +
+           `at ${custom} dph — the floor a site must clear.`;
+  }
+  // Range across the density floors actually in play for this country's
+  // stations, rather than assumed constants.
+  const floors = Array.from(new Set(siftCountryRows()
+    .map(r => r.densityFloor).filter(v => v > 0))).sort((a, b) => a - b);
+  if (!floors.length) return `${ha} ha minimum.`;
+  const lo = Math.round(ha * floors[0]);
+  const hi = Math.round(ha * floors[floors.length - 1]);
+  return `≈ <strong>${lo === hi ? lo.toLocaleString() : lo.toLocaleString() + "–" + hi.toLocaleString()} homes</strong> ` +
+         `at ${floors.join(" / ")} dph — the floor a site must clear` +
+         (hi >= STRATEGIC_MIN_UNITS ? ", which is already strategic scale." : ".");
+}
+
 // Controls HTML for one step only (keeps the panel uncluttered).
 function siftStepControlsHTML(key) {
   const A = SIFT.assumptions, C = SIFT.crit;
   const chk = v => v ? " checked" : "";
   switch (key) {
     case "connectivity":
-      return `<p class="hint">Every station lands in one of two NPPF tiers — or neither. <strong>Tier A · in-settlement</strong>: the catchment is already built-up, so development is a 'default yes' regardless of service level. <strong>Tier B · well-connected, out-of-settlement</strong>: a genuine turn-up-and-go service (≥4 trains/hour, or 2 each way) in a top-60 economic area — where the draft NPPF permits Green Belt release. Everything else is <strong>ineligible</strong>. The tier also sets the density floor: 50 dph well-connected, else 40 dph. Tick which classes go forward.</p>` +
+      return `<p class="hint">Every station lands in one of two NPPF tiers — or neither. <strong>Tier A · in-settlement</strong>: the catchment is already built-up, so development is a 'default yes' regardless of service level. <strong>Tier B · well-connected, out-of-settlement</strong>: a genuine turn-up-and-go service (≥4 trains/hour, or 2 each way) in a top-60 economic area — where the NPPF permits Green Belt release. Everything else is <strong>ineligible</strong>. The tier also sets the density floor: 50 dph well-connected, else 40 dph. Tick which classes go forward.</p>` +
         `<label class="dd-row"><input type="checkbox" id="sift-tierA"${chk(C.tierA)}> <span>Tier A · in-settlement ('default yes')</span></label>` +
         `<label class="dd-row"><input type="checkbox" id="sift-tierB"${chk(C.tierB)}> <span>Tier B · well-connected, out-of-settlement (Green Belt permitted)</span></label>` +
         `<label class="dd-row"><input type="checkbox" id="sift-inelig"${chk(C.ineligible)}> <span>Include ineligible stations (they still face the service-frequency test)</span></label>` +
@@ -12339,17 +12391,29 @@ function siftStepControlsHTML(key) {
         `<label class="dd-row"><input type="checkbox" id="sc-strict"${chk(!C.exemptInSettlement)}> <span>Apply the service-frequency test inside settlements too</span></label>` +
         `<label class="dd-row"><input type="checkbox" id="sc-wc"${chk(C.requireWellConnected)}> <span>Require full 'well-connected' status (frequency + top-60 TTWA)</span></label>` +
         `<p class="hint" style="margin-top:4px">The NPPF treats in-settlement stations as a 'default yes' whatever their timetable — the first toggle removes that exemption. The second demands the full well-connected definition wherever the service tests apply.</p>`;
-    case "developable":
-      return `<p class="hint">Net developable area within 800 m after erasing built-up land, green space, transport (roads + railway curtilage), flood zone 3 and hard environmental designations.</p>` +
+    case "developable": {
+      const custom = C.dphMode === "custom" && Number(C.dphCustom) > 0;
+      const nStrategic = siftCountryRows().filter(r => r.strategic).length;
+      return `<p class="hint">Net developable area within 800 m after erasing built-up land, green space, transport (roads + railway curtilage), flood zone 3 and hard environmental designations — then how many homes that land carries at your chosen density.</p>` +
         siftNumField("sift-minha", "Min developable ha", C.minDevHa || 0, 1) +
-        siftNumField("sift-minyield", "Min dwelling yield", C.minYield || 0, 50) +
+        `<p class="hint sift-yield-echo" id="sift-ha-yield">${siftHaYieldEchoHTML()}</p>` +
+        siftNumField("sift-minyield", "Min dwelling capacity", C.minYield || 0, 50) +
+        `<p class="hint" style="margin-top:10px"><strong>Density</strong> — the NPPF sets its densities near a well-connected station as <em>minima to be exceeded where possible</em> (policy S5), so the floor is a starting point, not a ceiling.</p>` +
+        `<label class="dd-row"><input type="radio" name="sift-dph" id="sift-dph-floor"${chk(!custom)}> <span>Each station's own density floor <span class="hint">(40 dph, 50 where well-connected — above the NPPF minimum of 35/45)</span></span></label>` +
+        `<label class="dd-row"><input type="radio" name="sift-dph" id="sift-dph-custom"${chk(custom)}> <span>Apply one density everywhere</span>` +
+          `<input type="number" id="sift-dph-val" min="10" max="400" step="5" value="${Number(C.dphCustom) > 0 ? Number(C.dphCustom) : 75}" style="width:5.5em;margin-left:8px"> <span class="hint">dph</span></label>` +
+        `<p class="hint" style="margin-top:4px">Raising the density recomputes every capacity, every appraisal and every total — it is the fastest way to see which stations only stack up as a denser scheme. Typical reference points: 35–45 dph suburban houses, 75–120 dph mid-rise flats, 150+ dph urban apartment blocks.</p>` +
+        `<p class="hint" style="margin-top:10px"><strong>Scale</strong></p>` +
+        `<label class="dd-row"><input type="checkbox" id="sift-strategic"${chk(C.strategicOnly)}> <span>Strategic sites only — capacity ≥ ${STRATEGIC_MIN_UNITS.toLocaleString()} dwellings</span></label>` +
+        `<p class="hint" style="margin-top:4px">The NPPF (Aug 2026, Annex B) treats a site as <strong>strategic</strong> when it is built in multiple phases, carries significant infrastructure and needs a masterplan — typically capacity for at least 1,500 dwellings. Policy HO4 asks plans to find locations for exactly this. At the current density <strong>${nStrategic.toLocaleString()}</strong> ${nStrategic === 1 ? "station reaches" : "stations reach"} that scale. Treat it as a marker of scale, not a designation: the Framework says the figure varies with the mix of uses.</p>` +
         `<label class="dd-row"><input type="checkbox" id="sift-largest"${chk(C.largestPlotOnly)}> <span>Largest plot only</span></label>` +
-        `<p class="hint" style="margin-top:4px">Sift each station on its single <strong>largest contiguous plot</strong> instead of the catchment total — screens out places whose hectares are really a scatter of small, awkward sites. While on, the filters above, the viability appraisal and all totals use the largest plot (yield scaled pro-rata).</p>`;
+        `<p class="hint" style="margin-top:4px">Sift each station on its single <strong>largest contiguous plot</strong> instead of the catchment total — screens out places whose hectares are really a scatter of small, awkward sites. While on, the filters above, the viability appraisal and all totals use the largest plot.</p>`;
+    }
     case "protected":
       return `<p class="hint">Hard designations (SSSI, SAC, SPA, Ramsar, ancient woodland, scheduled monuments) are already erased in step 2. This caps how much of the remaining developable land sits under a <strong>soft</strong> designation — conservation areas, AONB / National Landscapes, registered parks &amp; gardens and listed-building settings — which don't block development but add planning friction.</p>` +
         `<label class="sift-field"><span>Max protected land <b id="sift-prot-val">${Math.round(C.maxProtectedPct)}%</b></span><input type="range" id="sift-maxprot" min="0" max="100" step="5" value="${C.maxProtectedPct}"></label>` +
         `<label class="dd-row"><input type="checkbox" id="sift-nogb"${chk(C.excludeGreenBelt)}> <span>Exclude Green Belt land</span></label>` +
-        `<p class="hint" style="margin-top:4px">With this on, each station's developable area and dwelling yield are counted <strong>net of Green Belt hectares</strong> — the exclusion flows through the land filters, the viability appraisal and the totals. Off by default because the draft NPPF explicitly permits Green Belt release around well-connected stations (Tier B).</p>`;
+        `<p class="hint" style="margin-top:4px">With this on, each station's developable area and dwelling yield are counted <strong>net of Green Belt hectares</strong> — the exclusion flows through the land filters, the viability appraisal and the totals. Off by default because the NPPF explicitly permits Green Belt release around well-connected stations (policy GB7(1)(h), Tier B) — though such schemes then owe the GB8 Golden Rules, including a materially higher affordable share.</p>`;
     case "regen":
       return `<p class="hint">Target the most deprived catchments. Each station's catchment deprivation is a national percentile of the population-weighted IMD (2019) of its LSOAs — <strong>100 = most deprived</strong>. Keep only stations in the top X% most deprived.</p>` +
         `<label class="sift-field"><span>Show top <b id="sift-depriv-val">${Math.round(C.deprivedTopPct)}%</b> most deprived</span><input type="range" id="sift-depriv" min="5" max="100" step="5" value="${C.deprivedTopPct}"></label>` +
@@ -12393,6 +12457,19 @@ function readSiftControls() {
   if (g("sift-minha")) C.minDevHa = numv("sift-minha", 0);
   if (g("sift-minyield")) C.minYield = numv("sift-minyield", 0);
   if (g("sift-largest")) C.largestPlotOnly = g("sift-largest").checked;
+  if (g("sift-strategic")) C.strategicOnly = g("sift-strategic").checked;
+  // Density basis. Typing in the dph box implies you meant to use it, so the
+  // radio follows the keystroke rather than making you click twice.
+  if (g("sift-dph-custom")) {
+    const wasCustom = C.dphMode === "custom";
+    C.dphMode = g("sift-dph-custom").checked ? "custom" : "floor";
+    C.dphCustom = numv("sift-dph-val", 0);
+    if (!wasCustom && C.dphMode === "floor" && document.activeElement === g("sift-dph-val")) {
+      C.dphMode = "custom";
+      g("sift-dph-custom").checked = true;
+      if (g("sift-dph-floor")) g("sift-dph-floor").checked = false;
+    }
+  }
   if (g("sift-maxprot")) C.maxProtectedPct = numv("sift-maxprot", 100);
   if (g("sift-nogb")) C.excludeGreenBelt = g("sift-nogb").checked;
   if (g("sift-depriv")) C.deprivedTopPct = numv("sift-depriv", 100);
@@ -12408,6 +12485,10 @@ function readSiftControls() {
   const lbl = (id, v) => { const el = g(id); if (el) el.textContent = v; };
   if (g("sift-maxprot")) lbl("sift-prot-val", Math.round(C.maxProtectedPct) + "%");
   if (g("sift-depriv")) lbl("sift-depriv-val", Math.round(C.deprivedTopPct) + "%");
+  // The homes-per-hectare echo has to be rescored first: a density change
+  // moves every row's capacity, and the echo quotes the floors in play.
+  const echo = g("sift-ha-yield");
+  if (echo) { scoreSiftRows(); echo.innerHTML = siftHaYieldEchoHTML(); }
   persistSiftConfig();   // remember the configuration across reloads
 }
 
@@ -12415,8 +12496,9 @@ function readSiftControls() {
 // Blob and click a temporary link). Includes tier, density, capacity + all scores.
 function exportSiftCsv() {
   const rows = siftSurvivorsUpTo(SIFT.step);
-  const cols = ["rank", "crs", "name", "region", "tier", "density_floor", "developable_ha",
-    "largest_plot_ha", "dwelling_yield", "protected_land_pct", "green_belt_ha",
+  const cols = ["rank", "crs", "name", "region", "tier", "density_floor", "density_dph_used",
+    "developable_ha", "largest_plot_ha", "dwelling_capacity", "strategic_site",
+    "protected_land_pct", "green_belt_ha",
     "regeneration_need_pctile", "viability_profit_on_cost_pct",
     "total_gdv_gbp", "total_profit_gbp", "viability_rag"];
   const esc = v => {
@@ -12426,8 +12508,10 @@ function exportSiftCsv() {
   const lines = [cols.join(",")];
   rows.forEach((r, i) => {
     lines.push([i + 1, r.crs, r.name, r.region, r.tier, r.densityFloor ?? "",
+      r.effDph ?? r.densityFloor ?? "",
       r.effHa ?? r.developableHa, r.largestPlotHa ?? "",
-      r.effYield ?? r.yield, r.friction == null ? "" : Math.round(r.friction * 100), r.greenBeltHa,
+      r.effYield ?? r.yield, r.strategic ? "yes" : "no",
+      r.friction == null ? "" : Math.round(r.friction * 100), r.greenBeltHa,
       r.regen == null ? "" : Math.round(r.regen),
       r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1),
       r._viab.gdv == null ? "" : Math.round(r._viab.gdv),
@@ -12447,11 +12531,13 @@ function exportShortlistCsv() {
   const set = SIFT.shortlist;
   const rows = SIFT.rows.filter(r => set.has(r.crs));
   scoreSiftRows();
-  const cols = ["crs", "name", "region", "tier", "density_floor", "dwelling_yield",
+  const cols = ["crs", "name", "region", "tier", "density_floor", "density_dph_used",
+    "dwelling_capacity", "strategic_site",
     "regeneration_need_pctile", "viability_profit_on_cost_pct"];
   const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const lines = [cols.join(",")];
-  rows.forEach(r => lines.push([r.crs, r.name, r.region, r.tier, r.densityFloor ?? "", r.yield,
+  rows.forEach(r => lines.push([r.crs, r.name, r.region, r.tier, r.densityFloor ?? "",
+    r.effDph ?? r.densityFloor ?? "", r.effYield ?? r.yield, r.strategic ? "yes" : "no",
     r.regen == null ? "" : Math.round(r.regen),
     r._viab.profitOnCost == null ? "" : r._viab.profitOnCost.toFixed(1)].map(esc).join(",")));
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
@@ -12614,7 +12700,7 @@ function renderSiftTable(surv, results) {
     `<th title="Rank position within the current survivors, ordered by the 'Rank by' setting on the final step.">#</th>` +
     `<th title="Station name and region. Heavy-rail stations from the National Rail dataset (2,019 stations in England).">Station</th>` +
     `<th title="NPPF tier. A = in-settlement (≥40% of the 800 m catchment is built-up, per OS Open Built-Up Areas — or ≥20% with built-up land within 100 m). B = well-connected station outside a settlement (Green Belt permitted). Sets eligibility.">Tier</th>` +
-    `<th title="Dwelling yield = net developable hectares × NPPF density floor (50 dph if well-connected, else 40 dph). Developable ha = 800 m catchment minus built-up land, green space, roads + railway, flood zone 3, and hard environmental designations (PostGIS ST_Difference). Hover a cell for the ha and dph used.">Yield</th>` +
+    `<th title="Dwelling capacity = net developable hectares × density. Density is each station's own floor (50 dph if well-connected, else 40 — both above the NPPF minimum of 35/45 dph near a well-connected station), or the single dph you set in step 2. Developable ha = 800 m catchment minus built-up land, green space, roads + railway, flood zone 3, and hard environmental designations (PostGIS ST_Difference). ★ marks capacity of 1,500+ dwellings — the NPPF's strategic-site scale. Hover a cell for the ha and dph used.">Capacity</th>` +
     `<th title="Regeneration need — the station's catchment deprivation as a national percentile (population-weighted IMD 2019 of LSOAs within 800 m). 100 = most deprived. ⬡ marks developable land in the Green Belt.">Need</th>` +
     `<th title="Viability — profit on cost from a residual appraisal (GDV − build − soft costs − land). GDV uses each station's local Land Registry £/m²; all assumptions are set on the Viability step. Colour = viable / marginal / unviable vs your profit target.">Via</th>` +
     `</tr></thead><tbody>` +
@@ -12624,7 +12710,7 @@ function renderSiftTable(surv, results) {
       `<td>${i + 1}</td>` +
       `<td>${escapeSift(r.name)}<small>${escapeSift(r.region || r.ttwa)}</small></td>` +
       `<td><span class="sift-tier sift-tier-${r.tier}">${r.tier === "ineligible" ? "—" : r.tier}</span></td>` +
-      `<td title="${(r.effHa ?? r.developableHa).toFixed(1)} developable ha · ${r.densityFloor || "?"} dph${SIFT.crit.excludeGreenBelt && r.greenBeltHa > 0 ? ` · net of ${r.greenBeltHa.toFixed(1)} ha Green Belt` : ""}">${(r.effYield ?? r.yield ?? 0).toLocaleString()}</td>` +
+      `<td title="${(r.effHa ?? r.developableHa).toFixed(1)} developable ha · ${r.effDph || r.densityFloor || "?"} dph${SIFT.crit.dphMode === "custom" && Number(SIFT.crit.dphCustom) > 0 ? " (your density, applied everywhere)" : " (this station's floor)"}${SIFT.crit.excludeGreenBelt && r.greenBeltHa > 0 ? ` · net of ${r.greenBeltHa.toFixed(1)} ha Green Belt` : ""}${r.strategic ? ` · strategic scale — ${STRATEGIC_MIN_UNITS.toLocaleString()}+ dwellings (NPPF Annex B)` : ""}">${(r.effYield ?? r.yield ?? 0).toLocaleString()}${r.strategic ? ' <span class="sift-strategic">★</span>' : ""}</td>` +
       `<td>${r.regen == null ? "—" : `<span class="sift-need" title="catchment IMD percentile ${Math.round(r.regen)} (100 = most deprived)${r.friction == null ? "" : ` · ${Math.round(r.friction * 100)}% protected land`}">${Math.round(r.regen)}</span>`}${r.greenBeltHa > 0 ? ` <span class="sift-gb" title="${r.greenBeltHa.toFixed(1)} ha developable in Green Belt">⬡</span>` : ""}</td>` +
       vcell(r) +
       `</tr>`

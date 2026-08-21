@@ -2569,3 +2569,14 @@ footer {
   background: transparent; color: var(--text);
 }
 .ddl-assemble { color: #f59f00; font-weight: 600; }
+
+/* Step 2: the homes-per-hectare echo under the minimum-area field, and the
+   marker for capacity at the NPPF's strategic-site scale. The echo is tinted
+   so it reads as a consequence of what you just typed rather than as more
+   static help text. */
+.sift-yield-echo {
+  margin: -4px 0 8px; padding: 5px 8px;
+  border-left: 2px solid var(--accent, #4c6ef5);
+  background: rgba(76, 110, 245, 0.07);
+}
+.sift-strategic { color: #f59f00; font-size: 11px; cursor: help; }
