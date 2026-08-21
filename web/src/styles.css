@@ -2617,3 +2617,14 @@ footer {
   margin: 6px 0 2px; padding: 6px 9px; font-size: 11.5px; line-height: 1.5;
   border-left: 2px solid #e0853a; background: rgba(224,133,58,0.09);
 }
+
+/* DfT connectivity: mode x purpose picker above the layer row. Two wrapping
+   rows of chips rather than 35 toggles — the scores all ride on the loaded
+   features, so switching is a repaint. */
+.lt-conn { margin: 6px 0 4px; padding: 6px 8px; border-radius: 6px;
+           background: var(--ink-line); }
+.lt-conn .lt-seg-label { display: block; margin-bottom: 5px; font-size: 11px; }
+.lt-conn .lt-seg-label b { color: var(--text, inherit); font-weight: 600; }
+.lt-conn-row { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 3px; }
+.lt-conn-row:last-child { margin-bottom: 0; }
+.lt-conn-row .lt-seg-btn { flex: 0 0 auto; font-size: 10.5px; padding: 2px 6px; }

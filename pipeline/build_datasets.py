@@ -227,6 +227,7 @@ ALL_DATASETS = [
     "building_height",
     "build_cost_index", "lad_income", "msoa_income", "land_value",
     "cil_rates", "lsoa_boundary", "local_plan_housing", "housing_need",
+    "connectivity_lsoa", "connectivity_lad",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -2951,6 +2952,265 @@ def build_housing_need():
     return {key: rows}
 
 
+# DfT transport connectivity metric (2025). One 68 MB ODS holding 1.09 GB of
+# XML: Metadata, then OA (188,884 rows), LSOA (35,672), LAD (331), RGN (10).
+CONNECTIVITY_URL = ("https://assets.publishing.service.gov.uk/media/"
+                    "68c966fc07d9e92bc5517b80/connectivity_metrics_2025.ods")
+
+# Column name -> compact prop key. Modes: w walking, c cycling, p public
+# transport, d driving, a all modes. Purposes: emp edu hea lei sho res, all.
+# Storing all 35 keeps the mode/purpose switch on the client free — it is a
+# repaint of props already loaded, never a refetch (the price-choropleth
+# lesson). Short keys because 35 of them ride on every one of 33,755 rows.
+CONNECTIVITY_MODES = {
+    "walking": "w", "cycling": "c", "public transport": "p",
+    "driving": "d", "overall": "a",
+}
+CONNECTIVITY_PURPOSES = {
+    "employment": "emp",
+    # The public-transport block calls this column "Business"; same measure.
+    "business": "emp",
+    "education": "edu", "healthcare": "hea",
+    "leisure and community": "lei", "shopping": "sho",
+    "residential": "res", "overall": "all",
+}
+
+
+def _connectivity_key(header):
+    """'Healthcare (public transport)' -> 'p_hea'; bare 'Overall' -> 'a_all'."""
+    h = str(header).strip()
+    m = re.match(r"^(.*?)\s*\(([^)]+)\)\s*$", h)
+    if m:
+        purpose, mode = m.group(1).strip().lower(), m.group(2).strip().lower()
+    else:
+        # The all-modes block drops the suffix: "Overall", "Employment (overall)"
+        purpose, mode = h.lower(), "overall"
+    p, mo = CONNECTIVITY_PURPOSES.get(purpose), CONNECTIVITY_MODES.get(mode)
+    return f"{mo}_{p}" if p and mo else None
+
+
+def _ods_sheet_rows(path, wanted):
+    """Stream one or more sheets out of a large ODS.
+
+    iterparse rather than a whole-document parse: content.xml here is 1.09 GB
+    and ElementTree runs out of memory on it. Rows are cleared AND detached
+    from the root as they close, which is what keeps memory flat — clearing
+    the row alone still leaves it hanging off the tree. Yields (sheet, cells).
+    """
+    import xml.etree.ElementTree as ET
+    T = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+    TX = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+    OF = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+    import zipfile
+    z = zipfile.ZipFile(path)
+    sheet = None
+    with z.open("content.xml") as fh:
+        ctx = ET.iterparse(fh, events=("start", "end"))
+        _, root = next(ctx)
+        for ev, el in ctx:
+            if ev == "start" and el.tag == "{%s}table" % T:
+                sheet = el.get("{%s}name" % T)
+            elif ev == "end" and el.tag == "{%s}table-row" % T:
+                if sheet in wanted:
+                    cells = []
+                    for c in el.findall("{%s}table-cell" % T):
+                        rep = int(c.get("{%s}number-columns-repeated" % T, 1))
+                        v = c.get("{%s}value" % OF)
+                        if v is None:
+                            v = "".join("".join(p.itertext())
+                                        for p in c.findall("{%s}p" % TX))
+                        cells += [v] * min(rep, 64)
+                    while cells and cells[-1] == "":
+                        cells.pop()
+                    if cells:
+                        yield sheet, cells
+                el.clear()
+                root.clear()
+            elif ev == "end" and el.tag == "{%s}table" % T:
+                el.clear()
+                root.clear()
+
+
+def build_connectivity():
+    """DfT connectivity scores on LSOA and LAD polygons — datasets
+    connectivity_lsoa and connectivity_lad.
+
+    How easily residents can reach employment, education, healthcare, leisure,
+    shopping and other homes, by walking, cycling, public transport and
+    driving. Scores are 0-100, higher is better connected, computed by DfT from
+    real networks and timetables.
+
+    Two reasons this is worth more than another choropleth. It is a NATIONAL
+    equivalent of PTAL, which we can only show for London because TfL's is
+    London-only. And NPPF (Aug 2026) policies TR3(2) and S5(3) name the
+    Connectivity Tool by URL as the thing that "should be used ... in assessing
+    the connectivity of particular locations proposed for development" — so
+    this is the Framework's own measure, not a proxy we chose.
+
+    All 35 scores ride on every row so the client's mode/purpose switch is a
+    repaint rather than a refetch. The LAD band exists because 35,672 LSOAs are
+    sub-pixel at national zoom and features_in_bbox drops sub-pixel features;
+    it is derived here by POPULATION-WEIGHTING the LSOA scores rather than read
+    from the file's own LAD sheet, which is keyed by name on 2022 geography and
+    so predates Cumberland, North Yorkshire and Somerset. Aggregating ourselves
+    avoids both the name join and the vintage mismatch.
+
+    NOTE the file is badged Experimental Statistics / prepublication, covers
+    Q4 2024, and states its own licence as 'TBA' against the GOV.UK page's
+    default OGL v3. Both facts are carried into the layer copy."""
+    key = "connectivity_lsoa"
+    fpath, fhow = _resolve_source(key, ["CONNECTIVITY_SRC"], CONNECTIVITY_URL,
+                                  "connectivity_metrics.ods")
+    if fpath is None:
+        _warn(key, "no connectivity ODS — set CONNECTIVITY_SRC")
+        _note(key, "no source file")
+        return {}
+
+    lpath, lhow = _resolve_source("lsoa_boundary", ["LSOA_BOUNDARY_SRC"], None,
+                                  "lsoa-boundaries.geojson")
+    if lpath is None:
+        committed = ROOT / "web" / "data" / "lsoa_imd.geojson"
+        if committed.exists():
+            lpath, lhow = committed, "committed app layer"
+        else:
+            _warn(key, "no LSOA polygons to join connectivity onto")
+            _note(key, "no LSOA boundaries")
+            return {}
+
+    print(f"  [{key}] streaming the connectivity workbook "
+          f"(1 GB of XML — a couple of minutes) ...")
+    cols, scores = None, {}
+    for sheet, cells in _ods_sheet_rows(fpath, {"LSOA"}):
+        if cols is None:
+            if str(cells[0]).strip().upper().startswith("LSOA"):
+                cols = [_connectivity_key(h) for h in cells[1:]]
+            continue
+        code = str(cells[0]).strip()
+        if not re.fullmatch(r"[EW]01\d{6}", code):
+            continue
+        row = {}
+        for k, v in zip(cols, cells[1:]):
+            if not k:
+                continue
+            try:
+                row[k] = round(float(v), 1)
+            except (TypeError, ValueError):
+                pass
+        if row:
+            scores[code] = row
+    if not scores:
+        _warn(key, "no LSOA rows parsed from the connectivity workbook")
+        _note(key, "no rows parsed")
+        return {}
+    print(f"  [{key}] {len(scores):,} LSOAs scored, "
+          f"{len(scores[next(iter(scores))])} metrics each")
+
+    gdf = gpd.read_file(lpath)
+    code_col = _find_col(gdf, ["lsoa_code", "lsoa21cd", "lsoa11cd", "code"],
+                         contains=True)
+    name_col = _find_col(gdf, ["lsoa_name", "name"], contains=True)
+    pop_col = _find_col(gdf, ["population", "pop"], contains=True)
+    if code_col is None:
+        _warn(key, f"no LSOA code column, got {list(gdf.columns)[:12]}")
+        _note(key, "no code column")
+        return {}
+
+    n_hit, n_miss = 0, 0
+
+    def conn_props(f):
+        nonlocal n_hit, n_miss
+        code = str(_cell(f, code_col) or "").strip()
+        row = scores.get(code)
+        if row is None:
+            n_miss += 1
+            return {"lsoa": code, "status": "no_score"}
+        n_hit += 1
+        return dict({"lsoa": code}, **row)
+
+    rows = _emit(gdf, key, name_col=name_col, id_col=code_col, want="polygon",
+                 props_fn=conn_props)
+    print(f"  [{key}] {n_hit:,} polygons matched a score, {n_miss:,} did not")
+
+    # ---- the LAD band, population-weighted from the LSOA scores -----------
+    out = {key: rows}
+    bpath, _bhow = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries — the wide-zoom band will be missing")
+        _note(key, f"{fhow}; {n_hit} LSOAs scored", len(rows))
+        return out
+
+    lads = gpd.read_file(bpath)
+    lad_code_col = None
+    for c in lads.columns:
+        if re.fullmatch(r"lad\d*cd", str(c).lower()):
+            lad_code_col = c
+            break
+    lad_code_col = lad_code_col or _find_col(lads, ["lad_code", "code"],
+                                             contains=True)
+    lad_name_col = None
+    for c in lads.columns:
+        if re.fullmatch(r"lad\d*nm", str(c).lower()):
+            lad_name_col = c
+            break
+    if lad_code_col is None:
+        _warn("connectivity_lad", "no LAD code column")
+        _note(key, f"{fhow}; {n_hit} LSOAs scored", len(rows))
+        return out
+
+    # Centroid-in-polygon rather than a name join: LSOA and LAD names come
+    # from different vintages, and matching them by hand is exactly the
+    # failure mode this dataset is trying to avoid.
+    pts = gdf[[code_col] + ([pop_col] if pop_col else [])].copy()
+    pts["geometry"] = gdf.geometry.representative_point()
+    pts = gpd.GeoDataFrame(pts, geometry="geometry", crs=gdf.crs)
+    if lads.crs is not None and pts.crs is not None and lads.crs != pts.crs:
+        pts = pts.to_crs(lads.crs)
+    joined = gpd.sjoin(pts, lads[[lad_code_col, "geometry"]],
+                       how="inner", predicate="within")
+
+    agg = {}
+    for _, r in joined.iterrows():
+        row = scores.get(str(r[code_col]).strip())
+        if not row:
+            continue
+        lad = str(r[lad_code_col]).strip()
+        w = 1.0
+        if pop_col:
+            try:
+                w = max(0.0, float(r[pop_col]))
+            except (TypeError, ValueError):
+                w = 0.0
+        if w <= 0:
+            w = 1.0
+        acc = agg.setdefault(lad, {"w": 0.0, "n": 0, "v": {}})
+        acc["w"] += w
+        acc["n"] += 1
+        for k, v in row.items():
+            acc["v"][k] = acc["v"].get(k, 0.0) + v * w
+
+    def lad_props(f):
+        code = str(_cell(f, lad_code_col) or "").strip()
+        a = agg.get(code)
+        if not a or a["w"] <= 0:
+            return {"lad_code": code, "status": "no_score"}
+        p = {k: round(v / a["w"], 1) for k, v in a["v"].items()}
+        p.update({"lad_code": code, "n_lsoa": a["n"],
+                  "weighted": bool(pop_col)})
+        return p
+
+    lad_rows = _emit(lads, "connectivity_lad", name_col=lad_name_col,
+                     id_col=lad_code_col, want="polygon", props_fn=lad_props)
+    print(f"  [connectivity_lad] {len(agg):,} authorities aggregated from "
+          f"{len(joined):,} LSOAs"
+          f"{' (population-weighted)' if pop_col else ' (unweighted mean)'}")
+    out["connectivity_lad"] = lad_rows
+    _note(key, f"{fhow}; {n_hit} LSOAs scored, {len(agg)} authorities",
+          len(rows) + len(lad_rows))
+    return out
+
+
 def build_income():
     """Household earnings on LAD polygons — dataset lad_income.
 
@@ -3547,6 +3807,7 @@ GROUPS = (
         (["lsoa_boundary"], build_lsoa_boundary, []),
         (["local_plan_housing"], build_local_plan_housing, []),
         (["housing_need"], build_housing_need, []),
+        (["connectivity_lsoa", "connectivity_lad"], build_connectivity, []),
     ]
 )
 

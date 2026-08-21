@@ -1159,6 +1159,15 @@ const MAP_OVERLAYS = [
   // returned TWO. Tiles have no such ceiling and cost the database nothing.
   // `dataset` stays for the popup and colour ramp; `tiles` routes the DATA away
   // from the RPC, reusing the ov-ptal-* layer ids so taps and opacity work.
+  // DfT connectivity metric — a national PTAL, and the measure NPPF policies
+  // TR3(2) and S5(3) name by URL. Zoom-banded like the price choropleths:
+  // 35,672 LSOAs are sub-pixel nationally and features_in_bbox drops sub-pixel
+  // features, so authorities wide out and neighbourhoods from z9. Borderless,
+  // because the colour is the whole story and LSOA outlines would fight it.
+  { key: "connectivity", group: "students", label: "Connectivity (DfT metric)",
+    color: "#00b48c", dataset: "connectivity_lad", minZoom: 4, lim: 8000,
+    datasetFn: z => z < 9 ? "connectivity_lad" : "connectivity_lsoa",
+    conn: true, noOutline: true },
   { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 8,
     tiles: { file: "ptal.pmtiles", sourceLayer: "ptal", minzoom: 8, outlineFromZoom: 15 },
     cap: { color: ["match", ["to-string", ["get", "ptal"]],
@@ -1426,6 +1435,7 @@ const LAYER_INFO = {
   land_hes:               { about: "Properties in the care of Historic Environment Scotland.", source: "Historic Environment Scotland open data (OGL v3)" },
   lpa_boundary:        { about: "Local planning authority boundaries — who decides planning applications where. Complete for England.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   local_plan_boundary: { about: "Adopted and emerging local plan areas. Coverage is still partial — only LPAs that have published to the platform.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  connectivity:        { about: "How easily people living in each area can reach the things they travel for — employment, education, healthcare, leisure, shopping and other homes — by walking, cycling, public transport or driving. DfT computes it from real networks and timetables; scores run 0-100 and higher is better connected. Use the mode and purpose buttons above to switch which of the 35 scores is painted; the colours are DfT's own spectral scale (black and purple worst, through blue and green, to yellow and red best) so this map reads directly against the department's own Connectivity Tool. TWO REASONS THIS MATTERS: it is a NATIONAL equivalent of PTAL, which we can only show for London because TfL's is London-only; and NPPF (Aug 2026) policies TR3(2) and S5(3) name the Connectivity Tool by URL as the evidence that 'should be used ... in assessing the connectivity of particular locations proposed for development', so this is the Framework's own measure rather than a proxy we picked. Authority averages at wide zooms (population-weighted from neighbourhoods, so a city's score is not dragged by its empty edges), neighbourhood LSOAs from z9. Note the caveats DfT states: these are EXPERIMENTAL statistics covering Q4 2024, based on timetabled rather than actual services, and the modes are not meant to be compared directly with each other — a rural area scoring 90 for driving and 20 for public transport is telling you something real about the mode, not about the place's overall accessibility. England and Wales; the published file stops at neighbourhood level, so the 100 m grid shown in DfT's own tool is not in it.", source: "Department for Transport, transport connectivity metric 2025 (experimental statistics, Q4 2024)" },
   housing_need:        { about: "The minimum number of homes each authority must plan for every year, computed exactly as NPPF (Aug 2026) Annex D specifies: 0.8% of the authority's existing dwelling stock, then adjusted for affordability — no adjustment where the median workplace-based house-price-to-earnings ratio is 5 or below, and 0.95% added to the baseline for each 1% above 5, on the five-year average. Pale teal is low need, deep teal high. This is the number the rest of housing policy hangs off: it sets how much land an authority has to find. Summed across England it comes to 367,693 homes a year, against the government's published standard-method total of about 370,000 — the two agree to well under a percent. England only: both sources stop at the border.", source: "MHCLG Live Table 125 (dwelling stock by local authority) + ONS ratio of house price to workplace-based earnings, table 5c (both OGL v3); method per NPPF Aug 2026 Annex D" },
   plan_vs_need:        { about: "Each authority's ADOPTED plan requirement, per year, as a percentage of what the standard method now says it needs. Red means the plan is far below current need — where an applicant argues from a deficient plan; green means it meets or beats it. The 80% break matters: Annex D para 9(c) attaches a 20% buffer to authorities whose annual requirement is 80% or less of current need, though that test has a second limb (a requirement adopted in the last five years, examined against a pre-December-2024 Framework) which cannot be confirmed per authority from open data — so treat this as one limb, not the buffer itself. 172 of 293 authorities can be compared honestly; the rest are grey and say why on hover. Three exclusions are deliberate, because each was producing a fabricated shortfall: authorities carrying several predecessor district plans after reorganisation (North Yorkshire holds seven), joint plans whose requirement covers several authorities together with no published split, and plans whose period began before the authority existed.", source: "MHCLG planning.data.gov.uk local-plan + local-plan-housing (OGL v3), set against the Annex D standard method" },
   local_plan_housing:  { about: "How much housing each local plan still has to find: the plan's requirement minus its published supply (sites allocated, schemes already committed, plus the windfall and broad-location allowances where given). Green = the requirement is covered; yellow through deep red = the shortfall in homes, up to ~11,000. Grey = no gap can be stated — no plan record, no housing figures, or only ONE side of the supply published, and a blank cell means 'not published', never zero. Coverage is honest, not total: of 364 plan areas, 338 have a plan record, 143 publish enough to compute a gap and 134 publish only part of their supply. NOTE this is PLAN-LEVEL arithmetic on the plan boundary, not allocated site polygons — there is no national dataset of those, they remain a per-council publication. Hover for the requirement, the supply split, adoption date and whether the plan is past its 5-year review.", source: "MHCLG planning.data.gov.uk: local-plan, local-plan-housing, local-plan-timetable (OGL v3)" },
@@ -1465,6 +1475,59 @@ const OVERLAY_DEFAULT_OPACITY = 0.32; // fill opacity a fresh overlay starts at
 // individual sales). One state, three layers: comparing "flats here vs houses
 // there" with per-layer filters would be a trap. localStorage direct rather
 // than mmStore, which is declared much later in the file.
+// DfT connectivity: which of the 35 scores on every area is being painted.
+// mode x purpose, held as the compact prop key the pipeline writes.
+const CONN_MODES = [["a", "All modes"], ["p", "Public transport"],
+                    ["w", "Walking"], ["c", "Cycling"], ["d", "Driving"]];
+const CONN_PURPOSES = [["all", "Overall"], ["emp", "Employment"],
+                       ["edu", "Education"], ["hea", "Healthcare"],
+                       ["lei", "Leisure"], ["sho", "Shopping"],
+                       ["res", "Residential"]];
+// DfT's own scale, so a screenshot of ours reads against a screenshot of
+// theirs: a spectral ramp over the RAW 0-100 score — black through purple and
+// blue, cyan, green, yellow, to red. Deliberately NOT our usual quantile
+// classing; the score is already normalised nationally, and reclassing it
+// would make the two maps disagree about what a colour means.
+const CONN_RAMP = [
+  0, "#000000", 6, "#52006b", 12, "#8b00a0", 18, "#3c00b4", 25, "#0000dd",
+  32, "#0060dd", 40, "#00a0d0", 48, "#00b48c", 55, "#00b400", 62, "#00e600",
+  70, "#b4ff00", 78, "#ffdd00", 86, "#ff8c00", 93, "#ff2200", 100, "#d40000",
+];
+let connMode = (() => {
+  try { return localStorage.getItem("mm.connMode") || "a"; } catch (_) { return "a"; }
+})();
+let connPurpose = (() => {
+  try { return localStorage.getItem("mm.connPurpose") || "all"; } catch (_) { return "all"; }
+})();
+function connKey() { return `${connMode}_${connPurpose}`; }
+function connPaint() {
+  const k = connKey();
+  return ["case", ["!", ["has", k]], "rgba(0,0,0,0)",
+          ["interpolate", ["linear"], ["to-number", ["get", k]], ...CONN_RAMP]];
+}
+function connMetricLabel() {
+  const m = (CONN_MODES.find(x => x[0] === connMode) || [])[1] || "All modes";
+  const p = (CONN_PURPOSES.find(x => x[0] === connPurpose) || [])[1] || "Overall";
+  return p === "Overall" ? `${m} · overall` : `${m} · ${p.toLowerCase()}`;
+}
+function setConnMetric(mode, purpose) {
+  if (mode) connMode = mode;
+  if (purpose) connPurpose = purpose;
+  try {
+    localStorage.setItem("mm.connMode", connMode);
+    localStorage.setItem("mm.connPurpose", connPurpose);
+  } catch (_) {}
+  // Every score is already on the loaded features, so switching metric is a
+  // repaint, never a refetch.
+  for (const o of MAP_OVERLAYS) {
+    if (!o.conn) continue;
+    const id = `ov-${o.key}-fill`;
+    if (map.getLayer(id)) map.setPaintProperty(id, "fill-color", connPaint());
+  }
+  const lbl = document.getElementById("conn-metric-label");
+  if (lbl) lbl.textContent = connMetricLabel();
+}
+
 let marketPtype = (() => {
   try { return localStorage.getItem("mm.marketPtype") || "all"; }
   catch (_) { return "all"; }
@@ -2144,6 +2207,8 @@ function renderOverlay(key, def, fc) {
       ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "slope"]], 0],
          0.5, "#2f9e44", 1.5, "#94d82d", 3, "#ffd43b", 5, "#f59f00",
          8, "#e8590c", 12, "#e03131"]
+      : def.conn
+      ? connPaint()
       : def.dataset === "ptal"
       ? ["match", ["to-string", ["get", "ptal"]],
          "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
@@ -2709,6 +2774,21 @@ function buildLayersPanel() {
                       data-ptype="${v}">${v === "all" ? "All" : v === "houses" ? "Houses" : "Flats"}</button>`).join("")}
           </div>`;
       }
+      // The connectivity layer carries 35 scores per area; a mode x purpose
+      // picker above the row beats 35 separate toggles, and switching is a
+      // repaint of props already loaded.
+      if (g.key === "students") {
+        rows += `
+          <div class="lt-conn" id="conn-picker">
+            <div class="lt-seg-label">Connectivity metric <b id="conn-metric-label">${connMetricLabel()}</b></div>
+            <div class="lt-conn-row" role="group" aria-label="Transport mode">
+              ${CONN_MODES.map(([v, l]) => `<button type="button" class="lt-seg-btn${connMode === v ? " active" : ""}" data-conn-mode="${v}">${l}</button>`).join("")}
+            </div>
+            <div class="lt-conn-row" role="group" aria-label="Journey purpose">
+              ${CONN_PURPOSES.map(([v, l]) => `<button type="button" class="lt-seg-btn${connPurpose === v ? " active" : ""}" data-conn-purpose="${v}">${l}</button>`).join("")}
+            </div>
+          </div>`;
+      }
       rows += MAP_OVERLAYS.filter(o => o.group === g.key).map(o =>
         ltRowHTML({ dataKey: o.key, label: o.label, color: o.color, statId: `ov-stat-${o.key}`,
                     checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}`,
@@ -2803,6 +2883,19 @@ function buildLayersPanel() {
     if (!btn) return;
     setMarketPtype(btn.dataset.ptype);
     seg.querySelectorAll(".lt-seg-btn").forEach(b =>
+      b.classList.toggle("active", b === btn));
+  });
+
+  // Connectivity mode x purpose. Two rows, one handler: whichever row was
+  // clicked sets its own dimension and leaves the other alone.
+  const cp = document.getElementById("conn-picker");
+  if (cp) cp.addEventListener("click", e => {
+    const btn = e.target.closest(".lt-seg-btn");
+    if (!btn) return;
+    const mode = btn.dataset.connMode, purpose = btn.dataset.connPurpose;
+    if (!mode && !purpose) return;
+    setConnMetric(mode, purpose);
+    btn.parentElement.querySelectorAll(".lt-seg-btn").forEach(b =>
       b.classList.toggle("active", b === btn));
   });
 
@@ -3779,6 +3872,26 @@ function hoverContentForOverlay(def, p) {
                 "flagged"),
             row(p.note || null, "note"),
             row(st === "adopted" ? `~${p.asof} indexation · omits future uplift` : null, "vintage")];
+  } else if (d === "connectivity_lsoa" || d === "connectivity_lad") {
+    const sc = v => v == null ? null : `${Number(v).toFixed(1)} / 100`;
+    const cur = p[connKey()];
+    title = cur != null ? `${Number(cur).toFixed(0)} / 100` : (p.name || "Area");
+    kind = `Connectivity — ${connMetricLabel()}` +
+      (d === "connectivity_lad" ? " (authority average)" : " (neighbourhood)");
+    // The selected metric leads; the four modes' overalls follow, because the
+    // interesting question is usually "well connected BY WHAT" — a village
+    // can score 90 driving and 20 on public transport.
+    rows = [row(sc(cur), connMetricLabel()),
+            row(sc(p.a_all), "all modes · overall"),
+            row(sc(p.p_all), "public transport · overall"),
+            row(sc(p.w_all), "walking · overall"),
+            row(sc(p.c_all), "cycling · overall"),
+            row(sc(p.d_all), "driving · overall"),
+            row(d === "connectivity_lad" && p.n_lsoa
+                ? `${Number(p.n_lsoa).toLocaleString()} neighbourhoods, population-weighted` : null,
+                "aggregated from"),
+            row(p.status === "no_score" ? "no score published for this area" : null, "coverage"),
+            row("experimental statistics · Q4 2024", "vintage")];
   } else if (d === "housing_need") {
     const num = v => v == null ? null : Number(v).toLocaleString();
     const st = p.plan_status;
