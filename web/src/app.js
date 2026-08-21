@@ -1054,6 +1054,10 @@ const OVERLAY_TREE = [
     { key: "sitefactors", title: "Site factors" },
   ]},
   { key: "connectivity", title: "Transport &amp; connectivity", subs: [
+    // Accessibility scores sit here rather than under students: they were
+    // originally added beside PTAL for the PBSA story, but they describe how
+    // connected a place is, which is this branch's whole subject.
+    { key: "access", title: "Accessibility scores" },
     { key: "bus", title: "Bus network" },
   ]},
 ];
@@ -1150,30 +1154,6 @@ const MAP_OVERLAYS = [
   { key: "student_accom",   group: "students", label: "Existing PBSA stock (OSM)",  color: "#c2255c", dataset: "student_accom", render: "point", minZoom: 8, lim: 6000,
     radius: ["interpolate", ["linear"], ["zoom"], 7, 2.5, 11, 4.5, 15, 7] },
   { key: "uni_building",    group: "students", label: "University buildings (OSM)", color: "#5f3dc4", dataset: "uni_building", minZoom: 11 },
-  // PTAL: EVERY cell, every zoom, served from PMTiles rather than the bbox RPC.
-  // The RPC could not do it. A single z12 view is 52,301 cells, 14 MB and
-  // 20.8 s — and it is not the simplification, since removing it changes
-  // nothing; roughly 400 us per feature goes on building the JSON document, so
-  // no row cap or index helps. Below z12 the cells were discarded as sub-pixel
-  // before the cap was even reached: asking for 200,000 features at z11
-  // returned TWO. Tiles have no such ceiling and cost the database nothing.
-  // `dataset` stays for the popup and colour ramp; `tiles` routes the DATA away
-  // from the RPC, reusing the ov-ptal-* layer ids so taps and opacity work.
-  // DfT connectivity metric — a national PTAL, and the measure NPPF policies
-  // TR3(2) and S5(3) name by URL. Zoom-banded like the price choropleths:
-  // 35,672 LSOAs are sub-pixel nationally and features_in_bbox drops sub-pixel
-  // features, so authorities wide out and neighbourhoods from z9. Borderless,
-  // because the colour is the whole story and LSOA outlines would fight it.
-  { key: "connectivity", group: "students", label: "Connectivity (DfT metric)",
-    color: "#00b48c", dataset: "connectivity_lad", minZoom: 4, lim: 8000,
-    datasetFn: z => z < 9 ? "connectivity_lad" : "connectivity_lsoa",
-    conn: true, noOutline: true },
-  { key: "ptal",       group: "students", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 8,
-    tiles: { file: "ptal.pmtiles", sourceLayer: "ptal", minzoom: 8, outlineFromZoom: 15 },
-    cap: { color: ["match", ["to-string", ["get", "ptal"]],
-           "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
-           "3", "#fee391", "4", "#fe9929", "5", "#ec7014",
-           "6a", "#cc4c02", "6b", "#8c2d04", "#f03e3e"] } },
   // Market & boundaries
   { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
   // Sold-price CHOROPLETHS (see the layer entries below). The four-band
@@ -1257,6 +1237,32 @@ const MAP_OVERLAYS = [
   // MHCLG/VOA residential land value per hectare — the published benchmark
   // the viability engine's land line uses. England only (source coverage).
   { key: "land_value", group: "market2", label: "Land value (resi £/ha, MHCLG)", color: "#4263eb", dataset: "land_value", minZoom: 5 },
+  // ---- Accessibility scores (group access, under Transport & connectivity)
+  // DfT connectivity metric — a national PTAL, and the measure NPPF policies
+  // TR3(2) and S5(3) name by URL. Zoom-banded like the price choropleths:
+  // 35,672 LSOAs are sub-pixel nationally and features_in_bbox drops sub-pixel
+  // features, so authorities wide out and neighbourhoods from z9. Borderless,
+  // because the colour is the whole story and LSOA outlines would fight it.
+  { key: "connectivity", group: "access", label: "Connectivity (DfT metric)",
+    color: "#00b48c", dataset: "connectivity_lad", minZoom: 4, lim: 8000,
+    datasetFn: z => z < 9 ? "connectivity_lad" : "connectivity_lsoa",
+    conn: true, noOutline: true },
+  // PTAL: EVERY cell, every zoom, served from PMTiles rather than the bbox RPC.
+  // The RPC could not do it. A single z12 view is 52,301 cells, 14 MB and
+  // 20.8 s — and it is not the simplification, since removing it changes
+  // nothing; roughly 400 us per feature goes on building the JSON document, so
+  // no row cap or index helps. Below z12 the cells were discarded as sub-pixel
+  // before the cap was even reached: asking for 200,000 features at z11
+  // returned TWO. Tiles have no such ceiling and cost the database nothing.
+  // `dataset` stays for the popup and colour ramp; `tiles` routes the DATA away
+  // from the RPC, reusing the ov-ptal-* layer ids so taps and opacity work.
+  { key: "ptal",       group: "access", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 8,
+    tiles: { file: "ptal.pmtiles", sourceLayer: "ptal", minzoom: 8, outlineFromZoom: 15 },
+    cap: { color: ["match", ["to-string", ["get", "ptal"]],
+           "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
+           "3", "#fee391", "4", "#fe9929", "5", "#ec7014",
+           "6a", "#cc4c02", "6b", "#8c2d04", "#f03e3e"] } },
+
   // Bus network (NaPTAN + BODS GTFS). ~400k stops nationally: the numeric
   // prop filter thins wide zooms to frequent-service stops, so the row cap
   // bites frequency-first rather than arbitrarily. Until the GTFS timetable
@@ -2777,7 +2783,7 @@ function buildLayersPanel() {
       // The connectivity layer carries 35 scores per area; a mode x purpose
       // picker above the row beats 35 separate toggles, and switching is a
       // repaint of props already loaded.
-      if (g.key === "students") {
+      if (g.key === "access") {
         rows += `
           <div class="lt-conn" id="conn-picker">
             <div class="lt-seg-label">Connectivity metric <b id="conn-metric-label">${connMetricLabel()}</b></div>
