@@ -7793,7 +7793,7 @@ function renderAssemblySummary(notice) {
     syncAssemblyLayer();
     renderAssemblySummary();
   });
-  el.querySelector("#dd-assembly-report")?.addEventListener("click", generateSiteReport);
+  el.querySelector("#dd-assembly-report")?.addEventListener("click", () => generateSiteReport("assembly"));
 }
 
 // Gate-3 read-out for the developable summary: the hard designations are already
@@ -8958,6 +8958,322 @@ function exportStationReport(snap) {
 // so toDataURL works at any moment; camera is saved and restored around the
 // framing. DOM overlays (legend, popups) live outside the canvas and are
 // naturally excluded.
+// ---------------------------------------------------------------------------
+// Report chart kit — inline SVG, no libraries.
+//
+// The report opens in a blank window and must survive being saved, emailed and
+// printed, so it cannot fetch a charting library and cannot run one: every
+// figure below is static SVG markup computed here and embedded in the
+// document. That constraint is also a feature — the charts print at vector
+// resolution instead of pixelating like a canvas would.
+//
+// Conventions shared by all of them: a viewBox with no width/height so CSS
+// controls size; currentColor nowhere (print drops it); explicit fills only.
+// ---------------------------------------------------------------------------
+
+const CH = {
+  ink: "#1a1a1a", dim: "#6b6b6b", rule: "#d8d8d8", grid: "#ececec",
+  pos: "#2f7d4f", neg: "#b3402b", accent: "#2f5d8a", accent2: "#7a5ea8",
+  warn: "#c98a1e",
+};
+
+const _cesc = s => String(s ?? "").replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const _cnum = v => v == null || !isFinite(v) ? null : Number(v);
+const _money = v => v == null ? "—"
+  : Math.abs(v) >= 1e9 ? "£" + (v / 1e9).toFixed(2) + "bn"
+  : Math.abs(v) >= 1e6 ? "£" + (v / 1e6).toFixed(1) + "M"
+  : "£" + Math.round(v / 1000) + "k";
+
+// A development appraisal waterfall: GDV at the left, each cost stepping the
+// running total down, profit landing at the right. Bars are drawn from the
+// running balance so the staircase IS the arithmetic — a reader can check the
+// figures by looking at where each bar starts.
+function svgWaterfall(items, opts) {
+  const rows = (items || []).map(([k, v]) => [k, _cnum(v)]).filter(x => x[1] != null);
+  if (rows.length < 2) return "";
+  const W = 720, H = 300, padL = 8, padR = 8, padT = 16, padB = 58;
+  const n = rows.length;
+  const bw = (W - padL - padR) / n * 0.62;
+  const step = (W - padL - padR) / n;
+  // Running balance, tracking the extremes so the axis fits the staircase
+  // rather than the individual bars.
+  let run = 0, lo = 0, hi = 0;
+  const bars = rows.map(([k, v], i) => {
+    const last = i === n - 1;
+    const start = last ? 0 : run;
+    const end = last ? v : run + v;
+    if (!last) run = end;
+    lo = Math.min(lo, start, end); hi = Math.max(hi, start, end);
+    return { k, v, start, end, last, i };
+  });
+  const span = (hi - lo) || 1;
+  const y = val => padT + (hi - val) / span * (H - padT - padB);
+  const zero = y(0);
+  return `<svg class="ch" viewBox="0 0 ${W} ${H}" role="img" aria-label="${_cesc(opts && opts.alt || "Appraisal waterfall")}">
+    <line x1="${padL}" y1="${zero}" x2="${W - padR}" y2="${zero}" stroke="${CH.rule}" stroke-width="1"/>
+    ${bars.map(b => {
+      const x = padL + b.i * step + (step - bw) / 2;
+      const y1 = y(Math.max(b.start, b.end)), y2 = y(Math.min(b.start, b.end));
+      const h = Math.max(1.5, y2 - y1);
+      const fill = b.last ? (b.v >= 0 ? CH.pos : CH.neg)
+                 : b.i === 0 ? CH.accent : (b.v >= 0 ? CH.pos : CH.neg);
+      // Connector to the next bar's start — the line that makes it read as a
+      // running total rather than a bar chart.
+      const conn = b.last || b.i === n - 2 ? "" :
+        `<line x1="${x + bw}" y1="${y(b.end)}" x2="${padL + (b.i + 1) * step + (step - bw) / 2}"
+               y2="${y(b.end)}" stroke="${CH.rule}" stroke-width="1" stroke-dasharray="2 2"/>`;
+      return `${conn}<rect x="${x}" y="${y1}" width="${bw}" height="${h}" fill="${fill}" rx="1"/>
+        <text class="ch-v" x="${x + bw / 2}" y="${y1 - 4}" text-anchor="middle">${_cesc(_money(b.v))}</text>
+        <text class="ch-x" x="${x + bw / 2}" y="${H - padB + 14}" text-anchor="end"
+              transform="rotate(-40 ${x + bw / 2} ${H - padB + 14})">${_cesc(b.k)}</text>`;
+    }).join("")}
+  </svg>`;
+}
+
+// Sensitivity as a heat grid rather than a table of numbers: the eye finds the
+// viable region instantly, and the target contour is what the reader is
+// actually looking for.
+function svgSensitivity(grid, steps, target) {
+  if (!grid || !grid.length) return "";
+  const n = grid.length, m = grid[0].length;
+  const cell = 54, lab = 62, top = 34, W = lab + m * cell + 10, H = top + n * cell + 30;
+  const col = v => v == null ? "#f4f4f4"
+    : v >= target * 1.5 ? "#1f6b45" : v >= target ? "#3f9165"
+    : v >= target * 0.6 ? "#e8c05a" : v >= 0 ? "#dd8f52" : "#c1573f";
+  return `<svg class="ch ch-sens" viewBox="0 0 ${W} ${H}" role="img" aria-label="Profit on cost sensitivity">
+    <text class="ch-t" x="${lab}" y="12">sales value change →</text>
+    <text class="ch-t" x="4" y="${top - 8}">build cost ↓</text>
+    ${steps.map((s, j) => `<text class="ch-x" x="${lab + j * cell + cell / 2}" y="${top - 6}"
+        text-anchor="middle">${s > 0 ? "+" : ""}${s}%</text>`).join("")}
+    ${grid.map((row, i) => `
+      <text class="ch-x" x="${lab - 8}" y="${top + i * cell + cell / 2 + 4}" text-anchor="end">${steps[i] > 0 ? "+" : ""}${steps[i]}%</text>
+      ${row.map((v, j) => {
+        const x = lab + j * cell, yy = top + i * cell;
+        const on = v != null && v >= target;
+        return `<rect x="${x}" y="${yy}" width="${cell - 2}" height="${cell - 2}" fill="${col(v)}" rx="2"/>
+          <text class="ch-cell${on ? " on" : ""}" x="${x + (cell - 2) / 2}" y="${yy + cell / 2 + 4}"
+                text-anchor="middle">${v == null ? "—" : v.toFixed(0)}</text>`;
+      }).join("")}`).join("")}
+    <text class="ch-t" x="${lab}" y="${H - 8}">profit on cost %. Cells at or above the ${target}% target are the viable region.</text>
+  </svg>`;
+}
+
+// Monthly cashflow with the debt balance over it: the shape of the funding
+// requirement, and where peak debt actually falls.
+function svgCashflow(cf, peak) {
+  const pts = (cf || []).map(r => Array.isArray(r) ? r[1] : (r && (r.balance ?? r.debt ?? r.net)))
+    .map(_cnum).filter(v => v != null);
+  if (pts.length < 3) return "";
+  const W = 720, H = 210, padL = 54, padR = 10, padT = 14, padB = 30;
+  const hi = Math.max(...pts, 0), lo = Math.min(...pts, 0), span = (hi - lo) || 1;
+  const x = i => padL + i / (pts.length - 1) * (W - padL - padR);
+  const y = v => padT + (hi - v) / span * (H - padT - padB);
+  const line = pts.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  const area = `${line}L${x(pts.length - 1).toFixed(1)},${y(0).toFixed(1)}L${x(0).toFixed(1)},${y(0).toFixed(1)}Z`;
+  const pi = pts.indexOf(Math.max(...pts.map(Math.abs)) === Math.abs(lo) ? lo : hi);
+  return `<svg class="ch" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly funding balance">
+    <line x1="${padL}" y1="${y(0)}" x2="${W - padR}" y2="${y(0)}" stroke="${CH.rule}"/>
+    <path d="${area}" fill="${CH.accent}" fill-opacity="0.14"/>
+    <path d="${line}" fill="none" stroke="${CH.accent}" stroke-width="1.8"/>
+    ${peak != null ? `<circle cx="${x(pi)}" cy="${y(pts[pi])}" r="3.5" fill="${CH.neg}"/>
+      <text class="ch-v" x="${x(pi)}" y="${y(pts[pi]) - 8}" text-anchor="middle">peak ${_cesc(_money(peak))}</text>` : ""}
+    <text class="ch-y" x="${padL - 6}" y="${y(hi) + 4}" text-anchor="end">${_cesc(_money(hi))}</text>
+    <text class="ch-y" x="${padL - 6}" y="${y(lo) + 4}" text-anchor="end">${_cesc(_money(lo))}</text>
+    <text class="ch-x" x="${padL}" y="${H - 8}">month 0</text>
+    <text class="ch-x" x="${W - padR}" y="${H - 8}" text-anchor="end">month ${pts.length - 1}</text>
+  </svg>`;
+}
+
+// Horizontal bars for anything measured as a share — constraint coverage,
+// connectivity by mode. Values are 0-100.
+function svgBars(rows, opts) {
+  const rs = (rows || []).map(([k, v, c]) => [k, _cnum(v), c]).filter(r => r[1] != null);
+  if (!rs.length) return "";
+  const o = opts || {};
+  const max = o.max || Math.max(100, ...rs.map(r => r[1]));
+  const rowH = 24, lab = o.labelW || 190, W = 720, H = rs.length * rowH + 16;
+  const barW = W - lab - 74;
+  return `<svg class="ch" viewBox="0 0 ${W} ${H}" role="img" aria-label="${_cesc(o.alt || "Shares")}">
+    ${rs.map(([k, v, c], i) => {
+      const yy = i * rowH + 8, w = Math.max(1, v / max * barW);
+      return `<text class="ch-lab" x="0" y="${yy + 12}">${_cesc(k)}</text>
+        <rect x="${lab}" y="${yy + 2}" width="${barW}" height="13" fill="${CH.grid}" rx="2"/>
+        <rect x="${lab}" y="${yy + 2}" width="${w.toFixed(1)}" height="13" fill="${c || CH.accent}" rx="2"/>
+        <text class="ch-v" x="${lab + barW + 6}" y="${yy + 13}">${o.fmt ? o.fmt(v) : v.toFixed(1) + "%"}</text>`;
+    }).join("")}
+  </svg>`;
+}
+
+// A single figure with a scale behind it — used for a score out of 100 where
+// the national position is the point, not the number.
+function svgGauge(value, label, opts) {
+  const v = _cnum(value);
+  if (v == null) return "";
+  const o = opts || {}, W = 220, H = 66, barY = 34, barH = 10, pad = 8;
+  const w = (W - pad * 2) * Math.min(1, Math.max(0, v / (o.max || 100)));
+  return `<svg class="ch ch-gauge" viewBox="0 0 ${W} ${H}" role="img" aria-label="${_cesc(label)}">
+    <text class="ch-g-v" x="${pad}" y="24">${_cesc(o.fmt ? o.fmt(v) : v.toFixed(0))}</text>
+    <text class="ch-g-l" x="${W - pad}" y="24" text-anchor="end">${_cesc(label)}</text>
+    <rect x="${pad}" y="${barY}" width="${W - pad * 2}" height="${barH}" fill="${CH.grid}" rx="5"/>
+    <rect x="${pad}" y="${barY}" width="${w.toFixed(1)}" height="${barH}" fill="${o.color || CH.accent}" rx="5"/>
+    ${o.note ? `<text class="ch-g-n" x="${pad}" y="${H - 6}">${_cesc(o.note)}</text>` : ""}
+  </svg>`;
+}
+
+// Comparables: price against distance from the site, so the reader can see
+// both the level and how far we had to go to find evidence for it.
+function svgScatter(points, opts) {
+  const ps = (points || []).map(p => ({ x: _cnum(p.x), y: _cnum(p.y), t: p.t }))
+    .filter(p => p.x != null && p.y != null);
+  if (ps.length < 2) return "";
+  const o = opts || {}, W = 720, H = 240, padL = 62, padR = 12, padT = 14, padB = 34;
+  const xs = ps.map(p => p.x), ys = ps.map(p => p.y);
+  const x0 = 0, x1 = Math.max(...xs) * 1.05 || 1;
+  const y0 = Math.min(...ys) * 0.92, y1 = Math.max(...ys) * 1.05;
+  const X = v => padL + (v - x0) / (x1 - x0) * (W - padL - padR);
+  const Y = v => padT + (y1 - v) / ((y1 - y0) || 1) * (H - padT - padB);
+  const med = [...ys].sort((a, b) => a - b)[Math.floor(ys.length / 2)];
+  return `<svg class="ch" viewBox="0 0 ${W} ${H}" role="img" aria-label="${_cesc(o.alt || "Comparables")}">
+    <line x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="${CH.rule}"/>
+    <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H - padB}" stroke="${CH.rule}"/>
+    <line x1="${padL}" y1="${Y(med)}" x2="${W - padR}" y2="${Y(med)}" stroke="${CH.accent2}"
+          stroke-width="1" stroke-dasharray="4 3"/>
+    <text class="ch-v" x="${W - padR}" y="${Y(med) - 5}" text-anchor="end">median ${_cesc(o.fmtY ? o.fmtY(med) : med)}</text>
+    ${ps.map(p => `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="4"
+        fill="${CH.accent}" fill-opacity="0.72"/>`).join("")}
+    <text class="ch-y" x="${padL - 6}" y="${Y(y1) + 4}" text-anchor="end">${_cesc(o.fmtY ? o.fmtY(y1) : y1)}</text>
+    <text class="ch-y" x="${padL - 6}" y="${Y(y0) + 4}" text-anchor="end">${_cesc(o.fmtY ? o.fmtY(y0) : y0)}</text>
+    <text class="ch-x" x="${padL}" y="${H - 10}">${_cesc(o.xLabel || "0")}</text>
+    <text class="ch-x" x="${W - padR}" y="${H - 10}" text-anchor="end">${_cesc(o.fmtX ? o.fmtX(x1) : x1)}</text>
+  </svg>`;
+}
+
+// ---------------------------------------------------------------------------
+// Report subject — one description of "the thing being reported on", so a
+// station catchment and an assembled site travel the same path from here on.
+// Everything downstream reads this shape and never asks which mode it is,
+// except where the honest wording differs (constraint percentages are "of the
+// catchment" in one and "of the site" in the other, and saying "of the site"
+// about an 800 m circle would be a lie).
+// ---------------------------------------------------------------------------
+function reportSubject(mode) {
+  const station = deep.station || null;
+  const stationName = station ? (station.name || station.crs) : "catchment";
+  const r = deep.developableResult;
+  const regime = activeDevelopableRegime();
+  if (mode === "assembly") {
+    const plots = assemblyPlots();
+    if (!plots.length) return null;
+    let geom = null;
+    try {
+      geom = plots.length === 1 ? plots[0] : turf.union(turf.featureCollection(plots));
+    } catch (_) {}
+    if (!geom) {
+      // Disjoint plots that turf refuses to union are still a valid subject —
+      // a MultiPolygon of the parts is the same site, and polygon_summary
+      // takes either.
+      geom = { type: "Feature", properties: {}, geometry: { type: "MultiPolygon",
+        coordinates: plots.flatMap(p => p.geometry.type === "Polygon"
+          ? [p.geometry.coordinates] : p.geometry.coordinates) } };
+    }
+    const areaHa = plots.reduce((s2, p) => s2 + (p.properties.area_ha || 0), 0);
+    const innerHa = plots.reduce((s2, p) => s2 + (p.properties.inner_ha || 0), 0);
+    return {
+      mode: "assembly",
+      name: (deep.assembly.name || "").trim() || `Assembled site — ${stationName}`,
+      subtitle: `${plots.length} assembled plot${plots.length === 1 ? "" : "s"} · ${stationName}`,
+      station, plots, geom, bbox: turf.bbox(geom),
+      areaHa, innerHa, units: homesFor(areaHa, innerHa, regime), regime,
+      densityBasis: capacityBasisLabel(regime),
+      // What a percentage of this thing is a percentage OF.
+      extentWord: "site",
+      radius: (deep.developable && deep.developable.radius_m) || 800,
+    };
+  }
+  // Catchment. The summary geometry is the walk-distance circle — that IS the
+  // catchment, and it keeps polygon_summary well inside its 5,000 ha ceiling.
+  // Capacity still comes from the developable land inside it, so the two
+  // numbers describe different things and the report labels them as such.
+  if (!r || !deep.stationCentre) return null;
+  const radius = (deep.developable && deep.developable.radius_m) || 800;
+  let circle = null;
+  try {
+    circle = turf.circle(deep.stationCentre, radius / 1000, { units: "kilometers", steps: 96 });
+  } catch (_) { return null; }
+  const devHa = Number(r.developable_ha) || 0;
+  const innerHa = Number(r.inner_ha) || 0;
+  return {
+    mode: "catchment",
+    name: `${stationName} — station catchment`,
+    subtitle: `${radius} m walk catchment · ${devHa.toFixed(1)} ha developable`,
+    station, plots: deep._plots || [], geom: circle, bbox: turf.bbox(circle),
+    areaHa: devHa, innerHa,
+    catchmentHa: Number(r.catchment_ha) || (Math.PI * (radius / 100) ** 2) / 100,
+    units: homesFor(devHa, innerHa, regime), regime,
+    densityBasis: capacityBasisLabel(regime),
+    extentWord: "catchment",
+    radius,
+  };
+}
+
+// Thematic map plates. One capture shows the site; a report that means to be
+// read as planning evidence needs the site AGAINST each constraint family, so
+// each plate turns on a named set of overlays, waits for them, captures, and
+// puts the map back exactly as it was found. Every plate degrades to null on
+// its own — a missing layer costs one image, never the report.
+const REPORT_PLATES = [
+  { key: "context", title: "Site & context", layers: [],
+    caption: "The subject boundary on the base map." },
+  { key: "planning", title: "Planning designations",
+    // Green Belt has its own legacy toggle outside the overlay registry, so it
+    // is reported numerically in the text rather than drawn here.
+    layers: ["conservation_area", "article4", "grey_belt_candidate", "local_plan_boundary", "tpo_zone", "archaeological_priority"],
+    caption: "Conservation areas, Article 4 directions, grey-belt candidate land, the local plan area, tree preservation zones and archaeological priority areas." },
+  { key: "environment", title: "Environmental constraints",
+    layers: ["flood_zone_3", "flood_zone_2", "sssi", "ancient_woodland", "nutrient_neutrality", "aqma", "flood_storage"],
+    caption: "Flood zones, statutory nature designations, nutrient neutrality catchments, air quality management areas and flood storage land." },
+  { key: "market", title: "Local market",
+    layers: ["price_heat"], caption: "Median sold price by neighbourhood over the last three years." },
+  { key: "connectivity", title: "Connectivity",
+    layers: ["connectivity"], caption: "DfT connectivity score — the measure NPPF policies TR3 and S5 name." },
+];
+
+async function captureReportPlates(bbox, onProgress) {
+  const out = {};
+  // Remember exactly which overlays were on, so the user's map is handed back
+  // untouched however the captures go.
+  const before = MAP_OVERLAYS.filter(o => overlayState[o.key] && overlayState[o.key].on)
+                             .map(o => o.key);
+  const setOnly = async (keys) => {
+    for (const k of before) if (!keys.includes(k)) toggleMapOverlay(k, false);
+    for (const k of keys) {
+      if (!overlayDef(k)) continue;         // an unknown key must not throw
+      toggleMapOverlay(k, true);
+    }
+    // Overlay fetches are viewport-driven and asynchronous; there is no single
+    // promise to await, so settle on idle plus a fixed grace period.
+    await new Promise(res => setTimeout(res, keys.length ? 1400 : 200));
+  };
+  try {
+    for (const plate of REPORT_PLATES) {
+      if (onProgress) onProgress(plate.title);
+      try {
+        await setOnly(plate.layers);
+        out[plate.key] = await captureMapImage(bbox);
+      } catch (_) { out[plate.key] = null; }
+    }
+  } finally {
+    // Restore, whatever happened above.
+    for (const o of MAP_OVERLAYS) {
+      const on = overlayState[o.key] && overlayState[o.key].on;
+      if (on && !before.includes(o.key)) toggleMapOverlay(o.key, false);
+    }
+    for (const k of before) toggleMapOverlay(k, true);
+  }
+  return out;
+}
+
 async function captureMapImage(bbox) {
   try {
     const saved = { center: map.getCenter(), zoom: map.getZoom(),
@@ -8982,82 +9298,78 @@ function confBadge(level) {
   return `<span class="r-conf rc-${level}">${label}</span>`;
 }
 
-function generateSiteReport() {
-  return _generateSiteReport().catch(err => {
+function generateSiteReport(mode) {
+  return _generateSiteReport(mode || "assembly").catch(err => {
     console.error("site report failed", err);
-    alert("Site report failed: " + (err && err.message ? err.message : err));
+    alert("Report failed: " + (err && err.message ? err.message : err));
   });
 }
 
-async function _generateSiteReport() {
-  const plots = assemblyPlots();
-  if (!plots.length) return;
-  const btn = document.getElementById("dd-assembly-report");
-  if (btn) { btn.disabled = true; btn.textContent = "Gathering data…"; }
+async function _generateSiteReport(mode) {
+  const subject = reportSubject(mode);
+  if (!subject) {
+    alert(mode === "catchment"
+      ? "Turn on the developable-land tool first — the report prices its capacity."
+      : "Select at least one plot to assemble.");
+    return;
+  }
+  const btnId = mode === "catchment" ? "dd-catchment-report" : "dd-assembly-report";
+  const btn = document.getElementById(btnId);
+  const label = btn && btn.textContent;
+  const say = t => { if (btn) { btn.disabled = true; btn.textContent = t; } };
+  say("Gathering data…");
   try {
-    // Merge. Disjoint plots union to a MultiPolygon; if turf refuses (sliver
-    // edge cases), a bare MultiPolygon of the parts serves the same purpose —
-    // polygon_summary accepts either.
-    let unionFeat = null;
-    try {
-      unionFeat = plots.length === 1 ? plots[0]
-        : turf.union(turf.featureCollection(plots));
-    } catch (_) {}
-    if (!unionFeat) {
-      unionFeat = { type: "Feature", properties: {}, geometry: {
-        type: "MultiPolygon",
-        coordinates: plots.flatMap(p => p.geometry.type === "Polygon"
-          ? [p.geometry.coordinates] : p.geometry.coordinates) } };
-    }
-    const bbox = turf.bbox(unionFeat);
-    const regime = activeDevelopableRegime();
-    const totHa = plots.reduce((s, p) => s + (p.properties.area_ha || 0), 0);
-    const totInner = plots.reduce((s, p) => s + (p.properties.inner_ha || 0), 0);
-    const units = homesFor(totHa, totInner, regime);
-
-    // Parallel gather — the report never fails outright on one source; each
-    // section says what it could not get. sb may be null (DB unconfigured):
-    // the report still builds from what the deep dive already holds.
+    const bbox = subject.bbox;
     const sb = (typeof getSupabase === "function") ? getSupabase() : null;
-    const [summary, slope, img] = await Promise.all([
+
+    // Everything the report can ask for, in parallel. No single source is
+    // allowed to fail the report: each resolves to null and its section says
+    // what it could not get.
+    const [summary, slope, comparables] = await Promise.all([
       !sb ? Promise.resolve(null)
-        : sb.rpc("polygon_summary", { p_geojson: JSON.stringify(unionFeat.geometry) })
+        : sb.rpc("polygon_summary", { p_geojson: JSON.stringify(subject.geom.geometry) })
             .then(r => r.error ? null : r.data).catch(() => null),
       !sb ? Promise.resolve(null)
         : sb.rpc("grid_in_bbox", { p_dataset: "slope_grid",
               w: bbox[0], s: bbox[1], e: bbox[2], n: bbox[3],
               p_zoom: 13, lim: 2000, p_avg_key: "slope", p_max_key: "max_slope" })
             .then(r => r.error ? null : r.data).catch(() => null),
-      captureMapImage(bbox),
+      !sb ? Promise.resolve(null)
+        : sb.rpc("features_in_bbox", { p_dataset: "ppd_sales",
+              w: bbox[0], s: bbox[1], e: bbox[2], n: bbox[3], p_zoom: 15, lim: 400 })
+            .then(r => r.error ? null : r.data).catch(() => null),
     ]);
 
+    // Map plates last: they move the camera and toggle layers, so nothing else
+    // should be in flight while they run.
+    const plates = await captureReportPlates(bbox, t => say("Capturing " + t + "…"));
+    say("Building report…");
+
     const mc = deep._marketCtx || {};
+    const areas = (summary && summary.areas) || {};
+    const gbPct = Number(((summary && summary.constraints) || [])
+      .find(c => c.kind === "green_belt")?.pct) || 0;
     const appraisal = computeAppraisal({
-      units, ppm2: deep.ppm2 || null, region: (deep.station && deep.station.region) || null, areaHa: totHa,
+      units: subject.units, ppm2: deep.ppm2 || null,
+      region: (subject.station && subject.station.region) || null,
+      areaHa: subject.areaHa,
       locationFactor: mc.factor || null,
       landValueHa: mc.landValueHa || null,
       cilAreaPm2: mc.cilPm2 != null ? mc.cilPm2 : null,
-      // The union's OWN Green Belt coverage, measured by polygon_summary over
-      // the assembled boundary — not the catchment proxy the basket uses.
-      greenBeltShare: Math.min(1, (Number(
-        ((summary && summary.constraints) || []).find(c => c.kind === "green_belt")?.pct) || 0) / 100),
+      greenBeltShare: Math.min(1, gbPct / 100),
     }, SIFT.assumptions);
 
-    const site = {
-      name: (deep.assembly.name || "").trim()
-        || `Assembled site — ${(deep.station && deep.station.name) || "catchment"}`,
-      station: deep.station || null,
-      plots, unionFeat, totHa, totInner, units, regime,
-      // What actually sized the scheme, so the report cannot caption a
-      // sift-density figure with a regime name.
-      densityBasis: capacityBasisLabel(regime),
-      summary, slope, img, appraisal,
+    const site = Object.assign({}, subject, {
+      summary, slope, plates, appraisal, areas,
+      img: plates.context || null,
+      comparables: (comparables && comparables.features) || [],
       publicLand: deep.publicLand || null,
       ppm2: deep.ppm2 || null,
       marketCtx: mc,
       counts: deep.counts || {},
-      radius: (deep.developable && deep.developable.radius_m) || 800,
-    };
+      totHa: subject.areaHa, totInner: subject.innerHa,   // legacy field names
+      nppfMin: subject.station ? nppfMinDph(subject.station.crs) : null,
+    });
     const html = buildSiteReportHTML(site);
     const w = window.open("", "_blank");
     if (!w) { alert("Pop-up blocked — allow pop-ups to open the report."); return; }
@@ -9065,13 +9377,37 @@ async function _generateSiteReport() {
     w.document.write(html);
     w.document.close();
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "Generate site report"; }
+    if (btn) { btn.disabled = false; btn.textContent = label || "Generate report"; }
   }
 }
 
 // Extends REPORT_CSS — never forks it. Everything site-report-specific is
 // namespaced sr-/rc-.
 const SITE_REPORT_CSS = `
+/* Charts. Everything is inline SVG with a viewBox and no intrinsic size, so
+   the page controls width and the figures print at vector resolution instead
+   of pixelating the way a canvas capture would. */
+.ch { display: block; width: 100%; height: auto; margin: 6px 0 10px; }
+.ch text { font-family: inherit; fill: #3a3a3a; }
+.ch .ch-x, .ch .ch-y { font-size: 9px; fill: #6b6b6b; }
+.ch .ch-v { font-size: 9.5px; fill: #3a3a3a; font-weight: 600; }
+.ch .ch-lab { font-size: 10.5px; fill: #2a2a2a; }
+.ch .ch-t { font-size: 9px; fill: #6b6b6b; }
+.ch .ch-cell { font-size: 11px; fill: #ffffff; font-weight: 600; }
+.ch .ch-cell.on { font-weight: 700; }
+.ch-sens { max-width: 560px; }
+.ch-gauge { width: 220px; display: inline-block; margin-right: 10px; }
+.ch .ch-g-v { font-size: 19px; font-weight: 700; fill: #1a1a1a; }
+.ch .ch-g-l { font-size: 9.5px; fill: #6b6b6b; text-transform: uppercase; letter-spacing: .04em; }
+.ch .ch-g-n { font-size: 9px; fill: #8a8a8a; }
+
+/* Thematic map plates: the subject against one constraint family at a time.
+   Each is captioned, because a map without a caption is decoration. */
+.sr-plate { margin: 10px 0 12px; page-break-inside: avoid; }
+.sr-plate img { width: 100%; border: 1px solid #cfcabb; border-radius: 4px; display: block; }
+.sr-plate figcaption { font-size: 10px; color: #6a6656; margin-top: 4px; line-height: 1.45; }
+.sr-h4 { font-size: 12.5px; margin: 14px 0 2px; color: #2a2a2a; }
+.sr-lede { font-size: 12px; line-height: 1.6; margin: 8px 0 4px; }
 /* Annex C: the Framework's own information requirements, keyed by policy.
    The policy code is the anchor a planner reads first, so it leads. */
 .r-annexc { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 4px; }
@@ -9097,7 +9433,7 @@ const SITE_REPORT_CSS = `
   .rc-model { background: #fdeec9; color: #7a5a12; }
   .rc-desk { background: #e8e4f5; color: #4a3d80; }
   .sr-desk-list { font-size: 11.5px; color: #5a5648; margin: 4px 0 0 16px; }
-  .sr-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 8px 0; }
+  .sr-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; margin: 8px 0; }
   .sr-kpi { background: #edeae0; border-radius: 6px; padding: 8px 10px; }
   .sr-kpi b { display: block; font-size: 15px; }
   .sr-kpi span { font-size: 9.5px; color: #6a6656; text-transform: uppercase; letter-spacing: .04em; }
@@ -9176,7 +9512,7 @@ function buildSiteReportHTML(site) {
     ? row(kindLabel[kind] || kind, pct(cons[kind]) + " of site", conf || "data", "planning constraint overlay")
     : "";
 
-  const sales = (S.recent_sales || []).slice(0, 5);
+  const sales = (S.recent_sales || []).slice(0, 8);
   const PT = { D: "Detached", S: "Semi", T: "Terraced", F: "Flat", O: "Other" };
   const salesTable = sales.length ? `<table class="sr-table"><thead>
       <tr><th>Comparable</th><th>Date</th><th>Type</th><th>Price</th><th>Distance</th></tr></thead><tbody>` +
@@ -9187,15 +9523,65 @@ function buildSiteReportHTML(site) {
 
   const steps = SENS_STEPS;
   const target = SIFT.assumptions.profitTargetPct || 17.5;
+  // Charts first, the table underneath: the grid is for finding the viable
+  // region at a glance, the table for reading an exact figure off.
+  const sensChart = ap.sensitivity ? svgSensitivity(ap.sensitivity, steps, target) : "";
   const sensTable = ap.sensitivity ? `<table class="sr-table sr-sens"><thead>
       <tr><th>build \\ sales %</th>${steps.map(s => `<th>${s > 0 ? "+" : ""}${s}</th>`).join("")}</tr></thead><tbody>` +
     ap.sensitivity.map((r2, i) => `<tr><th>${steps[i] > 0 ? "+" : ""}${steps[i]}</th>` +
       r2.map(v => `<td class="${v == null ? "" : v >= target ? "g" : v >= target / 2 ? "a" : "r"}">${v == null ? "—" : v.toFixed(0)}</td>`).join("") +
       `</tr>`).join("") + `</tbody></table>` : "";
 
+  const wfChart = ap.waterfall ? svgWaterfall(ap.waterfall, { alt: "Development appraisal waterfall" }) : "";
   const wfTable = ap.waterfall ? `<table class="sr-table"><tbody>` +
     ap.waterfall.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${money(v)}</td></tr>`).join("") +
     `</tbody></table>` : "";
+  const cfChart = ap.cashflow ? svgCashflow(ap.cashflow, ap.peakDebt) : "";
+
+  // Comparables: every sale the bbox query returned, not the five nearest, so
+  // the scatter shows the actual spread of evidence rather than a sample of it.
+  const comps = (site.comparables || [])
+    .map(f => ({ p: Number((f.properties || {}).price),
+                 d: Number((f.properties || {}).dist_m),
+                 t: (f.properties || {}).ptype }))
+    .filter(c => isFinite(c.p) && c.p > 1000);
+  const compChart = comps.length >= 4 ? svgScatter(
+    comps.map((c, i) => ({ x: isFinite(c.d) ? c.d : i, y: c.p })),
+    { alt: "Recent sales", xLabel: "0 m from site",
+      fmtX: v => Math.round(v) + " m",
+      fmtY: v => "£" + Math.round(v / 1000) + "k" }) : "";
+
+  // Constraint coverage as bars — a list of percentages is a table nobody
+  // reads; the same numbers as bars show at a glance what dominates.
+  const consBars = (() => {
+    const rows = Object.entries(cons)
+      .filter(([k, v]) => Number(v) >= 0.5 && k !== "built_land" && k !== "water")
+      .sort((a, b) => b[1] - a[1]).slice(0, 10)
+      .map(([k, v]) => [kindLabel[k] || k, Number(v),
+        /flood/.test(k) ? "#2f6d9e" : /conservation|listed|monument|park_garden/.test(k)
+          ? "#8a5a2b" : /sssi|sac|spa|ramsar|ancient/.test(k) ? "#2f7d4f" : "#7a5ea8"]);
+    return rows.length ? svgBars(rows, { alt: "Constraint coverage", labelW: 210 }) : "";
+  })();
+
+  // Connectivity by mode, from the DfT metric on the site's own neighbourhood.
+  const connArea = areas.connectivity_oa || areas.connectivity_lsoa || null;
+  const connBars = connArea ? svgBars([
+    ["All modes", Number(connArea.a_all), "#2f5d8a"],
+    ["Public transport", Number(connArea.p_all), "#2f7d4f"],
+    ["Walking", Number(connArea.w_all), "#7a5ea8"],
+    ["Cycling", Number(connArea.c_all), "#c98a1e"],
+    ["Driving", Number(connArea.d_all), "#8a5a2b"],
+  ].filter(r => isFinite(r[1])), { alt: "Connectivity by mode", labelW: 150,
+      fmt: v => v.toFixed(0) + " / 100" }) : "";
+
+  // Map plates, each captioned and each allowed to be missing.
+  const plateHTML = (key) => {
+    const def = REPORT_PLATES.find(x => x.key === key);
+    const img = (site.plates || {})[key];
+    if (!def || !img) return "";
+    return `<figure class="sr-plate"><img src="${img}" alt="${esc(def.title)}" />
+      <figcaption><strong>${esc(def.title)}</strong> — ${esc(def.caption)}</figcaption></figure>`;
+  };
 
   const assumpTable = `<table class="sr-table"><thead><tr><th>Assumption</th><th>Value</th><th>Source</th></tr></thead><tbody>` +
     VIAB_SCHEMA.map(f => {
@@ -9208,23 +9594,34 @@ function buildSiteReportHTML(site) {
 
   const body = `
   <div class="cover">
-    <p class="cover-note">MasterMapper · land assembly appraisal</p>
+    <p class="cover-note">MasterMapper · ${site.mode === "catchment" ? "station catchment appraisal" : "land assembly appraisal"}</p>
     <h1>${esc(site.name)}</h1>
-    <p class="cover-sub">${stationName ? esc(stationName) + " catchment · " : ""}${site.totHa.toFixed(2)} ha across ${site.plots.length} plot${site.plots.length === 1 ? "" : "s"} · generated ${dateStr}</p>
+    <p class="cover-sub">${esc(site.subtitle || "")} · generated ${dateStr}</p>
     <div class="sr-kpis">
       <div class="sr-kpi"><b>${site.totHa.toFixed(2)} ha</b><span>net developable</span></div>
       <div class="sr-kpi"><b>~${site.units.toLocaleString()}</b><span>homes (${esc(site.densityBasis || site.regime)})</span></div>
+      <div class="sr-kpi"><b>${money(ap.gdv)}</b><span>gross development value</span></div>
       <div class="sr-kpi"><b>${pct(ap.profitOnCost)}</b><span>profit on cost ${ragBadge}</span></div>
       <div class="sr-kpi"><b>${money(ap.residualLandValue)}</b><span>residual land value</span></div>
+      <div class="sr-kpi"><b>${ap.irr == null ? "n/a" : (ap.irr * 100).toFixed(1) + "%"}</b><span>IRR (equity)</span></div>
     </div>
     ${site.img ? `<img class="sr-map" src="${site.img}" alt="Site plan extract" />`
                : `<p class="sr-note">Map extract unavailable — capture failed in this browser.</p>`}
-    <p class="sr-note">Flags: ${confBadge("data")} read from open data · ${confBadge("model")} modelled or proxy · ${confBadge("desk")} requires desktop study or survey. Every desk item is listed in section 12 — nothing is invented.</p>
+    <p class="sr-lede">${site.mode === "catchment"
+      ? `This appraises the <strong>whole ${site.radius} m walk catchment</strong> around ${esc(stationName || "the station")} — every constraint-stripped hectare within it, taken as one scheme. Constraint percentages below are of the catchment; a specific site inside it will differ.`
+      : `This appraises <strong>${site.plots.length} assembled plot${site.plots.length === 1 ? "" : "s"}</strong> as one site. Constraint percentages below are measured against the assembled boundary itself.`}</p>
+    <p class="sr-note">Flags: ${confBadge("data")} read from open data · ${confBadge("model")} modelled or proxy · ${confBadge("desk")} requires desktop study or survey. Every desk item is listed at the end — nothing is invented.</p>
   </div>
 
   <section class="sr-sec"><h3>1 · Site fundamentals</h3>
-    ${row("Gross site area", site.totHa.toFixed(2) + " ha (" + (site.totHa * 2.471).toFixed(1) + " ac)", "data", "developable-land analysis, constraint-stripped")}
-    ${row("Parcels assembled", site.plots.length + " contiguous plot(s)", "data")}
+    ${row(site.mode === "catchment" ? "Net developable area" : "Gross site area",
+        site.totHa.toFixed(2) + " ha (" + (site.totHa * 2.471).toFixed(1) + " ac)", "data",
+        "developable-land analysis, constraint-stripped")}
+    ${site.mode === "catchment"
+      ? row("Catchment area", (site.catchmentHa ? site.catchmentHa.toFixed(1) : "—") + " ha within a " + site.radius + " m walk" +
+          (site.catchmentHa ? ` — ${(100 * site.totHa / site.catchmentHa).toFixed(0)}% of it developable` : ""),
+          "data", "NPPF Annex B reasonable walking distance")
+      : row("Parcels assembled", site.plots.length + " contiguous plot(s)", "data")}
     ${(() => { const c = siteSizeClass(site.units, site.totHa);
         return c ? row("Development class", esc(c.label) + " — " + esc(c.note), "data",
                        "NPPF (Aug 2026) Annex B") : ""; })()}
@@ -9252,21 +9649,106 @@ function buildSiteReportHTML(site) {
         "data", "NPPF Aug 2026 Annex D ¶12")}
     ${row("Approval rate (planning apps)", areas.planit_rates ? esc(String(areas.planit_rates.approval_pct ?? "")) + "% locally" : null, "model", "PlanIt applications sample")}
     ${row("NPPF station tier", site.station && site.station.tier ? esc(site.station.tier) : null, "model", "MasterMapper station assessment")}
+    ${row("Development corporation", areas.development_corporation ? "Within " + esc(areas.development_corporation.name || "a development corporation area") + " — a separate consenting regime" : null, "data")}
+    ${row("Central Activities Zone", areas.central_activities_zone ? "Within the CAZ — London Plan policy overrides borough norms" : null, "data")}
+    ${plateHTML("planning")}
     ${deskLine(["Allocation status & emerging plan position", "Five-year housing land supply", "Planning history on site & adjoining", "Pre-app position, committee vs delegated", "Neighbourhood Plan policies"].map(x => { deskItems.push(x); return x; }))}
+  </section>
+
+  <section class="sr-sec"><h3>2a · Housing need & plan position ${confBadge("data")}</h3>
+    <p class="sr-note">The authority's own numbers: how much housing it must plan for under the NPPF standard method, what its adopted plan commits to, and how far its plan still has to go.</p>
+    ${(() => {
+      const hn = areas.housing_need || null, lp = areas.local_plan_housing || null;
+      if (!hn && !lp) return `<p class="sr-note">No housing-need or local-plan record resolved for this authority.</p>`;
+      const kpis = [];
+      if (hn && hn.lhn != null) kpis.push([`${Number(hn.lhn).toLocaleString()}`, "homes/yr — standard-method need"]);
+      if (hn && hn.plan_annual != null) kpis.push([`${Number(hn.plan_annual).toLocaleString()}`, "homes/yr — adopted plan requirement"]);
+      if (hn && hn.plan_vs_lhn != null) kpis.push([`${hn.plan_vs_lhn}%`, "plan as a share of current need"]);
+      if (lp && lp.gap != null) kpis.push([`${Number(lp.gap).toLocaleString()}`, "homes the plan still has to find"]);
+      return (kpis.length ? `<div class="sr-kpis">${kpis.map(([a, b]) =>
+        `<div class="sr-kpi"><b>${esc(a)}</b><span>${esc(b)}</span></div>`).join("")}</div>` : "")
+        + row("Standard-method need", hn && hn.lhn != null
+            ? `${Number(hn.lhn).toLocaleString()} homes a year — 0.8% of ${Number(hn.stock || 0).toLocaleString()} dwellings × ${hn.afford_factor} affordability adjustment (ratio ${hn.afford_ratio})`
+            : null, "data", "NPPF Aug 2026 Annex D standard method")
+        + row("Adopted plan requirement", hn && hn.plan_annual != null
+            ? `${Number(hn.plan_annual).toLocaleString()}/yr — ${Number(hn.plan_required || 0).toLocaleString()} over ${hn.plan_period || "the plan period"}`
+            : (hn && hn.plan_note ? esc(hn.plan_note) : null), "data")
+        + row("Plan against need", hn && hn.plan_vs_lhn != null
+            ? `${hn.plan_vs_lhn}% of current need` + (hn.below80
+                ? " — at or below 80%, which is one limb of the Annex D ¶9(c) 20% buffer test (the other limb, plan vintage, needs checking)" : "")
+            : null, "data", "NPPF Annex D ¶9(c)")
+        + row("Plan housing gap", lp && lp.gap != null
+            ? `${Number(lp.gap).toLocaleString()} homes outstanding — ${lp.pct_met}% of the requirement met by allocations and commitments`
+            : (lp && lp.plan_note ? esc(lp.plan_note) : null), "data", "planning.data.gov.uk local-plan-housing")
+        + row("Plan vintage", lp && lp.adopted
+            ? `adopted ${esc(lp.adopted)}${lp.plan_age_yrs != null ? ` · ${lp.plan_age_yrs} years old` : ""}` +
+              (lp.plan_age_yrs > 5 ? " — past the 5-year review point, so housing policies risk being out of date" : "")
+            : null, "data")
+        + `<p class="sr-note">A scheme of ~${site.units.toLocaleString()} homes is ${hn && hn.lhn ? `<strong>${(site.units / Number(hn.lhn)).toFixed(1)} years</strong> of this authority's entire annual requirement` : "a material contribution to local supply"}.</p>`;
+    })()}
+  </section>
+
+  <section class="sr-sec"><h3>2b · Developer contributions ${confBadge("model")}</h3>
+    <p class="sr-note">What this scheme would be expected to pay, on the assumptions in the appendix. CIL is statutory and charged per m² of net new floorspace with affordable homes exempt; S106 is itemised by head of terms; BNG is the 10% biodiversity net gain obligation.</p>
+    ${(() => {
+      const t = ap.audit;
+      if (!t) return `<p class="sr-note">No appraisal — contributions cannot be quantified.</p>`;
+      const rows = [["CIL", t.cil], ["S106 — all heads", t.s106], ["Biodiversity net gain", t.bng]]
+        .filter(r => r[1] != null && r[1] > 0);
+      const total = rows.reduce((a, b) => a + b[1], 0);
+      return (rows.length ? svgBars(rows.map(([k, v]) => [k, v, k === "CIL" ? "#2f5d8a" : k.startsWith("S106") ? "#7a5ea8" : "#2f7d4f"]),
+          { alt: "Contributions", labelW: 170, max: Math.max(...rows.map(r => r[1])), fmt: money }) : "")
+        + row("CIL rate applied", `£${Math.round(t.cilRate)}/m² × ${Math.round(t.units * (1 - (t.affPct || 0) / 100)).toLocaleString()} market homes × ${t.unitM2.toFixed(1)} m²`,
+            "model", t.cilSource === "authority" ? "this authority's compiled charging schedule"
+              : t.cilSource === "override" ? "rate entered in Viability variables"
+              : "indicative regional band — no compiled rate for this authority")
+        + row("Charging authority", areas.cil_rates ? esc(areas.cil_rates.name || "") +
+            (areas.cil_rates.schedule_adopted ? ` — schedule adopted ${esc(areas.cil_rates.schedule_adopted)}` : "") +
+            (areas.cil_rates.status === "schedule_unrated" ? " (a schedule is published but its rates are not compiled here)" : "")
+            : null, "data", "verified against MHCLG's register of charging schedules")
+        + row("S106 per home", `£${Math.round((t.s106PerUnitK || 0))}k across education, health, open space and transport`, "model")
+        + row("Affordable housing", `${(t.affPct || 0).toFixed(1)}% of homes` +
+            (t.gbApplies ? ` — including the GB8 Golden Rules uplift on the ${Math.round(t.gbShare * 100)}% of this ${site.extentWord} in the Green Belt` : ""),
+            "model", t.gbApplies ? "NPPF Aug 2026 policy GB8" : "assumption")
+        + row("Total contributions", money(total) + ` — ${money(total / Math.max(1, t.units))} per home, ${(100 * total / (ap.gdv || 1)).toFixed(1)}% of GDV`, "model");
+    })()}
   </section>
 
   <section class="sr-sec"><h3>3 · Environmental constraints</h3>
     ${consRow("flood_zone_2")}${consRow("flood_zone_3")}
     ${consRow("sssi")}${consRow("sac")}${consRow("spa")}${consRow("ramsar")}
     ${consRow("ancient_woodland")}${consRow("green_space")}${consRow("water")}
-    ${(S.constraints || []).length === 0 ? `<p class="sr-note">No mapped environmental constraint intersects the site (≥0.5% threshold).</p>` : ""}
-    ${deskLine(["Nutrient / water neutrality catchment position", "Protected species likelihood (bats, GCN, badger)", "BNG baseline habitat units & on-site %", "Noise contours & air quality", "Trees & hedgerows survey"].map(x => { deskItems.push(x); return x; }))}
+    ${(S.constraints || []).length === 0 ? `<p class="sr-note">No mapped environmental constraint intersects the ${esc(site.extentWord)} (≥0.5% threshold).</p>` : ""}
+    ${row("Nutrient neutrality", areas.nutrient_neutrality
+        ? `<strong>Within the ${esc(areas.nutrient_neutrality.name || "catchment")} catchment</strong> — development must be nutrient-neutral, with mitigation secured before permission. This is a programme risk before it is a cost risk.`
+        : "Not within a mapped nutrient neutrality catchment", "data", "Natural England via planning.data.gov.uk")}
+    ${row("Air quality management area", areas.aqma
+        ? `Within ${esc(areas.aqma.name || "a declared AQMA")} — expect an air quality assessment and possible mitigation`
+        : "Not within a declared AQMA", "data", "DEFRA via planning.data.gov.uk")}
+    ${row("Flood storage land", areas.flood_storage
+        ? "Intersects land used for flood storage or management — policy S4(2)(b) treats its loss as a strong adverse effect"
+        : null, "data", "Environment Agency")}
+    ${row("Local nature reserve", areas.local_nature_reserve ? esc(areas.local_nature_reserve.name || "within a local nature reserve") : null, "data")}
+    ${row("Nature improvement area", areas.nature_improvement_area ? esc(areas.nature_improvement_area.name || "within a nature improvement area") : null, "data")}
+    ${consBars}
+    ${plateHTML("environment")}
+    ${deskLine(["Protected species likelihood (bats, GCN, badger)", "BNG baseline habitat units & on-site %", "Noise contours", "Trees & hedgerows survey", "Local Nature Recovery Strategy opportunities"].map(x => { deskItems.push(x); return x; }))}
   </section>
 
   <section class="sr-sec"><h3>4 · Heritage</h3>
     ${consRow("conservation_area")}${consRow("listed_building")}${consRow("scheduled_monument")}${consRow("park_garden")}
-    ${!cons.conservation_area && !cons.listed_building && !cons.scheduled_monument && !cons.park_garden ? `<p class="sr-note">No designated heritage asset intersects the site.</p>` : ""}
-    ${deskLine(["Setting of nearby designated assets", "Archaeological potential / HER search", "Non-designated & locally listed assets"].map(x => { deskItems.push(x); return x; }))}
+    ${!cons.conservation_area && !cons.listed_building && !cons.scheduled_monument && !cons.park_garden ? `<p class="sr-note">No designated heritage asset intersects the ${esc(site.extentWord)}.</p>` : ""}
+    ${row("Archaeological priority area", areas.archaeological_priority
+        ? "Within a designated priority area — expect desk-based assessment and probably trial trenching as a condition" : null,
+        "data", "planning.data.gov.uk")}
+    ${row("Heritage at risk", areas.heritage_at_risk
+        ? "An asset on the Heritage at Risk register is present. This reads both ways: a constraint on what can be done nearby, and the strongest available basis for an enabling-development argument."
+        : null, "data", "Historic England")}
+    ${row("Locally listed building", areas.locally_listed
+        ? "A non-designated heritage asset is present — policy HE7 weighs the effect in a balanced judgement, not the designated-asset test" : null,
+        "data", "planning.data.gov.uk")}
+    ${row("Registered battlefield", areas.battlefield ? esc(areas.battlefield.name || "within a registered battlefield") : null, "data")}
+    ${deskLine(["Setting of nearby designated assets", "Archaeological evaluation / HER search", "Non-designated assets not on a published local list"].map(x => { deskItems.push(x); return x; }))}
   </section>
 
   <section class="sr-sec"><h3>5 · Ground conditions</h3>
@@ -9284,8 +9766,18 @@ function buildSiteReportHTML(site) {
   <section class="sr-sec"><h3>7 · Access & transport</h3>
     ${row("Rail station", stationName ? esc(stationName) + " — site within the " + site.radius + " m catchment" : null, "data")}
     ${row("PTAL", areas.ptal ? esc(String(areas.ptal.ptal ?? areas.ptal.name ?? "")) : null, "data", "TfL (London only)")}
-    ${row("Schools in catchment", site.counts.school != null ? String(site.counts.school) : null, "data")}
+    ${row("Service frequency", site.nppfMin
+        ? `${site.nppfMin.tph} trains/hour sustained through the day (${site.nppfMin.perDir}/hour each way)` +
+          (site.nppfMin.doubleFreq
+            ? " — at least twice the well-connected minimum, so policy S5(2)(c) sets a 45 dph density floor here rather than 35"
+            : " — meets the well-connected frequency limb; the S5(2)(c) minimum is 35 dph")
+        : null, "data", "GB rail timetable")}
+    ${row("Schools within 1.6 km", S.schools_nearby != null ? String(S.schools_nearby) + " establishments" : (site.counts.school != null ? String(site.counts.school) : null), "data", "planning.data.gov.uk")}
     ${row("GP surgeries in catchment", site.counts.gp != null ? String(site.counts.gp) : null, "data")}
+    ${connBars ? `<h4 class="sr-h4">Connectivity by mode ${confBadge("data")}</h4>
+      <p class="sr-note">DfT's connectivity metric for this neighbourhood — the measure NPPF policies TR3(2) and S5(3) name by URL as the evidence for assessing a location's connectivity. Scores are 0–100 against England and Wales; modes are not comparable with each other.</p>
+      ${connBars}` : ""}
+    ${plateHTML("connectivity")}
     ${deskLine(["Adoptable access & visibility splays", "Junction capacity & modelling scope", "PRoW crossing / diversion", "Travel plan obligations"].map(x => { deskItems.push(x); return x; }))}
   </section>
 
@@ -9294,7 +9786,18 @@ function buildSiteReportHTML(site) {
     ${row("Local rents", areas.la_rents ? "£" + esc(String(areas.la_rents.rent_mean ?? "")) + "/month LA average" : null, "data", "ONS PIPR")}
     ${row("Affordability", incomeArea && incomeArea.afford_ratio != null ? esc(String(incomeArea.afford_ratio)) + "× local income" + (areas.msoa_income ? " (neighbourhood)" : " (district)") : null, "data", "Land Registry + ONS income")}
     ${row("Build cost index", bci ? esc(String(bci.factor)) + "× national (" + esc(bci.region || "region") + ")" : null, "model", "free proxy — not BCIS")}
-    <p style="font-size:12px;margin:8px 0 2px"><strong>Recent transactions</strong> ${confBadge("data")}</p>
+    ${(() => {
+      const lp = areas.lsoa_prices || null;
+      if (!lp) return "";
+      const psf = v => v ? "£" + Math.round(Number(v) / 10.7639).toLocaleString() + "/ft²" : "";
+      return row("Neighbourhood record", `median £${Number(lp.med || 0).toLocaleString()} across ${Number(lp.n || 0).toLocaleString()} sales` +
+        (lp.ppm2 ? ` · £${Number(lp.ppm2).toLocaleString()}/m² (${psf(lp.ppm2)})${lp.epc === true || lp.epc === "true" ? ", EPC-measured" : ", estimated by type mix"}` : "") +
+        (lp.trend_pct != null ? ` · ${Number(lp.trend_pct) > 0 ? "▲ +" : "▼ "}${lp.trend_pct}% over the last 12 months against the prior 24` : ""),
+        "data", "HM Land Registry Price Paid × EPC floor areas");
+    })()}
+    ${plateHTML("market")}
+    <h4 class="sr-h4">Recent transactions ${confBadge("data")}</h4>
+    ${compChart ? `<p class="sr-note">Every sale the query returned within the map extent — the spread of evidence, not a sample of it. The dashed line is the median.</p>${compChart}` : ""}
     ${salesTable}
     ${deskLine(["New-build premium evidence & absorption rate", "Competing consented supply", "RP appetite & affordable offer levels"].map(x => { deskItems.push(x); return x; }))}
   </section>
@@ -9315,13 +9818,19 @@ function buildSiteReportHTML(site) {
       <div class="sr-kpi"><b>${money(ap.residualLandValue)}</b><span>residual land value</span></div>
       <div class="sr-kpi"><b>${ap.irr == null ? "n/a" : pct(ap.irr)}</b><span>equity IRR</span></div>
       <div class="sr-kpi"><b>${money(ap.peakDebt)}</b><span>peak debt</span></div>
-      <div class="sr-kpi"><b>${money(ap.cashflow ? ap.cashflow.interest : null)}</b><span>finance interest</span></div>
+      <div class="sr-kpi"><b>${money(ap.audit ? ap.audit.interest : null)}</b><span>finance interest</span></div>
     </div>
-    <p style="font-size:12px;margin:8px 0 2px"><strong>Appraisal waterfall</strong></p>
+    <h4 class="sr-h4">Appraisal waterfall</h4>
+    <p class="sr-note">GDV at the left, each cost stepping the running total down, profit landing at the right. Each bar starts where the last one finished, so the staircase is the arithmetic.</p>
+    ${wfChart}
     ${wfTable}
-    <p style="font-size:12px;margin:8px 0 2px"><strong>Sensitivity — profit on cost, build cost × sales value</strong></p>
+    <h4 class="sr-h4">Sensitivity — profit on cost against build cost and sales value</h4>
+    ${sensChart}
     ${sensTable}
-    <p class="sr-note">Model: sin² build S-curve over ${SIFT.assumptions.buildMonths} months, even absorption over ${SIFT.assumptions.salesMonths} months, equity-first funding at ${SIFT.assumptions.ltcPct}% LTC, interest capitalised monthly.</p>
+    ${cfChart ? `<h4 class="sr-h4">Funding profile</h4>
+      <p class="sr-note">Monthly balance across the programme. Peak debt is the maximum facility the scheme needs, and when it falls tells you when the funding has to be in place.</p>
+      ${cfChart}` : ""}
+    <p class="sr-note">Model: sin² build S-curve over ${SIFT.assumptions.buildMonths} months, even absorption over ${SIFT.assumptions.salesMonths} months, equity-first funding at ${SIFT.assumptions.ltcPct}% LTC, interest capitalised monthly. Policy DM5(1) presumes a policy-compliant scheme IS viable — so the question this answers is whether compliance is deliverable at a benchmark land value, not what profit a particular land price would leave.</p>
   </section>
 
   <section class="sr-sec"><h3>10a · Full calculation — every step, actual numbers ${confBadge("model")}</h3>
@@ -9329,7 +9838,9 @@ function buildSiteReportHTML(site) {
     ${calcAuditHTML({ units: site.units, ppm2: site.ppm2, areaHa: site.totHa,
         locationFactor: (site.marketCtx && site.marketCtx.factor) || null,
         landValueHa: (site.marketCtx && site.marketCtx.landValueHa) || null,
-        cilAreaPm2: (site.marketCtx && site.marketCtx.cilPm2 != null) ? site.marketCtx.cilPm2 : null },
+        cilAreaPm2: (site.marketCtx && site.marketCtx.cilPm2 != null) ? site.marketCtx.cilPm2 : null,
+        cilStatus: (areas.cil_rates && areas.cil_rates.status) || null,
+        greenBeltShare: Math.min(1, (Number(cons.green_belt) || 0) / 100) },
       SIFT.assumptions, ap)}
   </section>
 
@@ -10147,6 +10658,7 @@ function buildDeepDivePanel(meta) {
           <div id="dd-viability-summary"><p class="hint">Turn on the developable-land tool above — the appraisal prices its dwelling capacity.</p></div>
           <button type="button" class="ghost" id="dd-viab-vars">Viability variables…</button>
           <button type="button" class="ghost" id="dd-viab-calc">Full calculation…</button>
+          <button type="button" class="plot-mode-btn" id="dd-catchment-report">Full report…</button>
         </div>
       </section>
       <section class="dd-block" data-section="assembly">
@@ -10341,6 +10853,10 @@ function buildDeepDivePanel(meta) {
       onChange: () => { renderDeepDiveViability(); if (SIFT.loaded) scoreSiftRows(); },
     };
   };
+  // The same report the assembler produces, for the whole catchment — you do
+  // not have to assemble a site to get one.
+  const cr = panel.querySelector("#dd-catchment-report");
+  if (cr) cr.addEventListener("click", () => generateSiteReport("catchment"));
   const dv = panel.querySelector("#dd-viab-vars");
   if (dv) dv.addEventListener("click", () => openViabilityModal(ddViabCtx()));
   const dc = panel.querySelector("#dd-viab-calc");
