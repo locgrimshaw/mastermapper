@@ -227,7 +227,7 @@ ALL_DATASETS = [
     "building_height",
     "build_cost_index", "lad_income", "msoa_income", "land_value",
     "cil_rates", "lsoa_boundary", "local_plan_housing", "housing_need",
-    "connectivity_lsoa", "connectivity_lad",
+    "connectivity_lsoa", "connectivity_lad", "connectivity_oa",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -2952,6 +2952,13 @@ def build_housing_need():
     return {key: rows}
 
 
+# ONS Output Area 2021 boundaries, generalised & clipped. 188,880 polygons,
+# paged 2,000 at a time — the finest census geography the connectivity metric
+# publishes.
+OA_BOUNDARY_URL = ("https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/"
+                   "services/Output_Areas_2021_EW_BGC_V2/FeatureServer/0/query"
+                   "?where=1%3D1&outFields=OA21CD,LSOA21CD&outSR=4326&f=geojson")
+
 # DfT transport connectivity metric (2025). One 68 MB ODS holding 1.09 GB of
 # XML: Metadata, then OA (188,884 rows), LSOA (35,672), LAD (331), RGN (10).
 CONNECTIVITY_URL = ("https://assets.publishing.service.gov.uk/media/"
@@ -3209,6 +3216,94 @@ def build_connectivity():
     _note(key, f"{fhow}; {n_hit} LSOAs scored, {len(agg)} authorities",
           len(rows) + len(lad_rows))
     return out
+
+
+def build_connectivity_oa():
+    """DfT connectivity at OUTPUT AREA level — dataset connectivity_oa.
+
+    188,884 Output Areas against 35,672 LSOAs: roughly 5.6x the detail, an OA
+    being about 125 households. This is as fine as the published data goes —
+    the workbook's own metadata states "lowest geography: Output Area (OA
+    2021)", so the 100 m grid DfT's interactive tool draws is rendered inside
+    that tool and is not distributed.
+
+    This dataset exists to be TILED, not queried per viewport. The bbox RPC
+    spends roughly 400 microseconds per feature assembling JSON, which is what
+    made PTAL's 159,451 cells unservable at a London-wide zoom (52,301 cells,
+    14 MB, 20.8 s), and 188,884 polygons would hit the same wall. It is loaded
+    into map_features so build_ptal_tiles.py can export it to PMTiles — and,
+    as with PTAL, the table copy keeps earning its place because the deep dive
+    and spot summary query it point-by-point, which is cheap and lets a site
+    report quote the connectivity of the actual site rather than its
+    neighbourhood average."""
+    key = "connectivity_oa"
+    fpath, fhow = _resolve_source(key, ["CONNECTIVITY_SRC"], CONNECTIVITY_URL,
+                                  "connectivity_metrics.ods")
+    if fpath is None:
+        _warn(key, "no connectivity ODS — set CONNECTIVITY_SRC")
+        _note(key, "no source file")
+        return {}
+    bpath, bhow = _resolve_arcgis_source(key, ["OA_BOUNDARY_SRC"],
+                                         OA_BOUNDARY_URL, "oa-boundaries.geojson")
+    if bpath is None:
+        _warn(key, f"no Output Area boundaries ({bhow})")
+        _note(key, "no OA boundaries")
+        return {}
+
+    print(f"  [{key}] streaming the OA sheet (188,884 rows) ...")
+    cols, scores = None, {}
+    for _sheet, cells in _ods_sheet_rows(fpath, {"OA"}):
+        if cols is None:
+            if str(cells[0]).strip().upper().startswith("OA"):
+                cols = [_connectivity_key(h) for h in cells[1:]]
+            continue
+        code = str(cells[0]).strip()
+        if not re.fullmatch(r"[EW]00\d{6}", code):
+            continue
+        row = {}
+        for k, v in zip(cols, cells[1:]):
+            if not k:
+                continue
+            try:
+                row[k] = round(float(v), 1)
+            except (TypeError, ValueError):
+                pass
+        if row:
+            scores[code] = row
+    if not scores:
+        _warn(key, "no OA rows parsed from the connectivity workbook")
+        _note(key, "no rows parsed")
+        return {}
+    print(f"  [{key}] {len(scores):,} Output Areas scored")
+
+    gdf = gpd.read_file(bpath)
+    code_col = _find_col(gdf, ["oa21cd", "oa_code", "code"], contains=True)
+    if code_col is None:
+        _warn(key, f"no OA code column, got {list(gdf.columns)[:12]}")
+        _note(key, "no code column")
+        return {}
+    lsoa_col = _find_col(gdf, ["lsoa21cd"], contains=True)
+
+    n_hit, n_miss = 0, 0
+
+    def oa_props(f):
+        nonlocal n_hit, n_miss
+        code = str(_cell(f, code_col) or "").strip()
+        row = scores.get(code)
+        if row is None:
+            n_miss += 1
+            return {"oa": code, "status": "no_score"}
+        n_hit += 1
+        out = {"oa": code}
+        if lsoa_col is not None:
+            out["lsoa"] = str(_cell(f, lsoa_col) or "").strip() or None
+        return dict(out, **row)
+
+    rows = _emit(gdf, key, name_col=code_col, id_col=code_col, want="polygon",
+                 props_fn=oa_props)
+    print(f"  [{key}] {n_hit:,} polygons matched a score, {n_miss:,} did not")
+    _note(key, f"{fhow}; {n_hit} Output Areas scored", len(rows))
+    return {key: rows}
 
 
 def build_income():
@@ -3808,6 +3903,7 @@ GROUPS = (
         (["local_plan_housing"], build_local_plan_housing, []),
         (["housing_need"], build_housing_need, []),
         (["connectivity_lsoa", "connectivity_lad"], build_connectivity, []),
+        (["connectivity_oa"], build_connectivity_oa, []),
     ]
 )
 
