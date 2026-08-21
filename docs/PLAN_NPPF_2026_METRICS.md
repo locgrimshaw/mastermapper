@@ -62,7 +62,7 @@ Two things follow:
   store `meets_frequency` as a boolean and no trains-per-hour figure, so we
   cannot currently identify that tier at all. See §2.1.
 
-### 0.3 Green Belt schemes owe the Golden Rules, and our appraisal ignores them
+### 0.3 Green Belt schemes owe the Golden Rules — BUILT
 
 Policy GB7(1)(h) carries the station route into the Green Belt, and GB8 then
 attaches the Golden Rules to *major development involving housing* on land
@@ -83,10 +83,16 @@ the case the tool is built to find — the policy-compliant figure is **40%**
 (25 + 15), or 50% where no local requirement exists. That is a large,
 systematic understatement of cost on precisely the sites we are recommending.
 
-**Fix**: a Green Belt flag on the appraisal input that applies the +15pp uplift
-(capped at 50%), shown as its own line in the calculation audit so the reason
-is visible. Exemptions to encode: plans adopted before 12 December 2024,
-permissions granted before that date, and traveller sites.
+**BUILT.** The uplift is blended by each scheme's Green Belt share of
+developable land (a site 30% in the Green Belt lands at 29.5%, not a blanket
+40%), gated on major development, with the CIL exemption following the
+effective affordable share. It appears as its own line in the calculation
+audit and the deep-dive viability panel. Exemptions the model cannot know —
+plans adopted before 12 December 2024, permissions granted before that date,
+traveller sites — are named in the tooltip with an off switch. The exposure
+turned out to be much wider than Tier B: 609 of 2,382 English stations have
+Green Belt in their developable land, 505 are more than half Green Belt, and
+26.8% of all developable hectares the tool appraises sit under the rule.
 
 ### 0.4 Citations
 
@@ -106,7 +112,7 @@ yes" framing the tool already uses.
 
 ## Part 1 — Metrics computable now, from open data
 
-### 1.1 Standard-method local housing need, per authority — the headline number
+### 1.1 Standard-method local housing need — BUILT
 
 Annex D specifies the standard method completely, and every input is free:
 
@@ -120,23 +126,37 @@ authority — the single number that governs how much land an authority has to
 find. Both sources are published, stable and already in the shape our
 `build_datasets.py` LAD joins expect.
 
-This is the most valuable single addition available. It turns the tool from
-"here is a site" into "here is a site in an authority that must find 2,340
-homes a year and is 38% short".
+**BUILT** as dataset `housing_need` (layer "Housing need (standard method)").
+293 authorities carry a figure. The check that it is right rather than merely
+plausible: summed across England it comes to **367,693 homes a year** against
+the government's published standard-method total of about 370,000.
 
-### 1.2 Plan requirement vs standard-method need — a leverage map
+### 1.2 Plan requirement vs standard-method need — BUILT
 
 Annex D para 9(c): for decision-making, a **20% buffer** applies where an
 authority's plan was examined against a pre-December-2024 Framework and its
 *"annual average housing requirement … is 80% or less of the most up-to-date
 local housing need figure"*.
 
-We already hold the requirement and the plan period in `local_plan_housing`
-(§tier 1, shipped), so the annual average is a division, and §1.1 supplies the
-denominator. The ratio identifies authorities whose adopted requirement is
-materially below current need — where an applicant argues from a deficient
-plan. Combined with the housing gap already mapped, this is the promoter's
-leverage layer.
+**BUILT** as the second layer on the same dataset ("Plan requirement vs
+need"). 172 of 293 authorities can be compared honestly, and **126 of those
+sit at or below 80% of current need**.
+
+Three classes of authority are deliberately excluded, because ranking the
+first cut showed each producing a fabricated shortfall: authorities carrying
+several predecessor district plans after reorganisation (North Yorkshire holds
+seven; taking the latest presented one former district as the whole county, at
+315 homes a year against a need of 4,173), joint plans whose requirement
+covers several authorities with no published split (Norwich read 262% of its
+need), and plans whose period began before the authority existed (Somerset was
+showing the Sedgemoor Local Plan). Those keep their plan count and say why on
+hover — an authority running on predecessor plans has no up-to-date one, which
+is a signal in itself.
+
+The flag is `below80`, not `buffer20`: Annex D 9(c)'s second limb (a
+requirement adopted in the last five years, examined against a
+pre-December-2024 Framework) cannot be confirmed per authority from open
+data.
 
 ### 1.3 Housing Delivery Test consequences, including the unmet-need route
 
@@ -291,10 +311,8 @@ how the appraisal presents policy costs.
 
 ## Suggested order
 
-1. **§0.3 Golden Rules** — frontend only, no data, and it corrects a
-   systematic understatement on the Tier B sites the tool exists to find.
-2. **§1.1 + §1.2 standard-method need and the requirement ratio** — two free
-   sources, one builder, and the biggest single credibility gain available.
+1. ~~**§0.3 Golden Rules**~~ — **done**.
+2. ~~**§1.1 + §1.2 standard-method need and the requirement ratio**~~ — **done**.
 3. **§1.4 + §1.5 site-size classes and small-site supply** — pure derivation
    from data already held.
 4. **§2.1 trains per hour**, then **§0.1 top-80 TTWA** — both need the station
