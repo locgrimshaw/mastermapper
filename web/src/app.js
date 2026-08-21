@@ -1129,6 +1129,12 @@ const MAP_OVERLAYS = [
   // requirement minus (allocated + committed) = the shortfall the authority
   // has to close. Painted on the plan boundary, not a site.
   { key: "local_plan_housing", group: "policy", label: "Local plan housing gap", color: "#862e9c", dataset: "local_plan_housing", minZoom: 5 },
+  // Two readings of one dataset (the price choropleths do the same): how much
+  // housing an authority must find, and how far its adopted plan falls short
+  // of that. The second is the promoter's leverage map, so it gets its own
+  // toggle rather than hiding inside a popup.
+  { key: "housing_need", group: "policy", label: "Housing need (standard method)", color: "#0b7285", dataset: "housing_need", minZoom: 5 },
+  { key: "plan_vs_need", group: "policy", label: "Plan requirement vs need", color: "#d6336c", dataset: "housing_need", minZoom: 5 },
   { key: "article4",            group: "policy", label: "Article 4 direction areas",     color: "#c2255c", dataset: "article4",            minZoom: 8 },
   { key: "tpo_zone",            group: "policy", label: "Tree preservation zones",       color: "#2b8a3e", dataset: "tpo_zone",            minZoom: 9 },
   { key: "design_code_area",    group: "policy", label: "Design code areas",             color: "#e8590c", dataset: "design_code_area",    minZoom: 8 },
@@ -1420,6 +1426,8 @@ const LAYER_INFO = {
   land_hes:               { about: "Properties in the care of Historic Environment Scotland.", source: "Historic Environment Scotland open data (OGL v3)" },
   lpa_boundary:        { about: "Local planning authority boundaries — who decides planning applications where. Complete for England.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   local_plan_boundary: { about: "Adopted and emerging local plan areas. Coverage is still partial — only LPAs that have published to the platform.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  housing_need:        { about: "The minimum number of homes each authority must plan for every year, computed exactly as NPPF (Aug 2026) Annex D specifies: 0.8% of the authority's existing dwelling stock, then adjusted for affordability — no adjustment where the median workplace-based house-price-to-earnings ratio is 5 or below, and 0.95% added to the baseline for each 1% above 5, on the five-year average. Pale teal is low need, deep teal high. This is the number the rest of housing policy hangs off: it sets how much land an authority has to find. Summed across England it comes to 367,693 homes a year, against the government's published standard-method total of about 370,000 — the two agree to well under a percent. England only: both sources stop at the border.", source: "MHCLG Live Table 125 (dwelling stock by local authority) + ONS ratio of house price to workplace-based earnings, table 5c (both OGL v3); method per NPPF Aug 2026 Annex D" },
+  plan_vs_need:        { about: "Each authority's ADOPTED plan requirement, per year, as a percentage of what the standard method now says it needs. Red means the plan is far below current need — where an applicant argues from a deficient plan; green means it meets or beats it. The 80% break matters: Annex D para 9(c) attaches a 20% buffer to authorities whose annual requirement is 80% or less of current need, though that test has a second limb (a requirement adopted in the last five years, examined against a pre-December-2024 Framework) which cannot be confirmed per authority from open data — so treat this as one limb, not the buffer itself. 172 of 293 authorities can be compared honestly; the rest are grey and say why on hover. Three exclusions are deliberate, because each was producing a fabricated shortfall: authorities carrying several predecessor district plans after reorganisation (North Yorkshire holds seven), joint plans whose requirement covers several authorities together with no published split, and plans whose period began before the authority existed.", source: "MHCLG planning.data.gov.uk local-plan + local-plan-housing (OGL v3), set against the Annex D standard method" },
   local_plan_housing:  { about: "How much housing each local plan still has to find: the plan's requirement minus its published supply (sites allocated, schemes already committed, plus the windfall and broad-location allowances where given). Green = the requirement is covered; yellow through deep red = the shortfall in homes, up to ~11,000. Grey = no gap can be stated — no plan record, no housing figures, or only ONE side of the supply published, and a blank cell means 'not published', never zero. Coverage is honest, not total: of 364 plan areas, 338 have a plan record, 143 publish enough to compute a gap and 134 publish only part of their supply. NOTE this is PLAN-LEVEL arithmetic on the plan boundary, not allocated site polygons — there is no national dataset of those, they remain a per-council publication. Hover for the requirement, the supply split, adoption date and whether the plan is past its 5-year review.", source: "MHCLG planning.data.gov.uk: local-plan, local-plan-housing, local-plan-timetable (OGL v3)" },
   article4:            { about: "Article 4 directions removing permitted development rights — often HMO conversion, so a strong student-housing pressure signal.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   tpo_zone:            { about: "Tree preservation order zones.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
@@ -2199,6 +2207,24 @@ function renderOverlay(key, def, fc) {
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "cil_pm2"]], 0],
           0, "#2f9e44", 40, "#94d82d", 90, "#ffd43b",
           150, "#f59f00", 250, "#e8590c", 450, "#c92a2a"]]
+      : def.key === "plan_vs_need"
+      // The leverage reading. Below 80% is one limb of the Annex D 9(c)
+      // buffer test, so the ramp breaks there rather than at a round number:
+      // red = the plan is far below current need, green = it meets or beats
+      // it. Grey where no honest comparison exists — a joint plan, several
+      // predecessor plans, or a plan predating the authority.
+      ? ["case", ["!", ["has", "plan_vs_lhn"]], "rgba(160,170,175,0.4)",
+         ["step", ["coalesce", ["to-number", ["get", "plan_vs_lhn"]], 0],
+          "#a4133c", 30, "#c9184a", 50, "#e8590c", 65, "#f59f00",
+          80, "#ffd43b", 100, "#94d82d", 130, "#2f9e44"]]
+      : def.dataset === "housing_need"
+      // Annual homes the standard method requires. Steps on the national
+      // deciles, so the colours divide the country into real groups rather
+      // than leaving everywhere pale below a London maximum.
+      ? ["case", ["!", ["has", "lhn"]], "rgba(160,170,175,0.4)",
+         ["step", ["coalesce", ["to-number", ["get", "lhn"]], 0],
+          "#e3f2f4", 550, "#c5e4e7", 750, "#9ed2d8", 900, "#74bcc6",
+          1150, "#4aa3b0", 1400, "#2b8a99", 1800, "#166b7d", 2600, "#0b4a5c"]]
       : def.dataset === "local_plan_housing"
       // Three genuinely different states, and they must not be confusable:
       //   no gap key   -> grey: the plan publishes no usable numbers, only one
@@ -3753,6 +3779,39 @@ function hoverContentForOverlay(def, p) {
                 "flagged"),
             row(p.note || null, "note"),
             row(st === "adopted" ? `~${p.asof} indexation · omits future uplift` : null, "vintage")];
+  } else if (d === "housing_need") {
+    const num = v => v == null ? null : Number(v).toLocaleString();
+    const st = p.plan_status;
+    title = p.lhn != null ? `${num(p.lhn)} homes/yr` : (p.name || "Authority");
+    kind = def.key === "plan_vs_need"
+      ? "Adopted plan requirement vs standard-method need"
+      : "Local housing need — NPPF standard method";
+    rows = [row(p.name, "authority"),
+            // The two steps, shown as steps: a reader should be able to
+            // reproduce the figure from what is on screen.
+            row(p.stock != null
+                ? `0.8% of ${num(p.stock)} dwellings${p.stock_year ? ` (${p.stock_year})` : ""} = ${num(p.baseline)}`
+                : null, "step 1 · baseline"),
+            row(p.afford_ratio != null
+                ? `${p.afford_ratio}× earnings → ×${p.afford_factor}`
+                : null, Number(p.afford_factor) === 1
+                        ? "step 2 · at or below 5, no adjustment"
+                        : "step 2 · affordability adjustment"),
+            row(p.lhn != null ? `${num(p.lhn)} homes/yr` : null, "minimum annual need"),
+            row(st === "compared" && p.plan_annual != null
+                ? `${num(p.plan_annual)}/yr (${num(p.plan_required)} over ${p.plan_years} yrs)`
+                : null, `adopted plan${p.plan_period ? ` ${p.plan_period}` : ""}`),
+            row(st === "compared" && p.plan_vs_lhn != null
+                ? `${p.plan_vs_lhn}% of need` +
+                  (p.below80 ? " — at or below 80%" : "")
+                : null, "plan against need"),
+            row(p.plan_name && st === "compared" ? p.plan_name : null, "plan"),
+            // Where no comparison is shown, say why in the same breath.
+            row(p.plan_note || null, "no comparison"),
+            row(p.below80
+                ? "meets the 80% limb of the Annex D buffer test — the other limb (plan vintage) needs checking"
+                : null, "note"),
+            row(p.status === "no_data" ? "England only — the standard method's sources stop at the border" : null, "coverage")];
   } else if (d === "local_plan_housing") {
     const num = v => v == null ? null : Number(v).toLocaleString();
     const STAGE = { "regulation-18": "Reg 18 consultation",

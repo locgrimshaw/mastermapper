@@ -226,7 +226,7 @@ ALL_DATASETS = [
     "ofcom_fibre", "census_students", "student_accom",
     "building_height",
     "build_cost_index", "lad_income", "msoa_income", "land_value",
-    "cil_rates", "lsoa_boundary", "local_plan_housing",
+    "cil_rates", "lsoa_boundary", "local_plan_housing", "housing_need",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -2563,6 +2563,394 @@ def build_local_plan_housing():
     return {key: rows}
 
 
+# MHCLG Live Table 125 (dwelling stock by local authority) and the ONS
+# affordability ratio are both spreadsheets on pages without a stable file
+# URL, so both take the usual *_SRC override and degrade to a warning.
+DWELLING_STOCK_URL = ("https://assets.publishing.service.gov.uk/media/"
+                      "6a0dcbf65c3c79da61662e39/LiveTable125.ods")
+AFFORDABILITY_URL = ("https://www.ons.gov.uk/file?uri=/peoplepopulationand"
+                     "community/housing/datasets/ratioofhousepricetoworkplace"
+                     "basedearningslowerquartileandmedian/current/"
+                     "aff1ratioofhousepricetoworkplacebasedearnings.xlsx")
+
+# NPPF (Aug 2026) Annex D, the standard method. Both constants are the
+# Framework's, not ours — do not "tune" them.
+LHN_STOCK_PCT = 0.008        # step 1: baseline is 0.8% of existing stock
+LHN_RATIO_FLOOR = 5.0        # step 2: no adjustment at a ratio of 5 or below
+LHN_RATIO_SLOPE = 0.95       # ... then 0.95% of baseline per 1% above 5
+
+
+def _ods_rows(path, sheet_name):
+    """Minimal ODS reader — rows of strings for one sheet.
+
+    Written against the stdlib rather than adding odfpy: an ODS is a zip of
+    XML, and one sheet of a published statistics table needs none of the
+    library's features. Repeated cells are expanded (the format runs them),
+    capped so a trailing 'repeat 16384 empty columns' cannot blow up a row.
+    """
+    import zipfile
+    import xml.etree.ElementTree as ET
+    T = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+    TX = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+    OF = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+    with zipfile.ZipFile(path) as z:
+        root = ET.fromstring(z.read("content.xml"))
+    for t in root.iter("{%s}table" % T):
+        if t.get("{%s}name" % T) != sheet_name:
+            continue
+        out = []
+        for row in t.findall("{%s}table-row" % T):
+            cells = []
+            for c in row.findall("{%s}table-cell" % T):
+                rep = int(c.get("{%s}number-columns-repeated" % T, 1))
+                v = c.get("{%s}value" % OF)
+                if v is None:
+                    v = "".join("".join(p.itertext())
+                                for p in c.findall("{%s}p" % TX))
+                cells += [v] * min(rep, 64)
+            out.append(cells)
+        return out
+    return []
+
+
+# Authorities created by local government reorganisation, with the date they
+# came into being. The planning platform re-points a predecessor district's
+# plan at its successor, so without this a predecessor's requirement reads as
+# the whole new authority's: Somerset was showing the Sedgemoor Local Plan's
+# 644 homes a year against a county need of 3,784 — a fabricated 83%
+# shortfall, and North Northamptonshire the same from a Joint Core Strategy
+# record holding 7,000 homes where the plan's own figure is around 35,000.
+# A plan whose period begins before its authority existed cannot speak for
+# that authority, which catches these without judging any of them by name.
+REORGANISED_AUTHORITIES = {
+    "E06000058": 2019, "E06000059": 2019, "E07000244": 2019,   # BCP, Dorset, E Suffolk
+    "E07000245": 2019, "E07000246": 2019,                      # W Suffolk, Somerset W & Taunton
+    "E06000060": 2020,                                          # Buckinghamshire
+    "E06000061": 2021, "E06000062": 2021,                      # N & W Northamptonshire
+    "E06000063": 2023, "E06000064": 2023,                      # Cumberland, Westmorland & Furness
+    "E06000065": 2023, "E06000066": 2023,                      # North Yorkshire, Somerset
+}
+
+
+def build_housing_need():
+    """Standard-method local housing need per authority — dataset housing_need.
+
+    NPPF (August 2026) Annex D specifies the standard method completely, and
+    both of its inputs are published free:
+
+      step 1  baseline = 0.8% of the authority's existing dwelling stock
+              (MHCLG Live Table 125, dwelling stock by local authority)
+      step 2  adjusted for affordability. No adjustment where the ratio is 5
+              or below; for each 1% above 5, the baseline rises 0.95%:
+                  factor = ((5yr average ratio - 5) / 5) x 0.95 + 1
+              (ONS median WORKPLACE-BASED house-price-to-earnings ratio by
+              local authority — the series the Framework names, not our
+              neighbourhood affordability layer. ONS publishes the five-year
+              average as its own column, which is exactly the mean Annex D
+              asks for.)
+
+    That yields the minimum annual housing need figure that governs how much
+    land an authority has to find — the number the rest of the housing policy
+    machinery hangs off.
+
+    The builder then sets each authority's ADOPTED plan requirement against
+    it, via the same three planning-platform CSVs the local_plan_housing
+    dataset uses, joined plan -> organisation -> local authority district.
+    Annex D para 9(c) attaches a 20% buffer where an annual average
+    requirement is "80% or less of the most up-to-date local housing need
+    figure" — but only for a plan examined against a pre-December-2024
+    Framework, a limb we cannot confirm per authority. So the flag is named
+    below80 and described as one limb of that test, never as the buffer
+    itself."""
+    key = "housing_need"
+    bpath, bhow = _resolve_arcgis_source(
+        "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
+        LAD_DEFAULT_URL, "lad-boundaries.geojson")
+    if bpath is None:
+        _warn(key, "no LAD boundaries to join housing need onto")
+        _note(key, "no LAD boundaries")
+        return {}
+
+    def _num(v):
+        try:
+            f = float(str(v).replace(",", "").strip())
+            return f if f == f else None
+        except (TypeError, ValueError):
+            return None
+
+    # ---- step 1: dwelling stock -------------------------------------------
+    spath, show = _resolve_source(key, ["DWELLING_STOCK_SRC"],
+                                  DWELLING_STOCK_URL, "dwelling-stock.ods")
+    stock, stock_year = {}, None
+    if spath is not None and str(spath).lower().endswith(".ods"):
+        rows = _ods_rows(spath, "LT_125_unrounded") or _ods_rows(spath, "LT_125_rounded")
+        hdr_i = next((i for i, r in enumerate(rows[:12])
+                      if any("new ons code" in str(c).lower() for c in r)), None)
+        if hdr_i is None:
+            _warn(key, "could not find the header row in Live Table 125")
+        else:
+            hdr = rows[hdr_i]
+            # Rightmost column whose header names a year and which actually
+            # carries figures — the table keeps trailing blank columns, and
+            # the newest year is provisional ("2025 [p]").
+            years = [(i, re.match(r"\s*(\d{4})", str(c)).group(1))
+                     for i, c in enumerate(hdr)
+                     if re.match(r"\s*\d{4}", str(c))]
+            for i, yr in reversed(years):
+                vals = {}
+                for r in rows[hdr_i + 1:]:
+                    if len(r) <= max(i, 1):
+                        continue
+                    code = str(r[1]).strip()
+                    v = _num(r[i])
+                    if re.fullmatch(r"E0[6-9]\d{6}", code) and v:
+                        vals[code] = v
+                if len(vals) >= 200:
+                    stock, stock_year = vals, yr
+                    break
+            if not stock:
+                _warn(key, "no populated year column in Live Table 125")
+    elif spath is not None:
+        # Drop-in CSV: any LAD-code column plus a stock column.
+        with open(spath, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                code = next((str(v).strip() for v in r.values()
+                             if re.fullmatch(r"E0[6-9]\d{6}", str(v).strip())), None)
+                v = next((_num(r[k]) for k in r
+                          if "stock" in k.lower() or "dwelling" in k.lower()), None)
+                if code and v:
+                    stock[code] = v
+    if not stock:
+        _warn(key, f"no dwelling stock figures ({show}) — set DWELLING_STOCK_SRC "
+                   "to MHCLG Live Table 125 (ODS) or a LAD-code CSV")
+        _note(key, "no dwelling stock")
+        return {}
+
+    # ---- step 2: affordability ratio --------------------------------------
+    apath, ahow = _resolve_source(key, ["AFFORDABILITY_RATIO_SRC"],
+                                  AFFORDABILITY_URL, "affordability-ratio.xlsx")
+    ratio = {}
+    if apath is not None and str(apath).lower().endswith((".xlsx", ".xlsm")):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(apath, read_only=True, data_only=True)
+            # Table 5c: median affordability ratio by local authority district.
+            ws = wb["5c"] if "5c" in wb.sheetnames else wb[wb.sheetnames[-1]]
+            hdr, avg_i, code_i = None, None, None
+            for r in ws.iter_rows(values_only=True):
+                cells = ["" if c is None else str(c).strip() for c in r]
+                if hdr is None:
+                    if any(c.lower().startswith("local authority code") for c in cells):
+                        hdr = cells
+                        code_i = next(i for i, c in enumerate(cells)
+                                      if c.lower().startswith("local authority code"))
+                        # ONS publishes the five-year average as its own
+                        # column — the exact mean Annex D asks for.
+                        avg_i = next((i for i, c in enumerate(cells)
+                                      if "5-year average" in c.lower()
+                                      or "5 year average" in c.lower()), None)
+                    continue
+                if code_i is None or avg_i is None or len(cells) <= max(code_i, avg_i):
+                    continue
+                code, v = cells[code_i], _num(cells[avg_i])
+                if re.fullmatch(r"E0[6-9]\d{6}", code) and v:
+                    ratio[code] = v
+        except Exception as exc:                       # noqa: BLE001
+            _warn(key, f"could not read the affordability workbook: {exc}")
+    elif apath is not None:
+        with open(apath, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                code = next((str(v).strip() for v in r.values()
+                             if re.fullmatch(r"E0[6-9]\d{6}", str(v).strip())), None)
+                v = next((_num(r[k]) for k in r if "ratio" in k.lower()), None)
+                if code and v:
+                    ratio[code] = v
+    if not ratio:
+        # Without step 2 the baseline still stands, but the figure would be a
+        # different quantity from the one the Framework defines. Say so rather
+        # than publishing an unadjusted number as "local housing need".
+        _warn(key, f"no affordability ratios ({ahow}) — housing need cannot be "
+                   "computed without step 2 of the standard method")
+        _note(key, "no affordability ratios")
+        return {}
+
+    # ---- the adopted plan requirement, per authority ----------------------
+    # lad -> every plan carrying a requirement for it, and plan -> the
+    # authorities it covers. BOTH directions are needed, because the platform
+    # models two situations that look identical from one side and mean
+    # opposite things (see the guard below).
+    plan_by_lad, plan_areas = {}, {}
+    ppath, _phow = _resolve_source(key, ["LOCAL_PLAN_SRC"],
+                                   PLANNING_DATA_BASE + "local-plan.csv",
+                                   "local-plan.csv")
+    hpath, _hhow = _resolve_source(key, ["LOCAL_PLAN_HOUSING_SRC"],
+                                   PLANNING_DATA_BASE + "local-plan-housing.csv",
+                                   "local-plan-housing.csv")
+    opath, _ohow = _resolve_source(key, ["LOCAL_AUTHORITY_SRC"],
+                                   PLANNING_DATA_BASE + "local-authority.csv",
+                                   "local-authority.csv")
+    if ppath and hpath and opath:
+        orgs = {}
+        with open(opath, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                orgs[r.get("entity", "")] = (
+                    r.get("local-authority-district") or "").strip()
+        hous = {}
+        with open(hpath, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                hous[r.get("local-plan", "")] = r
+        with open(ppath, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                lad = orgs.get(r.get("organisation-entity", ""), "")
+                h = hous.get(r.get("reference", ""))
+                if not lad or not h:
+                    continue
+                req = _num(h.get("required-housing"))
+                ps = (r.get("period-start-date") or "")[:4]
+                pe = (r.get("period-end-date") or "")[:4]
+                if not req or not (ps.isdigit() and pe.isdigit()):
+                    continue
+                yrs = int(pe) - int(ps)
+                if yrs <= 0:
+                    continue
+                cand = {"required": int(req), "years": yrs,
+                        "annual": req / yrs, "start": ps, "end": pe,
+                        "ref": r.get("reference", ""),
+                        "name": (r.get("name") or "").strip() or None,
+                        "adopted": (r.get("adopted-date") or "")[:10] or None}
+                plan_by_lad.setdefault(lad, []).append(cand)
+                plan_areas.setdefault(cand["ref"], set()).add(lad)
+
+    n_lhn = n_plan = n_below = 0
+
+    def hn_props(f):
+        nonlocal n_lhn, n_plan, n_below
+        code = str(_cell(f, code_col) or "").strip()
+        st, ra = stock.get(code), ratio.get(code)
+        if st is None or ra is None:
+            return {"lad_code": code, "status": "no_data",
+                    "src": "outside the England-only sources for the standard "
+                           "method (dwelling stock and affordability ratio)"}
+        baseline = st * LHN_STOCK_PCT
+        factor = (1.0 if ra <= LHN_RATIO_FLOOR
+                  else ((ra - LHN_RATIO_FLOOR) / LHN_RATIO_FLOOR)
+                       * LHN_RATIO_SLOPE + 1.0)
+        lhn = baseline * factor
+        n_lhn += 1
+        out = {
+            "lad_code": code, "status": "ok",
+            "stock": int(round(st)), "stock_year": stock_year,
+            "afford_ratio": round(ra, 2),
+            "afford_factor": round(factor, 3),
+            "baseline": int(round(baseline)),
+            "lhn": int(round(lhn)),
+            "src": f"NPPF (Aug 2026) Annex D standard method: "
+                   f"{LHN_STOCK_PCT * 100:g}% of {int(round(st)):,} dwellings "
+                   f"({stock_year}) x {factor:.3f} affordability adjustment "
+                   f"(5yr median workplace-based ratio {ra:g})",
+        }
+        # ---- the plan comparison, and the two ways it goes wrong ----------
+        # A ratio is only stated where ONE plan covers this authority and that
+        # plan covers ONLY this authority. The two exclusions are not fussiness:
+        #
+        #  * Several plans -> local government reorganisation. Dorset (2019)
+        #    carries three predecessor district plans and North Yorkshire
+        #    (2023) carries seven. Picking one and calling it the county's
+        #    requirement produced 186 and 315 homes a year against needs of
+        #    3,273 and 4,173 — a fabricated 95% shortfall. Summing them instead
+        #    would assume the plans partition the area rather than supersede
+        #    one another, which the data does not say.
+        #  * One plan across several authorities -> a joint plan. The Greater
+        #    Norwich Local Plan's 40,541 homes belong to three authorities
+        #    together; charging the whole figure to each put Norwich at 262% of
+        #    its need. There is no published split to apportion by.
+        #
+        # Both cases still carry the plan count, because "no single plan for
+        # this authority" is itself a strong signal — an authority running on
+        # predecessor plans almost certainly has no up-to-date one.
+        plans = plan_by_lad.get(code) or []
+        if plans and lhn > 0:
+            out["plan_count"] = len(plans)
+            shared = sorted({a for p in plans
+                             for a in (plan_areas.get(p["ref"]) or set())
+                             if a != code})
+            if len(plans) > 1:
+                out["plan_status"] = "multiple_plans"
+                out["plan_note"] = (
+                    f"{len(plans)} separate plans carry a requirement for this "
+                    "authority — predecessor districts of a reorganised area. "
+                    "No single figure represents it, so no comparison is shown.")
+            elif shared:
+                out["plan_status"] = "joint_plan"
+                out["plan_name"] = plans[0]["name"]
+                out["plan_period"] = f"{plans[0]['start']}-{plans[0]['end']}"
+                out["plan_note"] = (
+                    f"a joint plan shared with {len(shared)} other "
+                    f"{'authority' if len(shared) == 1 else 'authorities'} — "
+                    "its requirement covers them together and there is no "
+                    "published split, so no comparison is shown.")
+            elif (code in REORGANISED_AUTHORITIES
+                  and plans[0]["start"].isdigit()
+                  and int(plans[0]["start"]) < REORGANISED_AUTHORITIES[code]):
+                out["plan_status"] = "predecessor_plan"
+                out["plan_name"] = plans[0]["name"]
+                out["plan_period"] = f"{plans[0]['start']}-{plans[0]['end']}"
+                out["plan_note"] = (
+                    f"the only plan on record began in {plans[0]['start']}, "
+                    f"before this authority was created in "
+                    f"{REORGANISED_AUTHORITIES[code]} — it speaks for a "
+                    "predecessor district, not the whole area, so no "
+                    "comparison is shown.")
+            else:
+                p = plans[0]
+                n_plan += 1
+                pct = 100.0 * p["annual"] / lhn
+                out.update({
+                    "plan_status": "compared",
+                    "plan_required": p["required"], "plan_years": p["years"],
+                    "plan_annual": int(round(p["annual"])),
+                    "plan_period": f"{p['start']}-{p['end']}",
+                    "plan_name": p["name"], "plan_adopted": p["adopted"],
+                    "plan_vs_lhn": round(pct, 1),
+                })
+                if pct <= 80:
+                    n_below += 1
+                    # Named for what it is — ONE limb of the Annex D 9(c)
+                    # test. The other limb (a requirement adopted in the last
+                    # five years, examined against a pre-December-2024
+                    # Framework) cannot be confirmed per authority from this
+                    # data, so this is not the 20% buffer itself.
+                    out["below80"] = True
+        return out
+
+    gdf = gpd.read_file(bpath)
+    code_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*cd", str(c).lower()):
+            code_col = c
+            break
+    code_col = code_col or _find_col(gdf, ["lad_code", "code", "areacd"],
+                                     contains=True)
+    name_col = None
+    for c in gdf.columns:
+        if re.fullmatch(r"lad\d*nm", str(c).lower()):
+            name_col = c
+            break
+    if code_col is None:
+        _warn(key, "no LAD code column on the boundary file")
+        _note(key, "no LAD code column")
+        return {}
+
+    rows = _emit(gdf, key, name_col=name_col, id_col=code_col, want="polygon",
+                 props_fn=hn_props)
+    print(f"  [{key}] stock {len(stock)} authorities ({stock_year}), "
+          f"ratios {len(ratio)}; {n_lhn} with a housing need figure, "
+          f"{n_plan} comparable against a single adopted plan requirement, "
+          f"{n_below} of those sit at or below 80% of need")
+    _note(key, f"{show}; {n_lhn} authorities with standard-method need", len(rows))
+    return {key: rows}
+
+
 def build_income():
     """Household earnings on LAD polygons — dataset lad_income.
 
@@ -3158,6 +3546,7 @@ GROUPS = (
         (["cil_rates"], build_cil_rates, []),
         (["lsoa_boundary"], build_lsoa_boundary, []),
         (["local_plan_housing"], build_local_plan_housing, []),
+        (["housing_need"], build_housing_need, []),
     ]
 )
 
