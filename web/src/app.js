@@ -7250,6 +7250,7 @@ async function renderDeepDiveViability() {
     locationFactor: (mc && mc.factor) || null,
     landValueHa: (mc && mc.landValueHa) || null,
     cilAreaPm2: (mc && mc.cilPm2 != null) ? mc.cilPm2 : null,
+    greenBeltShare: gbShareOf(r.green_belt_ha, r.developable_ha),
   }, SIFT.assumptions, { noSens: true });
   if (ap.profitOnCost == null) {
     el.innerHTML = `<p class="hint">No dwelling capacity to appraise yet.</p>`;
@@ -7271,6 +7272,7 @@ async function renderDeepDiveViability() {
       <div class="dd-pl-row"><span>peak debt</span><span>${money(ap.peakDebt)}</span></div>
       <div class="dd-pl-row"><span>sales value basis</span><span>${ap.local ? `local £${Math.round((deep.ppm2 || 0)).toLocaleString()}/m²` : "regional fallback"}</span></div>
       <div class="dd-pl-row"><span>build cost index</span><span>${mc && mc.factor ? mc.factor.toFixed(2) + "× (" + (mc.factorRegion || "local") + ")" : "1.00× (national)"}</span></div>
+      ${ap.audit && ap.audit.gbApplies ? `<div class="dd-pl-row" title="NPPF policy GB8: major housing development on Green Belt land owes ${Math.round(SIFT.assumptions.gbAffordableUpliftPp ?? 15)} percentage points above the affordable requirement that would otherwise apply, capped at ${Math.round(SIFT.assumptions.gbAffordableCapPct ?? 50)}%. Blended over the ${Math.round(ap.audit.gbShare * 100)}% of this catchment's developable land in the Green Belt."><span>affordable (GB8 uplift)</span><span>${ap.audit.affPct.toFixed(1)}% <span class="hint">from ${Math.round(ap.audit.affBasePct)}%</span></span></div>` : ""}
     </div>
     <p class="hint" style="margin-top:4px">Same engine and assumptions as the station sifter — tweak them below and both update.</p>`;
 }
@@ -7338,6 +7340,11 @@ function renderAssemblySummary(notice) {
     locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
     landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
     cilAreaPm2: (deep._marketCtx && deep._marketCtx.cilPm2 != null) ? deep._marketCtx.cilPm2 : null,
+    // Basket figure only: the CATCHMENT's Green Belt share stands in, because
+    // the selected plots have not been measured against the Green Belt yet.
+    // The report (which does run polygon_summary over the union) uses the
+    // site's own figure.
+    greenBeltShare: deepGbShare(),
   }, SIFT.assumptions, { noSens: true });
   const rows = plots.map(p => `
     <div class="dd-pl-row"><span>Plot ${p.properties.plot + 1} · ${(p.properties.area_ha || 0).toFixed(2)} ha</span>
@@ -8216,7 +8223,8 @@ function refreshViabPreview() {
   const r = computeAppraisal(
     { units: _viabCtx.units, ppm2: _viabCtx.ppm2, region: _viabCtx.region,
       areaHa: _viabCtx.areaHa, locationFactor: _viabCtx.locationFactor,
-      landValueHa: _viabCtx.landValueHa, cilAreaPm2: _viabCtx.cilAreaPm2 ?? null },
+      landValueHa: _viabCtx.landValueHa, cilAreaPm2: _viabCtx.cilAreaPm2 ?? null,
+      greenBeltShare: _viabCtx.greenBeltShare ?? 0 },
     SIFT.assumptions);
   host.innerHTML = viabPreviewHTML(r, _viabCtx.label);
 }
@@ -8299,7 +8307,7 @@ function openCalcAudit(ctx) {
   const r = computeAppraisal(
     { units: ctx.units, ppm2: ctx.ppm2, region: ctx.region, areaHa: ctx.areaHa,
       locationFactor: ctx.locationFactor, landValueHa: ctx.landValueHa,
-      cilAreaPm2: ctx.cilAreaPm2 ?? null },
+      cilAreaPm2: ctx.cilAreaPm2 ?? null, greenBeltShare: ctx.greenBeltShare ?? 0 },
     a, { noSens: true });
   if (!r || r.profitOnCost == null || !r.audit) {
     alert("No dwelling capacity to appraise yet — turn on the developable-land tool first.");
@@ -8365,7 +8373,17 @@ function calcAuditHTML(ctx, a, r) {
       ? `£${N(t.localPsf)}/ft² × ${N(a.salesAdjPct ?? 100, 0)}% sales adjustment`
       : `£${N(a.salesPsf, 0)}/ft² fallback × regional multiplier`,
       "£" + N(t.price) + "/ft²"),
-    row("affordable blend", `(1 − ${N(a.affordablePct || 0, 0)}%) + ${N(a.affordablePct || 0, 0)}% × ${N(a.affordableValue || 0, 0)}% of market value`,
+    // The Golden Rules earn their own line: a reader must be able to see WHY
+    // the affordable share is above the headline assumption, and how much of
+    // it is the Green Belt's doing.
+    t.gbApplies ? row("Green Belt uplift (GB8 Golden Rules)",
+      `${N(t.affBasePct, 0)}% base + ${N((a.gbAffordableUpliftPp ?? 15), 0)}pp on Green Belt land ` +
+      `(capped ${N(a.gbAffordableCapPct ?? 50, 0)}%${t.affBasePct > 0 ? "" : ", default where no local requirement"}) ` +
+      `= ${N(t.gbAffPct, 0)}%, blended over the ${N(t.gbShare * 100, 0)}% of this site in the Green Belt`,
+      N(t.affPct, 1) + "% affordable") : "",
+    t.gbShare > 0 && !t.gbApplies && a.gbGoldenRules !== false && !t.isMajor
+      ? row("Green Belt uplift", `not applied — under the major-development threshold (Annex B: 10+ homes or 0.5 ha)`, "—") : "",
+    row("affordable blend", `(1 − ${N(t.affPct, 1)}%) + ${N(t.affPct, 1)}% × ${N(a.affordableValue || 0, 0)}% of market value`,
       "×" + N(t.blend, 3)),
     row("sales inflation", `${N(a.salesInflationPct || 0, 1)}%/yr compounded to the sales midpoint (${N(t.midSaleYears, 1)} yrs)`,
       "×" + N(t.infl, 3)),
@@ -8387,7 +8405,10 @@ function calcAuditHTML(ctx, a, r) {
     row("contingency", `${N(a.contingencyPct || 0, 1)}% of hard cost`, M(t.contingency)),
   ]);
 
-  const marketUnits = t.units * (1 - (a.affordablePct || 0) / 100);
+  // Affordable units are CIL-exempt (social housing relief), so the exempt
+  // share follows the EFFECTIVE affordable percentage — including any Green
+  // Belt uplift — not the headline assumption.
+  const marketUnits = t.units * (1 - (t.affPct ?? (a.affordablePct || 0)) / 100);
   const policy = step("5 · Policy costs (CIL · S106 · BNG)", [
     row("CIL rate", t.cilSource === "override"
       ? `council's adopted rate (entered in Viability variables)`
@@ -8593,6 +8614,10 @@ async function _generateSiteReport() {
       locationFactor: mc.factor || null,
       landValueHa: mc.landValueHa || null,
       cilAreaPm2: mc.cilPm2 != null ? mc.cilPm2 : null,
+      // The union's OWN Green Belt coverage, measured by polygon_summary over
+      // the assembled boundary — not the catchment proxy the basket uses.
+      greenBeltShare: Math.min(1, (Number(
+        ((summary && summary.constraints) || []).find(c => c.kind === "green_belt")?.pct) || 0) / 100),
     }, SIFT.assumptions);
 
     const site = {
@@ -9859,6 +9884,7 @@ function buildDeepDivePanel(meta) {
       // authority publishes a schedule we have not read" are different
       // admissions, and the audit should make the difference visible.
       cilStatus: (deep._marketCtx && deep._marketCtx.cilStatus) || null,
+      greenBeltShare: deepGbShare(),
       onChange: () => { renderDeepDiveViability(); if (SIFT.loaded) scoreSiftRows(); },
     };
   };
@@ -11760,6 +11786,16 @@ const VIAB_SCHEMA = [
     tip: "Highways works, bus service support, travel plans, community facilities and monitoring — the residual heads of terms, highly scheme-specific.", source: "LPA precedent" },
   { key: "bngPerUnit", group: "policy", label: "BNG", unit: "£k/unit", step: 0.5, default: 2,
     tip: "10% biodiversity net gain — cheap where on-site delivery works, £20k+/unit where off-site units must be bought. Not value-scaled: habitat cost isn't value-linked.", source: "assumption" },
+  // GB8 Golden Rules. Kept as editable assumptions rather than constants
+  // because the "highest existing requirement which would otherwise apply" is
+  // a local-plan figure: an authority already at 40% lands at the 50% cap, and
+  // a user who knows the local requirement should be able to say so.
+  { key: "gbGoldenRules", group: "policy", label: "Apply GB8 Golden Rules", unit: "0 = off, 1 = on", step: 1, default: 1,
+    tip: "NPPF policy GB8: major housing development on land released from — or granted within — the Green Belt owes a higher affordable share. Applied to the Green Belt portion of a site only. Exemptions the model does NOT know about: plans adopted before 12 Dec 2024, permissions granted before that date, and traveller sites — switch this off for those.", source: "NPPF (Aug 2026) policy GB8" },
+  { key: "gbAffordableUpliftPp", group: "policy", label: "Golden Rules uplift", unit: "percentage points", step: 1, default: 15,
+    tip: "Added to the affordable requirement that would otherwise apply, on Green Belt land.", source: "NPPF (Aug 2026) policy GB8(1)(a)(ii)" },
+  { key: "gbAffordableCapPct", group: "policy", label: "Golden Rules cap", unit: "% units", step: 5, default: 50,
+    tip: "The GB8 ceiling, and also the default where no pre-existing affordable requirement applies.", source: "NPPF (Aug 2026) policy GB8(1)(a)(ii)" },
   { key: "policyLocalisePct", group: "policy", label: "Localise CIL within region", unit: "%", step: 10, default: 100,
     tip: "Charging schedules zone by value WITHIN an authority too. At 100% the regional CIL band scales with the scheme's £/ft² vs its regional average (clamped ×0.6-1.8); at 0% the flat band applies. Ignored when an adopted rate is entered above. S106 items scale by the regional build-cost index instead (they are cost-side), and BNG is never scaled.", source: "model (value-linked within region)" },
   // Targets
@@ -11782,7 +11818,7 @@ const VIABILITY_DEFAULTS = Object.fromEntries(
 // v3: CIL went statutory-style (£/m² floor-area on regional bands, affordable
 // exempt) and S106 became itemised heads of terms — the old flat cilPerUnit /
 // s106PerUnit cannot be translated, so v2 saves reset to defaults (crit kept).
-VIABILITY_DEFAULTS._v = 3;
+VIABILITY_DEFAULTS._v = 4;   // 4: GB8 Golden Rules added to the policy group
 
 const SIFT = {
   loaded: false,
@@ -11857,6 +11893,21 @@ const STRATEGIC_MIN_UNITS = 1500;
 const FT2_PER_M2 = 10.7639;
 const M2_PER_FT2 = 1 / FT2_PER_M2;
 
+// Green Belt share of a scheme's developable land, 0-1 — the multiplier the
+// GB8 Golden Rules are blended over. One helper so the deep dive, the
+// assembler and the sift cannot answer the question differently.
+function gbShareOf(greenBeltHa, developableHa) {
+  const gb = Number(greenBeltHa) || 0, dev = Number(developableHa) || 0;
+  if (gb <= 0 || dev <= 0) return 0;
+  return Math.min(1, gb / dev);
+}
+
+// The current deep dive's catchment Green Belt share.
+function deepGbShare() {
+  const r = deep && deep.developableResult;
+  return r ? gbShareOf(r.green_belt_ha, r.developable_ha) : 0;
+}
+
 function computeAppraisal(inputs, a, opts) {
   a = a || SIFT.assumptions;
   opts = opts || {};
@@ -11874,7 +11925,36 @@ function computeAppraisal(inputs, a, opts) {
   const price = localPsf != null
     ? localPsf * ((a.salesAdjPct || 100) / 100)
     : (a.salesPsf || 350) * regionPriceMult(inputs.region);
-  const affFrac = (a.affordablePct || 0) / 100;
+  // --- GB8 Golden Rules -----------------------------------------------------
+  // NPPF (Aug 2026) policy GB8: major development involving housing, on land
+  // released from the Green Belt or granted within it, owes affordable housing
+  // "15 percentage points above the highest existing affordable housing
+  // requirement which would otherwise apply ... subject to a cap of 50%. In
+  // the absence of a pre-existing requirement ... a 50% affordable housing
+  // contribution should apply by default."
+  //
+  // Only the Green Belt PART of a scheme owes it, so the rate is blended by
+  // the Green Belt share of the developable land rather than applied whole: a
+  // catchment 30% in the Green Belt lands near 29.5%, not a blanket 40%. A
+  // blanket rate would overstate cost as badly as ignoring the rule
+  // understates it.
+  //
+  // Gated on major development (Annex B: 10+ homes, or 0.5 ha or more) because
+  // GB8 does not reach a minor scheme. Green Belt hectares that have been
+  // excluded upstream (the sift's "exclude Green Belt" toggle) arrive here as
+  // a zero share, which is correct — that scheme has no Green Belt in it.
+  const affBasePct = a.affordablePct || 0;
+  const gbShare = a.gbGoldenRules === false ? 0
+    : Math.min(1, Math.max(0, Number(inputs.greenBeltShare) || 0));
+  const isMajor = units >= 10 || (Number(inputs.areaHa) || 0) >= 0.5;
+  const gbAffPct = affBasePct > 0
+    ? Math.min(a.gbAffordableCapPct ?? 50, affBasePct + (a.gbAffordableUpliftPp ?? 15))
+    : (a.gbAffordableCapPct ?? 50);
+  const gbApplies = gbShare > 0 && isMajor && gbAffPct > affBasePct;
+  const affPct = gbApplies
+    ? affBasePct + (gbAffPct - affBasePct) * gbShare
+    : affBasePct;
+  const affFrac = affPct / 100;
   const blend = (1 - affFrac) + affFrac * ((a.affordableValue || 0) / 100);
   // Sales inflation to the MIDPOINT of the sales period — even absorption
   // means half the revenue lands either side of it.
@@ -12068,6 +12148,7 @@ function computeAppraisal(inputs, a, opts) {
     audit: {
       units, unitFt2, unitM2, localPsf, price, blend, midSaleYears, infl,
       flatFrac, pm2, locFactor,
+      affBasePct, affPct, gbShare, gbAffPct, gbApplies, isMajor,
       buildBase, abnormals, prepInfra, hardCost, fees, contingency,
       refPsf, valueRatio, policyCosts, salesCosts,
       cil, cilRate, cilScale, inRegionRatio, s106, s106PerUnitK, bng,
@@ -12105,6 +12186,11 @@ function computeViability(row) {
       areaHa: row.effHa ?? row.developableHa ?? null,
       landValueHa: row.landValueHa ?? null,
       cilAreaPm2: row.cilPm2 ?? null,
+      // Excluding Green Belt land removes it from the scheme, so the Golden
+      // Rules correctly stop applying — the two controls agree by
+      // construction rather than by coincidence.
+      greenBeltShare: SIFT.crit.excludeGreenBelt
+        ? 0 : gbShareOf(row.greenBeltHa, row.developableHa),
       // Localise BUILD costs too, not just sales: the regional index from the
       // build-cost proxy, so a Yorkshire scheme isn't costed at London rates.
       locationFactor: regionCostFactor(row.region) },
@@ -12601,6 +12687,8 @@ function renderSiftStep() {
       areaHa: top.effHa ?? top.developableHa ?? null,
       landValueHa: top.landValueHa ?? null,
       cilAreaPm2: top.cilPm2 ?? null,
+      greenBeltShare: SIFT.crit.excludeGreenBelt
+        ? 0 : gbShareOf(top.greenBeltHa, top.developableHa),
       locationFactor: regionCostFactor(top.region),   // preview = sift arithmetic
       onChange: () => { scoreSiftRows(); updateSiftFunnel(); },
     } : null);
