@@ -1114,6 +1114,10 @@ const MAP_OVERLAYS = [
   // excluded from every hectare total (see migration 0040).
   { key: "public_parcel",         group: "land", label: "Public land parcels (CCOD x INSPIRE)", color: "#4c6ef5", dataset: "public_parcel", minZoom: 11, lim: 6000,
     provisional: ["==", ["to-boolean", ["get", "area_mismatch"]], true] },
+  // Schools are the denominator of the education contribution the appraisal
+  // already charges for, and the HO4(1)(b) access-to-services test.
+  { key: "school", group: "land", label: "Schools & colleges", color: "#f59f00", dataset: "school", render: "point", minZoom: 11, lim: 6000,
+    radius: ["interpolate", ["linear"], ["zoom"], 11, 2.5, 14, 4.5, 17, 7] },
   { key: "la_property",           group: "land", label: "Public-authority property (CCOD)", color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000, icon: "town",
     cap: { color: ["match", ["to-string", ["get", "owner_class"]],
            "local_authority", "#c92a2a", "parish", "#f08c00",
@@ -1144,6 +1148,28 @@ const MAP_OVERLAYS = [
   { key: "design_code_area",    group: "policy", label: "Design code areas",             color: "#e8590c", dataset: "design_code_area",    minZoom: 8 },
   // NPPF approval-likelihood signal: red authorities are in presumption-in-
   // favour territory — the tilted balance applies to their decisions.
+  // ---- NPPF constraint layers (roadmap phase 3) ---------------------------
+  // Delivery blockers: things that stop or stall a scheme rather than shade it.
+  // Nutrient neutrality first — inside one of these catchments a scheme needs
+  // mitigation before permission, and schemes have waited years for it.
+  { key: "nutrient_neutrality", group: "environment", label: "Nutrient neutrality catchments", color: "#0b7285", dataset: "nutrient_neutrality", minZoom: 5 },
+  { key: "aqma",                group: "environment", label: "Air quality management areas", color: "#845ef7", dataset: "aqma", minZoom: 7 },
+  { key: "local_nature_reserve", group: "environment", label: "Local nature reserves", color: "#2f9e44", dataset: "local_nature_reserve", minZoom: 9 },
+  { key: "nature_improvement_area", group: "environment", label: "Nature improvement areas", color: "#37b24d", dataset: "nature_improvement_area", minZoom: 6 },
+  // Distinct from the flood ZONES: policy S4(2)(b) names land used for water
+  // storage or flood management as land whose loss substantially outweighs
+  // benefits — a different test from being at risk yourself.
+  { key: "flood_storage",       group: "flood", label: "Flood storage areas", color: "#1c7ed6", dataset: "flood_storage", minZoom: 9 },
+  // Heritage: HE7 judges non-designated assets on a balanced judgement rather
+  // than the designated-asset test, so locally listed buildings are a
+  // different question from the listed ones we already draw.
+  { key: "archaeological_priority", group: "heritage", label: "Archaeological priority areas", color: "#a5744b", dataset: "archaeological_priority", minZoom: 9 },
+  { key: "heritage_at_risk",    group: "heritage", label: "Heritage at risk", color: "#e8590c", dataset: "heritage_at_risk", minZoom: 10 },
+  { key: "locally_listed",      group: "heritage", label: "Locally listed buildings", color: "#c2255c", dataset: "locally_listed", minZoom: 12 },
+  { key: "battlefield",         group: "heritage", label: "Registered battlefields", color: "#862e9c", dataset: "battlefield", minZoom: 8 },
+  // Context that changes how a site reads rather than constraining it.
+  { key: "development_corporation", group: "policy", label: "Development corporation areas", color: "#0c8599", dataset: "development_corporation", minZoom: 6 },
+  { key: "central_activities_zone", group: "policy", label: "Central Activities Zone (London)", color: "#f76707", dataset: "central_activities_zone", minZoom: 8 },
   { key: "hdt",                 group: "policy", label: "Housing Delivery Test",         color: "#e03131", dataset: "hdt", minZoom: 5 },
   // Decision culture: share of applications approved over 3 years (PlanIt).
   { key: "planit_rates",        group: "policy", label: "Approval rates (PlanIt)",       color: "#0b7285", dataset: "planit_rates", minZoom: 5 },
@@ -1488,7 +1514,19 @@ const LAYER_INFO = {
   la_property:         { about: "Property titles owned by public bodies — councils, parishes, combined authorities, NHS, universities, police/fire and central government — aggregated to postcode points with a title count, coloured by owner type. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — green available, amber restricted, red not available. A proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
   ppd_sales:           { about: "Every registered property sale in the last 12 months as a dot, colour-ramped from amber (~£100k) to deep red (£1.5m+). Street-level price truth beneath the LSOA averages. Positions are postcode-centroid based. Zoom right in — it's dense.", source: "HM Land Registry Price Paid Data © Crown copyright (PPD licence); OS Code-Point Open" },
-  hdt:                 { about: "The Housing Delivery Test: each authority's housing delivery vs target. Red (<75%) triggers the NPPF presumption in favour of sustainable development — the strongest single approval signal; orange = 20% buffer; amber = action plan; green = passing.", source: "MHCLG Housing Delivery Test measurement (OGL v3)" },
+  nutrient_neutrality: { about: "Catchments where development must be nutrient-neutral before permission can be granted, because the water draining from them reaches a habitats site already in unfavourable condition. This is the single biggest stalling mechanism in English housing: inside one of these, a scheme needs mitigation secured before consent, and schemes have waited years for it. A site that is otherwise perfect and a site inside a catchment are not the same proposition. 39 catchments, named for the habitats site each drains to. NPPF policy N6 also now offers a second route — an Environmental Delivery Plan with the nature restoration levy paid — but no national register of those exists yet.", source: "MHCLG planning.data.gov.uk / Natural England (OGL v3)" },
+  aqma:                { about: "Air Quality Management Areas — places a council has formally declared because air quality objectives are not being met. Development inside one normally needs an air quality assessment and often mitigation, and AQMAs cluster along exactly the corridors where station-adjacent development is most attractive. NPPF policy P3 weighs the effects of pollution on health and living conditions, including cumulative effects and effects off-site.", source: "MHCLG planning.data.gov.uk / DEFRA (OGL v3)" },
+  flood_storage:       { about: "Land that stores flood water or is used for flood risk management — a different thing from the flood zones we draw elsewhere. Those show land AT RISK; this shows land doing a job. Policy S4(2)(b) names the whole or partial loss of undeveloped land used for water storage or flood management as one of the circumstances where the benefits of development are likely to be substantially outweighed, unless compensatory provision is made that does not increase flood risk on or off site.", source: "Environment Agency via MHCLG planning.data.gov.uk (OGL v3)" },
+  archaeological_priority: { about: "Areas where the local authority has identified a heightened likelihood of archaeological remains. Not a designation that blocks development, but a strong indicator that evaluation — desk-based assessment, then usually trial trenching — will be a condition of any consent, with the programme and cost that implies.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  heritage_at_risk:    { about: "Assets on the Heritage at Risk register. This layer reads both ways and should be used as such: an asset at risk is a constraint on what can be done around it, and simultaneously the strongest available basis for an enabling-development argument — development that would not otherwise be acceptable, justified by securing the asset's future. Coverage follows what authorities have published to the platform.", source: "Historic England / MHCLG planning.data.gov.uk (OGL v3)" },
+  locally_listed:      { about: "Buildings on a local list — non-designated heritage assets. Worth showing separately from listed buildings because policy HE7 applies a different test: the effect on a non-designated asset is weighed in a balanced judgement having regard to its significance, rather than the stronger protection designated assets get. Today they are typically invisible until someone objects. Coverage is partial — only authorities that have published their local list.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  battlefield:         { about: "Registered historic battlefields. Rare, but absolute enough to matter when one is present.", source: "Historic England / MHCLG planning.data.gov.uk (OGL v3)" },
+  local_nature_reserve: { about: "Local Nature Reserves — declared by local authorities, distinct from the national and international designations (SSSI, SAC, SPA, Ramsar) drawn elsewhere in this group. Feeds the policy N2(1)(c) test of connecting to and strengthening ecological networks beyond the site.", source: "Natural England / MHCLG planning.data.gov.uk (OGL v3)" },
+  nature_improvement_area: { about: "Nature Improvement Areas — landscape-scale zones targeted for habitat restoration and connection. Relevant to policy N2(1)(c), and to policy HO4(1)(c) which requires strategic-site locations to address strategic environmental opportunities.", source: "Natural England / MHCLG planning.data.gov.uk (OGL v3)" },
+  school:              { about: "Schools and colleges. Two uses: they are the denominator of the education contribution the viability appraisal already charges for — pupil yield has to land somewhere with capacity — and they are the substance of the policy HO4(1)(b) test that a strategic-site location can support a sustainable community with sufficient access to services. Point locations only; capacity and catchment are not in the published record.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  development_corporation: { about: "Development corporation areas — a different consenting regime, often with its own affordable-housing requirement and its own plan. Worth knowing before assuming the district council decides.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
+  central_activities_zone: { about: "The Central Activities Zone: London's commercial core, where London Plan policy overrides normal borough expectations on mix, density and affordable housing.", source: "GLA / MHCLG planning.data.gov.uk (OGL v3)" },
+  hdt:                 { about: "The Housing Delivery Test: net homes delivered against the requirement over the previous three years. NPPF (Aug 2026) Annex D ¶12 attaches three cumulative consequences. Below 95% (amber) the authority must prepare an action plan. Below 85% (orange) a 20% buffer is added to its deliverable land supply on top of that. Below 75% (red) an evidenced unmet need for housing is DEEMED to exist for the purpose of policy S5(1)(j) — which is the route to approval OUTSIDE a settlement boundary, and the single strongest positional argument an applicant can have. Green is passing. Results supersede on the day the next annual measurement publishes.", source: "MHCLG Housing Delivery Test measurement (OGL v3); consequences per NPPF Aug 2026 Annex D ¶11-13" },
   land_value:          { about: "The value per hectare of a typical residential site in each English authority, from the government's official policy-appraisal estimates — pale blue ~£0.5M/ha rural, deep violet £10M+, grape £50M+ central London. This is the published benchmark the viability engine's land line uses. Estimates for appraisal, not valuations of specific sites.", source: "MHCLG/VOA land value estimates for policy appraisal 2023 (OGL v3)" },
 };
 
@@ -3784,13 +3822,64 @@ function hoverContentForOverlay(def, p) {
   } else if (d === "ptal") {
     title = `PTAL ${p.ptal ?? ""}`.trim();
     kind = "Public transport access";
+  } else if (d === "nutrient_neutrality") {
+    title = p.name || "Nutrient neutrality catchment";
+    kind = "Nutrient neutrality — mitigation required before permission";
+    rows = [row(p.name || null, "drains to"),
+            row("development must be nutrient-neutral, or provide mitigation", "effect"),
+            row(p.notes || null, "note"),
+            row("NPPF N6 · habitats site protection", "policy")];
+  } else if (d === "aqma") {
+    title = p.name || "Air quality management area";
+    kind = "Declared AQMA — assessment and mitigation likely";
+    rows = [row(p.name || null, "AQMA"),
+            row(p.documentation_url ? "DEFRA record published" : null, "source"),
+            row(p.notes || null, "authority"),
+            row("NPPF P3 · living conditions and pollution", "policy")];
+  } else if (d === "heritage_at_risk") {
+    title = p.name || "Heritage at risk";
+    // Genuinely two-sided, and worth saying so: a risk entry is a constraint,
+    // and also the strongest available argument for enabling development.
+    kind = "On the Heritage at Risk register";
+    rows = [row(p.notes || null, "detail"),
+            row("a constraint — and the basis of an enabling-development case", "reads both ways"),
+            row("NPPF HE-series", "policy")];
+  } else if (d === "locally_listed") {
+    title = p.name || "Locally listed building";
+    kind = "Non-designated heritage asset";
+    rows = [row("judged on a balanced judgement, not the designated-asset test", "how it is weighed"),
+            row("NPPF HE7", "policy")];
+  } else if (d === "flood_storage") {
+    title = p.name || "Flood storage area";
+    kind = "Land used for flood storage or management";
+    rows = [row("losing it is a named way benefits are 'substantially outweighed'", "effect"),
+            row("NPPF S4(2)(b), F2", "policy"),
+            row("distinct from the flood zones — this is land doing a job, not land at risk", "note")];
+  } else if (d === "school") {
+    title = p.name || "School or college";
+    kind = "Educational establishment";
+    rows = [row(p.notes || null, "detail"),
+            row("feeds the education contribution and the HO4(1)(b) services test", "why it is here")];
   } else if (d === "hdt") {
     title = p.name || "Authority";
     kind = "Housing Delivery Test";
     const hp = Number(p.hdt_pct);
-    const band = hp < 75 ? "presumption in favour applies" : hp < 85 ? "20% buffer" : hp < 95 ? "action plan" : "passing";
-    rows = [row(p.hdt_pct != null ? `${p.hdt_pct}%` : null, "delivery vs target"),
-            row(p.consequence || band, "consequence")];
+    // Annex D paras 11-13. The three bands are cumulative, and the bottom one
+    // is not just a stronger colour: below 75% an unmet need for housing is
+    // DEEMED to exist for policy S5(1)(j), which is the route to approval
+    // OUTSIDE a settlement. That is a different kind of fact from a buffer,
+    // and it was previously buried as one word in a colour band.
+    const band = hp < 75 ? "unmet need deemed to exist" : hp < 85 ? "20% buffer + action plan"
+               : hp < 95 ? "action plan" : "passing";
+    rows = [row(p.hdt_pct != null ? `${p.hdt_pct}%` : null, "delivery over 3 years"),
+            row(p.consequence || band, "consequence"),
+            row(hp < 75
+                ? "unlocks policy S5(1)(j) — the route to approval OUTSIDE settlements"
+                : null, "NPPF Annex D ¶12(c)"),
+            row(hp < 85 ? "20% buffer added to the deliverable supply" : null,
+                "Annex D ¶12(b)"),
+            row(hp < 95 ? "authority must prepare an action plan" : null,
+                "Annex D ¶12(a)")];
   } else if (d === "lsoa_prices" || d === "lad_prices") {
     // Choropleth popup: the comparables actually inside this boundary.
     const lsoa = d === "lsoa_prices";
@@ -7518,6 +7607,64 @@ function capacityBasisLabel(regime) {
   return one ? `${one} dph` : regime;
 }
 
+// NPPF (August 2026) Annex C — the information an application must supply,
+// tabulated by policy. Our further-work list used to be one WE invented; this
+// is the Framework's own, cited, and switched on by what the site analysis
+// actually found rather than listed wholesale. An item nobody needs is as
+// unhelpful as a missing one.
+function annexCHTML(site, summary, areas, cons) {
+  const pct = k => Number((cons && cons[k]) || 0);
+  const units = Number(site && site.units) || 0;
+  const ha = Number(site && site.totHa) || 0;
+  const cls = siteSizeClass(units, ha);
+  const major = cls && cls.key !== "minor";
+  const items = [
+    // Always: every proposal needs one.
+    ["DM1", "Planning statement",
+     "How the proposal accords with the development plan and national policy, the outcome of pre-application engagement, and the planning obligations offered.", true],
+    ["DM5", "Viability assessment",
+     "Only where a policy-compliant scheme cannot proceed — DM5(1) presumes a compliant proposal IS viable, and DM5(3) rules out the price paid for land as a justification.",
+     true, "conditional"],
+    ["TR6", "Transport statement or assessment",
+     "Which of the two depends on the extent and significance of the transport issues; a major residential scheme will normally need the fuller assessment.", major],
+    ["TR6", "Travel plan",
+     "How sustainable transport objectives will be delivered, monitored and managed over time.", major],
+    ["P2", "Site investigation by a competent person",
+     "Ground conditions, land instability and contamination. Policy P2 puts responsibility for securing a safe development on the developer and landowner.", true],
+    ["F4", "Site-specific flood risk assessment",
+     "Proportionate to the scale, nature and location of the development.",
+     pct("flood_zone_3") > 0 || pct("flood_zone_2") > 0 || ha >= 1],
+    ["F8", "SuDS statement",
+     "How the national sustainable drainage standards have been met, for any proposal that could affect drainage on or around the site.", true],
+    ["HE5", "Heritage impact assessment",
+     "The significance of the assets affected including the contribution of their setting, and the effect of the proposal on that significance.",
+     pct("conservation_area") > 0 || pct("listed_building") > 0
+       || pct("scheduled_monument") > 0 || !!(areas && areas.article4)],
+    ["N4", "Protected-landscape assessment",
+     "An assessment of the effect of major development proposals.",
+     major && pct("aonb") > 0],
+    ["N2", "Natural-environment information",
+     "Habitats, landscape character, agricultural land quality and the ecological-network opportunities in N2(1)(c) — including biodiversity net gain where it applies.", true],
+    ["F9", "Coastal change vulnerability assessment",
+     "Only where the site falls in a Coastal Change Management Area.", false, "conditional"],
+    ["HC7", "Open space, sports and recreation assessment",
+     "Demonstrating that the land or facilities are surplus to requirements.",
+     pct("green_space") > 0],
+    ["TC4", "Town centre impact assessment",
+     "For main town centre uses outside a centre and not in accordance with the plan.", false, "conditional"],
+  ];
+  const rows = items.map(([pol, name, why, on, kind]) => {
+    if (!on && kind !== "conditional") return "";
+    const state = on ? "required" : "if applicable";
+    return `<tr><td class="ac-pol">${esc(pol)}</td><td><strong>${esc(name)}</strong>` +
+      `<div class="ac-why">${esc(why)}</div></td>` +
+      `<td class="ac-state ac-${on ? "req" : "cond"}">${state}</td></tr>`;
+  }).filter(Boolean).join("");
+  return `<div class="tw"><table class="r-annexc"><tr>` +
+    `<th>Policy</th><th>Information requirement</th><th>On this site</th></tr>` +
+    rows + `</table></div>`;
+}
+
 // Why the shortlist and this dive can still show different capacities for the
 // same station, said out loud rather than left as two numbers that disagree.
 // Density is now shared (homesFor answers to the sift's single-density
@@ -8655,7 +8802,11 @@ function calcAuditHTML(ctx, a, r) {
       N(t.affPct, 1) + "% affordable") : "",
     t.gbShare > 0 && !t.gbApplies && a.gbGoldenRules !== false && !t.isMajor
       ? row("Green Belt uplift", `not applied — under the major-development threshold (Annex B: 10+ homes or 0.5 ha)`, "—") : "",
-    row("affordable blend", `(1 − ${N(t.affPct, 1)}%) + ${N(t.affPct, 1)}% × ${N(a.affordableValue || 0, 0)}% of market value`,
+    row("affordable tenure value", `${N((1 - t.intFrac) * 100, 0)}% rented at ${N(a.affordableValue || 0, 0)}% of market + ` +
+      `${N(t.intFrac * 100, 0)}% intermediate at ${N(a.affordableValueInt ?? (a.affordableValue || 0), 0)}% ` +
+      `(NPPF Annex B floors discounted market sale at 20% below market)`,
+      N(t.affValPct, 1) + "% of market"),
+    row("affordable blend", `(1 − ${N(t.affPct, 1)}%) + ${N(t.affPct, 1)}% × ${N(t.affValPct, 1)}% of market value`,
       "×" + N(t.blend, 3)),
     row("sales inflation", `${N(a.salesInflationPct || 0, 1)}%/yr compounded to the sales midpoint (${N(t.midSaleYears, 1)} yrs)`,
       "×" + N(t.infl, 3)),
@@ -8921,6 +9072,19 @@ async function _generateSiteReport() {
 // Extends REPORT_CSS — never forks it. Everything site-report-specific is
 // namespaced sr-/rc-.
 const SITE_REPORT_CSS = `
+/* Annex C: the Framework's own information requirements, keyed by policy.
+   The policy code is the anchor a planner reads first, so it leads. */
+.r-annexc { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 4px; }
+.r-annexc th { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid #999;
+               font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #555; }
+.r-annexc td { padding: 6px 8px 6px 0; border-bottom: 1px solid #e2e2e2; vertical-align: top; }
+.r-annexc .ac-pol { font-family: ui-monospace, monospace; white-space: nowrap; color: #333; }
+.r-annexc .ac-why { color: #555; margin-top: 2px; }
+.r-annexc .ac-state { white-space: nowrap; font-size: 10px; text-transform: uppercase;
+                      letter-spacing: .05em; }
+.r-annexc .ac-req { color: #8a2f1f; font-weight: 600; }
+.r-annexc .ac-cond { color: #777; }
+
   .sr-map { width: 100%; border-radius: 8px; border: 1px solid #d8d4c8; margin: 10px 0 14px; }
   .sr-sec { page-break-inside: avoid; margin: 18px 0; }
   .sr-sec h3 { font-family: Georgia, serif; font-size: 15px; border-bottom: 1px solid #d8d4c8; padding-bottom: 4px; margin-bottom: 8px; }
@@ -9061,6 +9225,9 @@ function buildSiteReportHTML(site) {
   <section class="sr-sec"><h3>1 · Site fundamentals</h3>
     ${row("Gross site area", site.totHa.toFixed(2) + " ha (" + (site.totHa * 2.471).toFixed(1) + " ac)", "data", "developable-land analysis, constraint-stripped")}
     ${row("Parcels assembled", site.plots.length + " contiguous plot(s)", "data")}
+    ${(() => { const c = siteSizeClass(site.units, site.totHa);
+        return c ? row("Development class", esc(c.label) + " — " + esc(c.note), "data",
+                       "NPPF (Aug 2026) Annex B") : ""; })()}
     ${row("Inner-ring share", site.totInner > 0 ? site.totInner.toFixed(2) + " ha within " + ((deep.developable && deep.developable.inner_radius_m) || 200) + " m of station" : null, "model")}
     ${row("Mean slope", slopeAvg != null ? slopeAvg.toFixed(1) + "°" : null, "model", "OS Terrain 50-derived 1 km grid")}
     ${row("Steepest 50 m", slopeMax != null ? slopeMax.toFixed(1) + "°" : null, "model")}
@@ -9076,6 +9243,13 @@ function buildSiteReportHTML(site) {
     ${row("Green Belt coverage", S.grey_belt_pct != null || cons.green_belt != null ? pct(cons.green_belt ?? 0) + " of site" : null, "data")}
     ${row("Grey-belt candidate", S.grey_belt_pct != null ? pct(S.grey_belt_pct) + " of site" : null, "model", "MasterMapper grey-belt model, not a designation")}
     ${row("Housing Delivery Test", areas.hdt ? esc(String(areas.hdt.hdt_pct ?? "")) + "% (" + esc(areas.hdt.consequence || "n/a") + ")" : null, "data", "MHCLG HDT measurement")}
+    ${row("HDT consequence", areas.hdt && Number(areas.hdt.hdt_pct) < 75
+        ? "Below 75% — unmet housing need is deemed to exist, unlocking policy S5(1)(j) for development outside settlements"
+        : areas.hdt && Number(areas.hdt.hdt_pct) < 85
+        ? "Below 85% — 20% buffer added to the authority's deliverable land supply, plus an action plan"
+        : areas.hdt && Number(areas.hdt.hdt_pct) < 95
+        ? "Below 95% — the authority must prepare an action plan" : null,
+        "data", "NPPF Aug 2026 Annex D ¶12")}
     ${row("Approval rate (planning apps)", areas.planit_rates ? esc(String(areas.planit_rates.approval_pct ?? "")) + "% locally" : null, "model", "PlanIt applications sample")}
     ${row("NPPF station tier", site.station && site.station.tier ? esc(site.station.tier) : null, "model", "MasterMapper station assessment")}
     ${deskLine(["Allocation status & emerging plan position", "Five-year housing land supply", "Planning history on site & adjoining", "Pre-app position, committee vs delegated", "Neighbourhood Plan policies"].map(x => { deskItems.push(x); return x; }))}
@@ -9167,6 +9341,10 @@ function buildSiteReportHTML(site) {
   <section class="sr-sec pb"><h3>12 · Risks & further work</h3>
     <p style="font-size:12px">The following were flagged ${confBadge("desk")} above — they require desktop study, survey or legal enquiry and are NOT covered by open data. This list is generated from the flags, so it is complete by construction:</p>
     ${deskLine([...new Set(deskItems)])}
+
+    <h4 style="margin:16px 0 6px;font-size:13px">Information an application will have to supply</h4>
+    <p style="font-size:12px">Not our list — Annex C of the Framework tabulates what a proposal must submit, by policy. Items below are switched on by what was actually found on this site; the rest of Annex C is omitted because it does not apply here.</p>
+    ${annexCHTML(site, summary, areas, cons)}
     <p class="sr-note" style="margin-top:12px">Data: HM Land Registry Price Paid & CCOD & INSPIRE (© Crown copyright and database right); EPC register; planning.data.gov.uk; Environment Agency; Natural England; Historic England; ONS; NESO; TfL; OpenStreetMap contributors (ODbL). Contains OS data © Crown copyright. Generated by MasterMapper on ${dateStr}. Indicative appraisal — not a Red Book valuation.</p>
   </section>`;
 
@@ -12026,8 +12204,18 @@ const VIAB_SCHEMA = [
     tip: "Used (× regional multiplier) only where no local price is loaded.", source: "assumption" },
   { key: "affordablePct", group: "revenue", label: "Affordable housing", unit: "% units", step: 5, default: 25,
     tip: "Policy-compliant share — check the LPA's adopted policy; London boroughs commonly 35–50%.", source: "LPA policy" },
-  { key: "affordableValue", group: "revenue", label: "Affordable value", unit: "% of market", step: 5, default: 55,
-    tip: "RP offer as a share of market value, blended across tenures (social rent ~40–50%, shared ownership ~65–75%).", source: "assumption" },
+  // Two rates, not one. NPPF Annex B puts a floor under the intermediate
+  // tenures — discounted market sale is "sold at a discount of at least 20%
+  // below local market value", and the same floor governs other low-cost home
+  // ownership — so ~80% of market, nowhere near the ~55% a rented unit fetches
+  // from a registered provider. A single blended 55% understated GDV wherever
+  // the mix contained shared ownership or DMS.
+  { key: "affordableValue", group: "revenue", label: "Affordable value · rented", unit: "% of market", step: 5, default: 50,
+    tip: "What a registered provider pays for the RENTED affordable homes, as a share of market value. Social rent ~40–50%, affordable rent ~50–60%.", source: "assumption" },
+  { key: "affordableValueInt", group: "revenue", label: "Affordable value · intermediate", unit: "% of market", step: 5, default: 80,
+    tip: "Shared ownership, discounted market sale and other low-cost home ownership. NPPF Annex B sets the floor: discounted market sale is sold at AT LEAST 20% below local market value, so 80% is the ceiling this can realistically take, not a midpoint.", source: "NPPF (Aug 2026) Annex B" },
+  { key: "affordableIntPct", group: "revenue", label: "Affordable mix · intermediate", unit: "% of affordable", step: 5, default: 30,
+    tip: "Share of the affordable homes that are intermediate tenures rather than rented. The rest are valued at the rented rate. Policy HO5(1)(a)(i) makes the tenure split a plan matter, including a minimum Social Rent proportion — check the local requirement.", source: "LPA policy" },
   { key: "salesInflationPct", group: "revenue", label: "Sales inflation", unit: "%/yr", step: 0.5, default: 0,
     tip: "House price growth assumed across the sales period. Leave 0 for today's-prices appraisal (the defensible default).", source: "assumption" },
   // Finance
@@ -12093,7 +12281,7 @@ const VIABILITY_DEFAULTS = Object.fromEntries(
 // v3: CIL went statutory-style (£/m² floor-area on regional bands, affordable
 // exempt) and S106 became itemised heads of terms — the old flat cilPerUnit /
 // s106PerUnit cannot be translated, so v2 saves reset to defaults (crit kept).
-VIABILITY_DEFAULTS._v = 4;   // 4: GB8 Golden Rules added to the policy group
+VIABILITY_DEFAULTS._v = 5;   // 5: affordable value split by tenure (Annex B)
 
 const SIFT = {
   loaded: false,
@@ -12160,6 +12348,35 @@ function toggleShortlist(crs) {
 // computed before the fee (the circularity is a rounding error at 1%); IRR is
 // on the equity cashflow, annualised from the monthly rate.
 // ---------------------------------------------------------------------------
+// NPPF (August 2026) Annex B, development classes. "Major development" for
+// housing is "where 10 or more homes will be provided, or the site has an area
+// of 0.5 hectares or more"; "medium-sized" is a subset of major — "10-49 homes
+// (inclusive) ... and the site has an area of up to 2.5 hectares".
+//
+// This is not a label. Major is the threshold the GB8 Golden Rules attach to,
+// that affordable-housing requirements attach to, and that most of the
+// contributions regime attaches to. A nine-home scheme on 0.4 ha is a
+// different policy animal, and an appraisal that loads major-development costs
+// onto it is wrong in the expensive direction.
+const MAJOR_MIN_UNITS = 10, MAJOR_MIN_HA = 0.5;
+const MEDIUM_MAX_UNITS = 49, MEDIUM_MAX_HA = 2.5;
+
+function siteSizeClass(units, areaHa) {
+  const u = Number(units) || 0, ha = Number(areaHa) || 0;
+  if (u <= 0 && ha <= 0) return null;
+  const major = u >= MAJOR_MIN_UNITS || ha >= MAJOR_MIN_HA;
+  if (!major) return { key: "minor", label: "Minor development",
+    note: `under ${MAJOR_MIN_UNITS} homes and under ${MAJOR_MIN_HA} ha — the Golden Rules, ` +
+          `affordable-housing requirements and most contributions do not reach it` };
+  const medium = u >= MAJOR_MIN_UNITS && u <= MEDIUM_MAX_UNITS && ha <= MEDIUM_MAX_HA;
+  if (medium) return { key: "medium", label: "Medium-sized development",
+    note: `${MAJOR_MIN_UNITS}-${MEDIUM_MAX_UNITS} homes on up to ${MEDIUM_MAX_HA} ha — a subset of major; ` +
+          `policy DM2(2) expects information requirements to be scaled down for this class` };
+  return { key: "major", label: "Major development",
+    note: `${u >= MAJOR_MIN_UNITS ? `${u.toLocaleString()} homes` : `${ha.toFixed(2)} ha`} — ` +
+          `the Golden Rules (GB8), affordable-housing requirements and the contributions regime all apply` };
+}
+
 // NPPF (August 2026), Annex B: "Typically, for a residential-led development,
 // strategic sites would have capacity for at least 1,500 dwellings". The
 // Framework hedges deliberately — capacity "can vary depending on the mix of
@@ -12231,7 +12448,11 @@ function computeAppraisal(inputs, a, opts) {
     ? affBasePct + (gbAffPct - affBasePct) * gbShare
     : affBasePct;
   const affFrac = affPct / 100;
-  const blend = (1 - affFrac) + affFrac * ((a.affordableValue || 0) / 100);
+  // Affordable value is a blend of two tenure rates, weighted by the mix.
+  const intFrac = Math.min(1, Math.max(0, (a.affordableIntPct ?? 0) / 100));
+  const affValPct = (a.affordableValue || 0) * (1 - intFrac)
+                  + (a.affordableValueInt ?? (a.affordableValue || 0)) * intFrac;
+  const blend = (1 - affFrac) + affFrac * (affValPct / 100);
   // Sales inflation to the MIDPOINT of the sales period — even absorption
   // means half the revenue lands either side of it.
   const preCon = Math.max(0, a.preConMonths ?? 6);
@@ -12425,6 +12646,7 @@ function computeAppraisal(inputs, a, opts) {
       units, unitFt2, unitM2, localPsf, price, blend, midSaleYears, infl,
       flatFrac, pm2, locFactor,
       affBasePct, affPct, gbShare, gbAffPct, gbApplies, isMajor,
+      intFrac, affValPct,
       buildBase, abnormals, prepInfra, hardCost, fees, contingency,
       refPsf, valueRatio, policyCosts, salesCosts,
       cil, cilRate, cilScale, inRegionRatio, s106, s106PerUnitK, bng,

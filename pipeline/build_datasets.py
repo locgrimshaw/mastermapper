@@ -118,13 +118,60 @@ ARCGIS_PAGE = 2000
 PLANNING_DATA_BASE = "https://files.planning.data.gov.uk/dataset/"
 
 # dataset-key -> planning.data.gov.uk slug (uniform WGS84 GeoJSON, OGL).
+# planning.data.gov.uk slug per dataset key. A bare string keeps the original
+# behaviour (polygons, reference only); a dict adds geometry type and the extra
+# properties worth carrying into the popup. Everything else — the builder, the
+# <KEY>_SRC override, group registration — comes free.
 PLANNING_DATASETS = {
     "lpa_boundary":        "local-planning-authority",
     "local_plan_boundary": "local-plan-boundary",
     "article4":            "article-4-direction-area",
     "tpo_zone":            "tree-preservation-zone",
     "design_code_area":    "design-code-area",
+    # --- Delivery blockers (NPPF N6, P3, S4/F2) -------------------------------
+    # Nutrient neutrality is the biggest stalling mechanism in English housing:
+    # inside one of these a scheme needs mitigation before permission, and
+    # schemes have waited years. The catchment is named for the habitats site
+    # it drains to, which is what makes the constraint legible.
+    "nutrient_neutrality": {"slug": "nutrient-neutrality-catchment",
+                            "props": ["notes"]},
+    # Declared AQMAs carry an assessment requirement and mitigation cost, and
+    # DEFRA's own page for each one is linked from the record.
+    "aqma":                {"slug": "air-quality-management-area",
+                            "props": ["documentation-url", "notes"]},
+    # Distinct from the flood ZONES we already draw: policy S4(2)(b) names land
+    # used for water storage or flood management as land whose loss is one of
+    # the ways benefits get "substantially outweighed".
+    "flood_storage":       {"slug": "flood-storage-area"},
+    # --- Heritage (HE-series) -------------------------------------------------
+    "archaeological_priority": {"slug": "archaeological-priority-area"},
+    # Cuts both ways: a constraint, and an enabling-development argument.
+    "heritage_at_risk":    {"slug": "heritage-at-risk", "props": ["notes"]},
+    # Policy HE7 judges NON-designated assets on a balanced judgement rather
+    # than the designated-asset test — a different question, and invisible on
+    # our map today until someone objects.
+    "locally_listed":      {"slug": "locally-listed-building"},
+    "battlefield":         {"slug": "battlefield"},
+    # --- Nature (N-series, and the N2(1)(c) ecological-network test) ----------
+    "local_nature_reserve":   {"slug": "local-nature-reserve"},
+    "nature_improvement_area": {"slug": "nature-improvement-area"},
+    # --- Context that changes how a site reads --------------------------------
+    # The denominator of the education contribution the appraisal already
+    # charges for, and the HO4(1)(b) access-to-services test.
+    "school":              {"slug": "educational-establishment", "want": "point",
+                            "props": ["notes"]},
+    # A different consenting regime, often a different affordable requirement.
+    "development_corporation": {"slug": "development-corporation-boundary"},
+    "central_activities_zone": {"slug": "central-activities-zone"},
 }
+
+
+def _planning_spec(key):
+    v = PLANNING_DATASETS[key]
+    if isinstance(v, str):
+        return {"slug": v, "want": "polygon", "props": []}
+    return {"slug": v["slug"], "want": v.get("want", "polygon"),
+            "props": v.get("props", [])}
 
 UNI_CAMPUS_URL = ("https://learning-provider.data.ac.uk/data/"
                   "learning-providers-plus.csv")
@@ -217,6 +264,11 @@ ALC_DEFAULT_URL = ("https://stg-arcgisazurecdataprod.az.arcgis.com/"
 ALL_DATASETS = [
     "lpa_boundary", "local_plan_boundary", "article4", "tpo_zone",
     "design_code_area",
+    # NPPF constraint layers (roadmap phase 3). Delivery blockers first.
+    "nutrient_neutrality", "aqma", "flood_storage",
+    "archaeological_priority", "heritage_at_risk", "locally_listed",
+    "battlefield", "local_nature_reserve", "nature_improvement_area",
+    "school", "development_corporation", "central_activities_zone",
     "uni_campus", "uni_campus_site", "uni_building", "ptal",
     "power_line", "power_substation", "gsp_boundary", "tec_register",
     "ukpn_sites", "nged_sites",
@@ -570,7 +622,8 @@ def _emit(gdf, dataset, name_col=None, id_col=None, props_fn=None,
 # records a STATUS reason for anything it skipped.
 
 def build_planning_dataset(key):
-    slug = PLANNING_DATASETS[key]
+    spec = _planning_spec(key)
+    slug = spec["slug"]
     path, how = _resolve_source(key, [f"{key.upper()}_SRC"],
                                 PLANNING_DATA_BASE + f"{slug}.geojson",
                                 f"{slug}.geojson")
@@ -582,8 +635,21 @@ def build_planning_dataset(key):
     print(f"  [{key}] reading {path.name} ({how}) ...")
     gdf = gpd.read_file(path)
     ref_col = _find_col(gdf, ["reference"])
-    rows = _emit(gdf, key, want="polygon",
-                 props_fn=lambda f: {"reference": _cell(f, ref_col)})
+    name_col = _find_col(gdf, ["name"])
+    # The platform's own column names use hyphens, which are awkward as prop
+    # keys; carry them through underscored.
+    extra = [(c, c.replace("-", "_")) for c in spec["props"] if c in gdf.columns]
+
+    def props(f):
+        out = {"reference": _cell(f, ref_col)}
+        for src_col, dest in extra:
+            v = _cell(f, src_col)
+            v = None if v is None else str(v).strip() or None
+            if v:
+                out[dest] = v
+        return out
+
+    rows = _emit(gdf, key, name_col=name_col, want=spec["want"], props_fn=props)
     _note(key, how, len(rows))
     return {key: rows}
 
@@ -3917,7 +3983,15 @@ def _resolve_datasets(cli_arg):
     if unknown:
         print(f"WARNING: ignoring unknown dataset(s): {', '.join(unknown)}")
     ordered = [d for d in ALL_DATASETS if d in wanted]
-    return ordered or list(ALL_DATASETS)
+    if not ordered:
+        # Asking for something specific and getting EVERYTHING is the wrong
+        # failure. A mistyped or newly-added-but-unregistered name used to fall
+        # through to a full national rebuild — hours of downloads nobody asked
+        # for, and the requested dataset missing from the output anyway.
+        raise SystemExit(
+            f"ERROR: none of the requested datasets are known: {', '.join(wanted)}\n"
+            f"       (a new builder also needs its key adding to ALL_DATASETS)")
+    return ordered
 
 
 def main() -> int:
