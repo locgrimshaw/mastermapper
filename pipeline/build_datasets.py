@@ -2137,6 +2137,49 @@ def build_cil_rates():
             name_col = c
             break
 
+    # ---- Verification pass against the platform's own schedule register ----
+    # planning.data.gov.uk publishes community-infrastructure-levy-schedule:
+    # one record per charging authority with the adopted date and a link to
+    # the schedule document itself. It carries no RATES (those live inside the
+    # PDFs), so it cannot replace the compiled table — but it is authoritative
+    # on the question the table is most likely to get wrong: WHETHER an
+    # authority charges CIL at all. Joined on the LAD code, never by name.
+    sched = {}
+    n_ver = n_conflict = n_unrated = 0
+    spath, _show = _resolve_source(
+        key, ["CIL_SCHEDULE_SRC"],
+        PLANNING_DATA_BASE + "community-infrastructure-levy-schedule.csv",
+        "community-infrastructure-levy-schedule.csv")
+    opath, _ohow = _resolve_source(
+        key, ["LOCAL_AUTHORITY_SRC"],
+        PLANNING_DATA_BASE + "local-authority.csv", "local-authority.csv")
+    if spath is not None and opath is not None:
+        orgs = {}
+        with open(opath, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                orgs[r.get("entity", "")] = r
+        with open(spath, newline="", encoding="utf-8-sig") as fh:
+            for r in csv.DictReader(fh):
+                o = orgs.get(r.get("organisation-entity", ""))
+                # County councils are not CIL charging authorities for the
+                # districts within them; their records would otherwise attach
+                # a schedule to areas that do not charge under it.
+                if not o or (o.get("local-authority-type") or "").strip() == "CTY":
+                    continue
+                lad = (o.get("local-authority-district") or "").strip()
+                if not lad:
+                    continue
+                d = (r.get("adopted-date") or "")[:10]
+                prev = sched.get(lad)
+                if prev is None or d > prev["adopted"]:
+                    sched[lad] = {"adopted": d,
+                                  "url": (r.get("document-url") or "").strip(),
+                                  "title": (r.get("name") or "").strip()}
+        print(f"  [{key}] {len(sched)} charging authorities carry a published "
+              f"schedule on the platform")
+    else:
+        _warn(key, "no CIL schedule register — statuses go unverified")
+
     SRC_ADOPTED = ("adopted charging schedule, ~2025-indexed INDICATIVE "
                    "midpoints — verify against the council's current schedule")
     n_hit = n_unknown = 0
@@ -2148,10 +2191,22 @@ def build_cil_rates():
         except (TypeError, ValueError):
             return 0.0
 
+    def _sched_props(sc):
+        """The platform's own evidence, attached verbatim so a user can open
+        the schedule and check the number we used."""
+        if not sc:
+            return {}
+        out = {"schedule_url": sc["url"] or None,
+               "schedule_name": sc["title"] or None}
+        if sc["adopted"]:
+            out["schedule_adopted"] = sc["adopted"]
+        return out
+
     def cil_props(f):
-        nonlocal n_hit, n_unknown
+        nonlocal n_hit, n_unknown, n_ver, n_conflict, n_unrated
         code = str(_cell(f, code_col) or "").strip()
         nm = str(_cell(f, name_col) or "").strip()
+        sc = sched.get(code)
         r = by_norm.get(_norm_name(nm))
         if r is None:
             if code.startswith("S"):
@@ -2159,6 +2214,19 @@ def build_cil_rates():
                         "asof": "2025",
                         "src": "Scotland has no CIL regime — planning "
                                "obligations run through S75 instead"}
+            if sc:
+                # We have no rate, but the platform proves a schedule exists.
+                # That is worth saying out loud: the engine still falls back to
+                # its regional band, and now the popup can hand over the
+                # actual document instead of shrugging.
+                n_unrated += 1
+                return dict({"lad_code": code, "status": "schedule_unrated",
+                             "cil_pm2": None,
+                             "src": "an adopted charging schedule is published "
+                                    "for this authority, but its £/m² rates are "
+                                    "not yet compiled — the engine falls back "
+                                    "to its regional band"},
+                            **_sched_props(sc))
             n_unknown += 1
             return {"lad_code": code, "status": "unknown", "cil_pm2": None,
                     "src": "rate not yet compiled — the viability engine "
@@ -2166,24 +2234,52 @@ def build_cil_rates():
         n_hit += 1
         status = str(r["status"]).strip()
         if status == "none":
-            return {"lad_code": code, "status": "none", "cil_pm2": 0,
-                    "asof": str(r.get("asof", "")).strip() or None,
-                    "src": "authority has not adopted CIL — the charge is "
-                           "genuinely zero (S106 still applies)"}
+            # A compiled "no CIL here" against a published schedule is a
+            # contradiction, and £0 is the expensive way to be wrong. A DATED
+            # schedule is strong enough evidence to withdraw the zero and fall
+            # back to the regional band; an undated stub (a bare council link)
+            # is not, so that only earns a flag.
+            if sc and sc["adopted"]:
+                n_conflict += 1
+                return dict({"lad_code": code, "status": "schedule_unrated",
+                             "cil_pm2": None, "conflict": True,
+                             "src": "our table recorded no CIL here, but the "
+                                    "platform publishes an adopted charging "
+                                    "schedule — the £0 has been withdrawn and "
+                                    "the regional band applies until the rate "
+                                    "is read off the schedule"},
+                            **_sched_props(sc))
+            out = {"lad_code": code, "status": "none", "cil_pm2": 0,
+                   "asof": str(r.get("asof", "")).strip() or None,
+                   "src": "authority has not adopted CIL — the charge is "
+                          "genuinely zero (S106 still applies)"}
+            if sc:
+                n_conflict += 1
+                out["conflict"] = True
+                out["src"] += " — note the platform holds an undated schedule "\
+                              "record for this authority, which is worth checking"
+            return dict(out, **_sched_props(sc))
         typ, mn, mx = _num(r, "resi_typ"), _num(r, "resi_min"), _num(r, "resi_max")
         may = _num(r, "mayoral")
         note = str(r.get("note", "")).strip()
-        return {"lad_code": code, "status": status,
-                "resi_min": round(mn), "resi_typ": round(typ),
-                "resi_max": round(mx), "mayoral": round(may),
-                "cil_pm2": round(typ + may),
-                "asof": str(r.get("asof", "")).strip() or None,
-                "note": note or None, "src": SRC_ADOPTED}
+        if sc:
+            n_ver += 1
+        return dict({"lad_code": code, "status": status,
+                     "resi_min": round(mn), "resi_typ": round(typ),
+                     "resi_max": round(mx), "mayoral": round(may),
+                     "cil_pm2": round(typ + may),
+                     "asof": str(r.get("asof", "")).strip() or None,
+                     "verified": bool(sc),
+                     "note": note or None, "src": SRC_ADOPTED},
+                    **_sched_props(sc))
 
     rows = _emit(gdf, key, name_col=name_col, id_col=code_col, want="polygon",
                  props_fn=cil_props)
     print(f"  [{key}] {n_hit} authorities matched from the table, "
           f"{n_unknown} unmatched (regional-band fallback)")
+    print(f"  [{key}] verification: {n_ver} compiled rates confirmed by a "
+          f"published schedule, {n_unrated} authorities have a schedule but no "
+          f"compiled rate, {n_conflict} contradict the table")
     if n_hit < 100:
         _warn(key, f"only {n_hit} authorities matched by name — check the "
                    "CSV's name spellings against the boundary file")

@@ -1430,7 +1430,7 @@ const LAYER_INFO = {
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only. Every cell in view is drawn — no sampling — which is why it needs a close zoom: the full 100 m grid is 159,451 cells and a wider view cannot be served from the database fast enough.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
   la_rents:            { about: "Average monthly private rents by local authority, shaded light (cheapest, ~£500) to deep teal (most expensive, £3,000+). Hover a district for its figure and annual change.", source: "ONS Price Index of Private Rents (OGL v3)" },
   price_trend:         { about: "Whether local sale prices are rising or falling: median of the last 12 months against the median of the 24 months before, on the same boundaries as the price layers. Blue = falling, red = rising, pale = flat — a diverging ramp on the RAW percentage, because unlike price level this measure has a meaningful zero. Areas without enough sales in BOTH windows stay blank rather than faking a flat market.", source: "HM Land Registry Price Paid Data (OGL v3)" },
-  cil_rates:           { about: "Residential Community Infrastructure Levy by charging authority — INDICATIVE typical rates (£/m² of net new floorspace, ~2025-indexed) compiled from adopted charging schedules, incl. the Mayoral CIL in London. Green = £0 (no CIL adopted, or Scotland where no CIL regime exists), deep red = London-borough rates. Grey = not yet compiled: the viability engine falls back to its regional band there. Schedules charge by zone, so verify against the council's current adopted schedule before reliance; enter the exact rate per project in Viability variables.", source: "Council charging schedules / annual CIL rate summaries (OGL), hand-compiled" },
+  cil_rates:           { about: "Residential Community Infrastructure Levy by charging authority — INDICATIVE typical rates (£/m² of net new floorspace, ~2025-indexed) compiled from adopted charging schedules, incl. the Mayoral CIL in London. Green = £0 (no CIL adopted, or Scotland where no CIL regime exists), deep red = London-borough rates. Blue = the authority DOES charge CIL (a schedule is published) but its rate is not yet compiled; grey = nothing known. Both fall back to the regional band in the appraisal. Every compiled rate is cross-checked against MHCLG's own register of charging schedules: 95 are confirmed by a published schedule, and where the register contradicted the table (a dated schedule against a recorded 'no CIL') the £0 has been withdrawn rather than left to understate costs. Schedules charge by zone, so verify against the council's current adopted schedule before reliance; enter the exact rate per project in Viability variables.", source: "Council charging schedules / annual CIL rate summaries, hand-compiled; verified against MHCLG planning.data.gov.uk community-infrastructure-levy-schedule (OGL v3)" },
   build_cost:          { about: "Relative construction cost by local authority — a FREE PROXY assembled from ONS construction output indices and openly published regional factors, not BCIS (which is a paid RICS product). Green = cheaper than the national average, red = dearer. Every figure can be overridden per project in Viability variables; a client with BCIS access can paste their own numbers there.", source: "ONS construction output price indices + published regional factors (proxy)" },
   affordability:       { about: "Median sale price (last 12 months) divided by local income. Zoomed out: district level, against residents' median gross pay (ONS ASHE). Zoomed in (z9.5+): neighbourhood level — ~7,200 MSOAs of ~4,000 households — against HOUSEHOLD income (ONS small area income estimates), so a village is measured against its own residents rather than the nearest city's. 4× is the classic mortgageable benchmark; 12×+ severe. Areas with suppressed income data or too few sales stay grey.", source: "HM Land Registry Price Paid + ONS ASHE / ONS small area income estimates (all OGL v3)" },
   lad_boundary:        { about: "Local authority district boundaries.", source: "ONS Open Geography Portal (OGL v3)" },
@@ -2190,7 +2190,12 @@ function renderOverlay(key, def, fc) {
       : def.dataset === "cil_rates"
       // Residential CIL: grey = not yet compiled (regional-band fallback);
       // green £0 (no CIL) sweeping to deep red at London-borough rates.
-      ? ["case", ["!", ["has", "cil_pm2"]], "rgba(160,170,175,0.4)",
+      // Slate blue is its own state: the platform proves a charging schedule
+      // exists here, so the authority DOES levy CIL — we just have not read
+      // the rate off it. That is a different thing from knowing nothing, and
+      // colouring it the same grey would hide a known cost.
+      ? ["case", ["==", ["to-string", ["get", "status"]], "schedule_unrated"], "rgba(92,124,250,0.45)",
+         ["!", ["has", "cil_pm2"]], "rgba(160,170,175,0.4)",
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "cil_pm2"]], 0],
           0, "#2f9e44", 40, "#94d82d", 90, "#ffd43b",
           150, "#f59f00", 250, "#e8590c", 450, "#c92a2a"]]
@@ -3722,15 +3727,30 @@ function hoverContentForOverlay(def, p) {
             row("override in Viability variables", "per-project")];
   } else if (d === "cil_rates") {
     title = p.name || "Local authority";
-    kind = "Residential CIL — indicative, verify against the adopted schedule";
     const st = p.status;
+    const ver = p.verified === true || p.verified === "true";
+    kind = st === "schedule_unrated"
+      ? "Residential CIL — schedule published, rate not yet compiled"
+      : "Residential CIL — indicative, verify against the adopted schedule";
     rows = [row(st === "adopted"
               ? `£${Number(p.cil_pm2).toLocaleString()}/m²${Number(p.mayoral) > 0 ? ` (incl. £${Number(p.mayoral)} Mayoral)` : ""}`
               : st === "none" ? "no CIL adopted — charge is £0 (S106 still applies)"
               : st === "no_regime" ? "no CIL regime in Scotland — S75 obligations instead"
+              : st === "schedule_unrated" ? "this authority DOES charge CIL — rate not compiled, regional band used"
               : "rate not yet compiled — regional band used", st === "adopted" ? "typical residential zone" : "status"),
             row(st === "adopted" && p.resi_min != null && Number(p.resi_min) !== Number(p.resi_max)
               ? `£${Number(p.resi_min)}–£${Number(p.resi_max)}/m²` : null, "schedule span (zoned)"),
+            // The platform's own register of charging schedules is what makes
+            // a compiled rate checkable rather than merely asserted.
+            row(p.schedule_adopted
+              ? `schedule adopted ${p.schedule_adopted}`
+              : p.schedule_url ? "schedule published (undated record)" : null,
+              ver ? "confirmed on planning.data.gov.uk" : "planning.data.gov.uk"),
+            row(st === "adopted" && !p.schedule_url
+              ? "no schedule record on the platform — compiled figure unconfirmed" : null,
+              "verification"),
+            row(p.conflict ? "our table said no CIL here — contradicted by the published schedule" : null,
+                "flagged"),
             row(p.note || null, "note"),
             row(st === "adopted" ? `~${p.asof} indexation · omits future uplift` : null, "vintage")];
   } else if (d === "local_plan_housing") {
@@ -8373,7 +8393,11 @@ function calcAuditHTML(ctx, a, r) {
       ? `council's adopted rate (entered in Viability variables)`
       : t.cilSource === "authority"
       ? `this authority's compiled rate (cil_rates dataset — adopted-schedule indicative, incl. Mayoral CIL where due)`
-      : `£${N(t.cilBand, 0)}/m² regional indicative band × ${N(t.cilScale)} within-region value adjustment`,
+      : `£${N(t.cilBand, 0)}/m² regional indicative band × ${N(t.cilScale)} within-region value adjustment` +
+        (ctx && ctx.cilStatus === "schedule_unrated"
+          ? ` — this authority DOES charge CIL (an adopted schedule is published); its rate is not yet compiled, so the band stands in and will understate the charge if the schedule is dearer`
+          : ctx && ctx.cilStatus === "none"
+          ? ` — this authority has not adopted CIL` : ""),
       "£" + N(t.cilRate, 0) + "/m²"),
     t.cilSource === "band" ? row("within-region value position", `achieved £${N(t.price)}/ft² ÷ regional average (clamped ×0.6–1.8), applied at ${N(a.policyLocalisePct ?? 100, 0)}%`,
       "×" + N(t.inRegionRatio)) : "",
@@ -9831,6 +9855,10 @@ function buildDeepDivePanel(meta) {
       locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
       landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
       cilAreaPm2: (deep._marketCtx && deep._marketCtx.cilPm2 != null) ? deep._marketCtx.cilPm2 : null,
+      // Why the band is being used, when it is: "no rate compiled" and "this
+      // authority publishes a schedule we have not read" are different
+      // admissions, and the audit should make the difference visible.
+      cilStatus: (deep._marketCtx && deep._marketCtx.cilStatus) || null,
       onChange: () => { renderDeepDiveViability(); if (SIFT.loaded) scoreSiftRows(); },
     };
   };
