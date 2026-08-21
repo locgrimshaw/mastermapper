@@ -2580,3 +2580,40 @@ footer {
   background: rgba(76, 110, 245, 0.07);
 }
 .sift-strategic { color: #f59f00; font-size: 11px; cursor: help; }
+
+/* Sift guidance toggle. Every step carries a few paragraphs explaining what it
+   does; useful once, then permanently in the way of the shortlist. Hidden by
+   default and revealed by the toggle in the step header. Two classes of hint
+   are NEVER hidden: .sift-yield-echo (a live readout of what you just typed,
+   not guidance) and .sift-keep (short functional notes). */
+.sift-stage-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sift-guide-btn {
+  flex: 0 0 auto; font-size: 10.5px; padding: 2px 7px; cursor: pointer;
+  border: 1px solid var(--ink-line); border-radius: 999px;
+  background: transparent; color: var(--text-dim); font-weight: 600;
+  letter-spacing: .02em; text-transform: none;
+}
+.sift-guide-btn:hover { color: var(--text, inherit); border-color: var(--text-dim); }
+.sift-guide-btn.on { border-color: #2f6fb0; color: #2f6fb0; background: rgba(47,111,176,0.08); }
+.sift-step-body:not(.sift-guided) .hint:not(.sift-yield-echo):not(.sift-keep) { display: none; }
+/* With the prose gone the controls would otherwise sit flush against the
+   headings they belong to. */
+.sift-step-body:not(.sift-guided) .sift-field { margin: 7px 0; }
+
+/* Deep dive: the sift's single-density override is in force, so the per-regime
+   dph inputs above are inert. Said plainly rather than left to be discovered
+   by two numbers disagreeing. */
+.dd-dph-override {
+  margin: 6px 0 2px; padding: 6px 9px; font-size: 11.5px; line-height: 1.5;
+  border-left: 2px solid #2f6fb0; background: rgba(47,111,176,0.08);
+  color: var(--text-dim);
+}
+.dd-dph-override strong { color: #2f6fb0; }
+
+/* Deep dive: reconciles a capacity difference against the shortlist. Kept
+   visible even with sift guidance collapsed — it explains a live discrepancy
+   rather than teaching the tool. */
+.dd-reconcile {
+  margin: 6px 0 2px; padding: 6px 9px; font-size: 11.5px; line-height: 1.5;
+  border-left: 2px solid #e0853a; background: rgba(224,133,58,0.09);
+}

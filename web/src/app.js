@@ -6594,12 +6594,35 @@ function activeDevelopableRegime() {
 // trusted — clipped geometries occasionally report a sliver more inner than
 // total, and negative outer hectares would silently subtract homes.
 function homesFor(areaHa, innerHa, regime, dph) {
-  const d = dph || deep.developableDph || DPH_DEFAULTS;
   const a = Math.max(0, Number(areaHa) || 0);
+  // A density set in the sift ("apply one density everywhere", step 2) is an
+  // explicit statement about the scheme being tested, so it governs here too.
+  // Without this the two surfaces silently sized different schemes on the same
+  // land — Hatfield Peverel came out 8,441 homes and 42% profit on cost in the
+  // sift at 70 dph, and 4,812 homes and 20.5% in its own deep dive on the
+  // regime rates. Same station, same hectares, two answers.
+  const one = siftOneDensity();
+  if (one) return Math.round(a * one);
+  const d = dph || deep.developableDph || DPH_DEFAULTS;
   const inner = Math.min(a, Math.max(0, Number(innerHa) || 0));
   if (regime === "urban")
     return Math.round(inner * d.urbanInner + (a - inner) * d.urbanOuter);
   return Math.round(a * (d[regime] || d.suburban));
+}
+
+// The sift's single-density override, or null when it is on per-station
+// floors. Read by homesFor, so every capacity in the app answers to it.
+function siftOneDensity() {
+  // try/catch, not typeof: SIFT is a const declared far below this point, and
+  // `typeof` on a const still in its temporal dead zone THROWS rather than
+  // returning "undefined". Nothing should call homesFor during module
+  // evaluation, but a capacity formula is the wrong place to find out.
+  try {
+    const c = SIFT && SIFT.crit;
+    if (!c || c.dphMode !== "custom") return null;
+    const v = Number(c.dphCustom);
+    return v > 0 ? v : null;
+  } catch (_) { return null; }
 }
 
 // Potential dwellings under each regime from the RPC's hectare breakdown and the
@@ -6989,7 +7012,7 @@ function developablePopupHTML(layerId) {
   const devHa = Number(r.developable_ha) || 0;
   const homes = dw ? dw[active] : 0;
   return `<strong>Developable land</strong><br>` +
-    `${devHa.toFixed(1)} ha · ~${homes.toLocaleString()} homes (${active})`;
+    `${devHa.toFixed(1)} ha · ~${homes.toLocaleString()} homes (${capacityBasisLabel(active)})`;
 }
 
 function setDevelopableStatus(text) {
@@ -7153,11 +7176,21 @@ function renderDeepDiveLegend() {
   const sw = (color, opacity) =>
     `<i class="ddl-sw" style="background:${color};opacity:${opacity}"></i>`;
   const items = [];
+  const oneDph = siftOneDensity();
   if (showDev) {
-    items.push(`<span class="ddl-item">${sw(DEVELOPABLE_INNER_COLOR, 0.85)}` +
-      `Developable · inner ${inner} m <b>${dph.urbanInner} dph</b></span>`);
-    items.push(`<span class="ddl-item">${sw(DEVELOPABLE_COLOR, 0.7)}` +
-      `Developable · outer <b>${activeDevelopableRegime() === "urban" ? dph.urbanOuter : (dph[activeDevelopableRegime()] || dph.suburban)} dph</b></span>`);
+    // With one density in force the inner/outer split is not being applied, so
+    // the legend must not keep advertising two rates.
+    if (oneDph) {
+      items.push(`<span class="ddl-item">${sw(DEVELOPABLE_INNER_COLOR, 0.85)}` +
+        `Developable · inner ${inner} m</span>`);
+      items.push(`<span class="ddl-item">${sw(DEVELOPABLE_COLOR, 0.7)}` +
+        `Developable · outer — <b>${oneDph} dph</b> throughout (from the sift)</span>`);
+    } else {
+      items.push(`<span class="ddl-item">${sw(DEVELOPABLE_INNER_COLOR, 0.85)}` +
+        `Developable · inner ${inner} m <b>${dph.urbanInner} dph</b></span>`);
+      items.push(`<span class="ddl-item">${sw(DEVELOPABLE_COLOR, 0.7)}` +
+        `Developable · outer <b>${activeDevelopableRegime() === "urban" ? dph.urbanOuter : (dph[activeDevelopableRegime()] || dph.suburban)} dph</b></span>`);
+    }
     items.push(`<span class="ddl-item">${sw(DEVELOPABLE_BLOCKER_COLOR, 0.5)}Constrained (subtracted)</span>`);
   }
   if (showPub) {
@@ -7320,7 +7353,7 @@ async function renderDeepDiveViability() {
   const ragCls = ap.rag === "viable" ? "sg" : ap.rag === "marginal" ? "sa" : "sr";
   el.innerHTML = `
     <div class="dd-pl-hero"><strong>${ap.profitOnCost.toFixed(1)}%</strong>
-      <span class="dd-dim">profit on cost · ${units.toLocaleString()} homes (${regime})</span>
+      <span class="dd-dim">profit on cost · ${units.toLocaleString()} homes (${capacityBasisLabel(regime)})</span>
       <span class="viab-rag ${ragCls}">${ap.rag}</span></div>
     <div class="dd-pl-rows">
       <div class="dd-pl-row"><span>GDV</span><span>${money(ap.gdv)}</span></div>
@@ -7333,7 +7366,46 @@ async function renderDeepDiveViability() {
       <div class="dd-pl-row"><span>build cost index</span><span>${mc && mc.factor ? mc.factor.toFixed(2) + "× (" + (mc.factorRegion || "local") + ")" : "1.00× (national)"}</span></div>
       ${ap.audit && ap.audit.gbApplies ? `<div class="dd-pl-row" title="NPPF policy GB8: major housing development on Green Belt land owes ${Math.round(SIFT.assumptions.gbAffordableUpliftPp ?? 15)} percentage points above the affordable requirement that would otherwise apply, capped at ${Math.round(SIFT.assumptions.gbAffordableCapPct ?? 50)}%. Blended over the ${Math.round(ap.audit.gbShare * 100)}% of this catchment's developable land in the Green Belt."><span>affordable (GB8 uplift)</span><span>${ap.audit.affPct.toFixed(1)}% <span class="hint">from ${Math.round(ap.audit.affBasePct)}%</span></span></div>` : ""}
     </div>
+    ${siftReconcileHTML(units)}
     <p class="hint" style="margin-top:4px">Same engine and assumptions as the station sifter — tweak them below and both update.</p>`;
+}
+
+// What produced a capacity figure — the regime whose rates were applied, or
+// the single density overriding them. Three captions used to say "(rural)"
+// while a 70 dph sift override was doing the arithmetic.
+function capacityBasisLabel(regime) {
+  const one = siftOneDensity();
+  return one ? `${one} dph` : regime;
+}
+
+// Why the shortlist and this dive can still show different capacities for the
+// same station, said out loud rather than left as two numbers that disagree.
+// Density is now shared (homesFor answers to the sift's single-density
+// override), so what remains is the AREA BASIS: the sift can be ranking on a
+// station's largest contiguous plot, or net of Green Belt, while a dive always
+// appraises the whole catchment.
+function siftReconcileHTML(units) {
+  try {
+    if (!SIFT || !SIFT.loaded || !deep.station || !deep.station.crs) return "";
+    const row = SIFT.rows.find(r => r.crs === deep.station.crs);
+    if (!row || row.effYield == null) return "";
+    const diff = Math.abs(row.effYield - units);
+    // Below 2% the two are the same scheme with rounding between them.
+    if (units <= 0 || diff / units < 0.02) return "";
+    const why = [];
+    if (SIFT.crit.largestPlotOnly && row.largestPlotHa != null
+        && row.largestPlotHa < row.developableHa)
+      why.push(`largest plot only — ${row.largestPlotHa.toFixed(1)} ha of ` +
+               `${row.developableHa.toFixed(1)} ha`);
+    if (SIFT.crit.excludeGreenBelt && row.greenBeltHa > 0)
+      why.push(`net of ${row.greenBeltHa.toFixed(1)} ha Green Belt`);
+    if (!why.length) return "";
+    return `<p class="hint dd-reconcile">The shortlist ranks this station at ` +
+      `<strong>${row.effYield.toLocaleString()} homes</strong> (${why.join(", ")}); ` +
+      `this dive appraises the <strong>whole catchment</strong> at ` +
+      `${units.toLocaleString()}. Same density, different land — turn the ` +
+      `step-2 filter off to compare like with like.</p>`;
+  } catch (_) { return ""; }
 }
 
 // ---- Land assembler --------------------------------------------------------
@@ -7414,7 +7486,7 @@ function renderAssemblySummary(notice) {
     ${notice ? `<p class="hint">${escapeSift(notice)}</p>` : ""}
     <div class="dd-pl-rows">${rows}</div>
     <div class="dd-pl-hero" style="margin-top:6px"><strong>${totHa.toFixed(2)} ha</strong>
-      <span class="dd-dim">${plots.length} plot${plots.length === 1 ? "" : "s"} · ~${units.toLocaleString()} homes (${regime})</span>
+      <span class="dd-dim">${plots.length} plot${plots.length === 1 ? "" : "s"} · ~${units.toLocaleString()} homes (${capacityBasisLabel(regime)})</span>
       ${ap.profitOnCost != null ? `<span class="viab-rag ${ragCls}">${ap.profitOnCost.toFixed(0)}% PoC</span>` : ""}</div>
     <input type="text" id="dd-assembly-name" placeholder="Site name for the report…"
       value="${escapeSift(deep.assembly.name || "")}" maxlength="80" />
@@ -7534,6 +7606,7 @@ function developableSectionHTML(station) {
             <label class="dd-bf-filter"><span>Urban outer dph</span><input type="number" id="dd-dph-urban-outer" min="1" max="1000" value="${dph.urbanOuter}" /></label>
             <label class="dd-bf-filter"><span>Urban inner dph</span><input type="number" id="dd-dph-urban-inner" min="1" max="1000" value="${dph.urbanInner}" /></label>
           </div>
+          ${siftOneDensity() ? `<p class="dd-dph-override">Capacity here is using <strong>${siftOneDensity()} dph everywhere</strong> — the single density set in step 2 of the sift — so this dive and the shortlist size the same scheme. The four rates above are paused while that is on; switch the sift back to per-station density floors to use them.</p>` : ""}
           <div id="dd-developable-summary"></div>
           <label class="dd-row dd-row-all">
             <input type="checkbox" class="enable" id="dd-publicland-show" />
@@ -8684,6 +8757,9 @@ async function _generateSiteReport() {
         || `Assembled site — ${(deep.station && deep.station.name) || "catchment"}`,
       station: deep.station || null,
       plots, unionFeat, totHa, totInner, units, regime,
+      // What actually sized the scheme, so the report cannot caption a
+      // sift-density figure with a regime name.
+      densityBasis: capacityBasisLabel(regime),
       summary, slope, img, appraisal,
       publicLand: deep.publicLand || null,
       ppm2: deep.ppm2 || null,
@@ -8833,7 +8909,7 @@ function buildSiteReportHTML(site) {
     <p class="cover-sub">${stationName ? esc(stationName) + " catchment · " : ""}${site.totHa.toFixed(2)} ha across ${site.plots.length} plot${site.plots.length === 1 ? "" : "s"} · generated ${dateStr}</p>
     <div class="sr-kpis">
       <div class="sr-kpi"><b>${site.totHa.toFixed(2)} ha</b><span>net developable</span></div>
-      <div class="sr-kpi"><b>~${site.units.toLocaleString()}</b><span>homes (${esc(site.regime)})</span></div>
+      <div class="sr-kpi"><b>~${site.units.toLocaleString()}</b><span>homes (${esc(site.densityBasis || site.regime)})</span></div>
       <div class="sr-kpi"><b>${pct(ap.profitOnCost)}</b><span>profit on cost ${ragBadge}</span></div>
       <div class="sr-kpi"><b>${money(ap.residualLandValue)}</b><span>residual land value</span></div>
     </div>
@@ -11892,6 +11968,7 @@ const SIFT = {
           dphMode: "floor", dphCustom: 0, strategicOnly: false },
   sort: "viability",   // yield | regen | viability
   country: mmStore.get("siftCountry", "england"),  // england | scotland (sifted separately)
+  guidance: mmStore.get("siftGuidance", false),   // show the per-step prose?
   assumptions: Object.assign({}, VIABILITY_DEFAULTS),
   shortlist: new Set(mmStore.get("shortlist", [])),  // pinned station CRSs (persisted)
 };
@@ -12696,9 +12773,18 @@ function exportShortlistCsv() {
 // Render the stepper + the current step's controls + nav. Full re-render on step
 // change only; input events update counts/table via updateSiftFunnel (no control
 // re-render), so number-field focus isn't lost mid-type.
+// The block's standing intro paragraph lives in the HTML, outside the step
+// body, so it needs toggling by hand — it is the single tallest piece of prose
+// above the shortlist.
+function syncSiftIntro() {
+  const el = document.querySelector("#sift-block .sift-intro");
+  if (el) el.hidden = !SIFT.guidance;
+}
+
 function renderSiftStep() {
   const crit = document.getElementById("sift-criteria");
   if (!crit) return;
+  syncSiftIntro();
   // The funnel shrank from 6 steps to 5 (station gate merge) — clamp any
   // stale index so an in-flight session can't render past the end.
   if (SIFT.step >= SIFT_STEPS.length) SIFT.step = SIFT_STEPS.length - 1;
@@ -12710,10 +12796,18 @@ function renderSiftStep() {
   const def = SIFT_STEPS[step];
   const last = SIFT_STEPS.length - 1;
   const csel = (v, label) => `<button type="button" class="sift-country-btn${SIFT.country === v ? " active" : ""}" data-country="${v}">${label}</button>`;
+  // Guidance off by default. The prose is worth having, but every line of it
+  // pushes the shortlist further down the panel, and the shortlist is the
+  // thing being worked with — you read a step's explanation once and then
+  // want it out of the way. The toggle state persists.
+  const guide = SIFT.guidance ? " sift-guided" : "";
   crit.innerHTML =
     `<div class="sift-country" title="England and Scotland are sifted separately — different planning frameworks (NPPF vs NPF4) and deprivation indices (IMD vs SIMD), so their metrics are not directly comparable.">${csel("england", "🏴 England")}${csel("scotland", "🏴 Scotland")}</div>` +
     `<div class="sift-stepper">${stepper}</div>` +
-    `<div class="sift-step-body"><div class="sift-stage-h">${escapeSift(def.title)}</div>` +
+    `<div class="sift-step-body${guide}"><div class="sift-stage-h">${escapeSift(def.title)}` +
+    `<button type="button" class="sift-guide-btn${SIFT.guidance ? " on" : ""}" id="sift-guide-toggle" ` +
+    `title="Show or hide the explanatory text on every step. Hidden by default so the shortlist stays in view; the ⓘ tooltips and 'About this step' keep the detail either way.` +
+    `" aria-pressed="${SIFT.guidance ? "true" : "false"}">${SIFT.guidance ? "Hide guidance" : "Guidance"}</button></div>` +
     siftAboutHTML(def) +
     siftStepControlsHTML(def.key) + `</div>` +
     `<div class="sift-nav">` +
@@ -12730,6 +12824,13 @@ function renderSiftStep() {
     }));
   crit.querySelectorAll(".sift-step-chip").forEach(b =>
     b.addEventListener("click", () => { SIFT.step = +b.dataset.step; renderSift(); }));
+  const gt = crit.querySelector("#sift-guide-toggle");
+  if (gt) gt.addEventListener("click", () => {
+    SIFT.guidance = !SIFT.guidance;
+    mmStore.set("siftGuidance", SIFT.guidance);
+    syncSiftIntro();
+    renderSiftStep();
+  });
   crit.querySelector("#sift-back").addEventListener("click", () => { if (SIFT.step > 0) { SIFT.step--; renderSift(); } });
   crit.querySelector("#sift-next").addEventListener("click", () => { if (SIFT.step < last) { SIFT.step++; renderSift(); } });
   crit.querySelectorAll(".sift-step-body input, .sift-step-body select").forEach(i =>
