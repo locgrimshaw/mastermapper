@@ -5922,6 +5922,8 @@ function renderCatchmentStats() {
   // Local house-price value over the catchment (£/m²), with median sale price
   // as the tooltip — the local sales value the viability appraisal uses for GDV.
   const valEl = document.getElementById("dd-value-value");
+  deep._marketPpm2 = deep.ppm2 ?? deep._marketPpm2 ?? null;
+  if (typeof renderDdHeadlines === "function") renderDdHeadlines();
   if (valEl) {
     valEl.textContent = deep.ppm2 == null ? "—" : ppm2Fmt(deep.ppm2);
     valEl.title = deep.ppm2 == null
@@ -7555,6 +7557,10 @@ async function refreshDevelopable() {
 // classification + density, and dwelling capacity under all three regimes with
 // the active one highlighted.
 function renderDevelopableSummary() {
+  if (typeof renderDdHeadlines === "function") {
+    renderDdHeadlines();
+    renderDdConstraintsDetail();
+  }
   const el = document.getElementById("dd-developable-summary");
   const hero = document.getElementById("dd-developable-hero");
   if (!el) return;
@@ -7676,6 +7682,8 @@ async function renderDeepDiveViability() {
     cilAreaPm2: (mc && mc.cilPm2 != null) ? mc.cilPm2 : null,
     greenBeltShare: gbShareOf(r.green_belt_ha, r.developable_ha),
   }, SIFT.assumptions, { noSens: true });
+  deep._lastProfitPct = ap.profitOnCost == null ? null : Number(ap.profitOnCost);
+  if (typeof renderDdHeadlines === "function") renderDdHeadlines();
   if (ap.profitOnCost == null) {
     el.innerHTML = `<p class="hint">No dwelling capacity to appraise yet.</p>`;
     return;
@@ -10731,6 +10739,173 @@ function renderUsagePerResident() {
   cell.style.display = "";
 }
 
+// ---- Five-group deep-dive layout -------------------------------------------
+// The station sidebar reads as five sections — Key facts / Capacity · yield /
+// Connectivity / Market · viability / Constraints — each a compact header with
+// a live HEADLINE line, detail collapsed beneath. The aim is all five headers
+// on screen at once: the panel answers at a glance and expands on demand.
+function ddGroupHead(key, title) {
+  return `<button class="dd-group-head" type="button" data-g="${key}" aria-expanded="false">` +
+    `<span class="dd-g-title">${title}</span>` +
+    `<span class="dd-hl" id="dd-hl-${key}">—</span>` +
+    `<span class="dd-caret">▸</span></button>`;
+}
+
+// One round trip for the Key Facts group: local authority + council control
+// (migration 0071), plus this station's stored assessment row so capacity,
+// market and constraints have headline numbers before any tool is switched on.
+async function fetchDdContext(station) {
+  const sb = getSupabase();
+  if (!sb || !station) return;
+  try {
+    const centre = deep.stationCentre;
+    const [ctx, arow] = await Promise.all([
+      centre ? sb.rpc("dd_station_context", { p_lng: centre[0], p_lat: centre[1] }) : Promise.resolve({ data: null }),
+      station.crs ? sb.from("station_assessments")
+        .select("developable_ha, largest_plot_ha, density_floor, dwelling_yield, green_belt_ha, constraint_friction, soft_cover, catchment_ppm2, catchment_median_price, in_settlement, tier, built_frac")
+        .eq("crs", station.crs).maybeSingle() : Promise.resolve({ data: null }),
+    ]);
+    deep._ctx = (ctx && ctx.data) || null;
+    deep._assessRow = (arow && arow.data) || null;
+  } catch (_) { /* headlines degrade to what the browser already holds */ }
+  renderDdKeyfactsDetail();
+  renderDdConnectivityDetail();
+  renderDdConstraintsDetail();
+  renderDdHeadlines();
+}
+
+const DD_PARTY_SHORT = {
+  "Labour Party": "Lab", "Conservative and Unionist": "Con",
+  "Liberal Democrats": "Lib Dem", "Reform UK": "Reform",
+  "Green Party (E&W)": "Green", "Scottish National Party (SNP)": "SNP",
+  "Plaid Cymru - The Party of Wales": "Plaid", "Independent / Other": "Ind",
+  "No overall control": "NOC",
+};
+function ddParty(name) { return DD_PARTY_SHORT[name] || name || ""; }
+
+function renderDdHeadlines() {
+  const set = (k, html) => {
+    const el = document.getElementById("dd-hl-" + k);
+    if (el) el.innerHTML = html;
+  };
+  const st = deep.station;
+  if (!st) return;
+  const ctx = deep._ctx, a = deep._assessRow, r = deep.developableResult;
+
+  // Key facts: LA + control.
+  if (ctx && ctx.lad_name) {
+    const pol = ctx.control
+      ? (ctx.control === "No overall control"
+          ? `NOC · ${ddParty(ctx.largest)} lead` : ddParty(ctx.control))
+      : "";
+    set("keyfacts", `<b>${ctx.lad_name}</b>${pol ? ` · ${pol}` : ""}`);
+  } else {
+    set("keyfacts", st.region || "—");
+  }
+
+  // Capacity: live tool result wins; stored assessment row otherwise.
+  const ha = r ? Number(r.developable_ha) : (a ? Number(a.developable_ha) : null);
+  const homes = r ? (developableDwellings() || {})[activeDevelopableRegime() === "urban" ? "urban" : activeDevelopableRegime()] : (a ? a.dwelling_yield : null);
+  if (ha != null) {
+    set("capacity", `<b>${ha.toFixed(1)} ha</b> → <b>${(homes ?? 0).toLocaleString()}</b> homes` +
+      (r ? "" : ` <span class="dd-hl-dim">@${a && a.density_floor ? a.density_floor + " dph" : "floor"}</span>`));
+  } else {
+    set("capacity", `<span class="dd-hl-dim">run the land tool</span>`);
+  }
+
+  // Connectivity: frequency + NPPF verdict + usage.
+  const p = stationProps(st.crs);
+  if (p) {
+    const wc = wellConnectedFrom(p);
+    const m = nppfMinDph(st.crs);
+    const bits = [`${Number(p.sustained_tph) || 0}/hr`, `${Number(p.sustained_tph_per_dir) || 0}/dir`];
+    bits.push(wc ? `<b class="dd-ok">WC ✓ ${m ? m.min + " dph" : ""}</b>` : `<span class="dd-hl-dim">not WC</span>`);
+    if (st.usage != null) bits.push(fmtCount(st.usage) + " pax/yr");
+    set("connectivity", bits.join(" · "));
+  }
+
+  // Market: £/m² + profit when an appraisal has run.
+  const ppm2 = (r && deep._marketPpm2) || (a && a.catchment_ppm2) || null;
+  const mb = [];
+  if (ppm2) mb.push(`£${Math.round(Number(ppm2)).toLocaleString()}/m²`);
+  if (deep._lastProfitPct != null)
+    mb.push(`profit <b class="${deep._lastProfitPct >= 15 ? "dd-ok" : "dd-warn"}">${deep._lastProfitPct.toFixed(1)}%</b>`);
+  set("market", mb.length ? mb.join(" · ") : `<span class="dd-hl-dim">appraisal pending</span>`);
+
+  // Constraints: Green Belt share + friction.
+  const gbHa = r ? Number(r.green_belt_ha) : (a ? Number(a.green_belt_ha) : null);
+  const fr = r ? Number(r.friction) : (a ? Number(a.constraint_friction) : null);
+  const cb = [];
+  if (gbHa != null && ha) cb.push(`GB ${Math.round(100 * Math.min(1, gbHa / Math.max(ha, 0.01)))}%`);
+  if (fr != null) cb.push(`friction ${fr.toFixed(2)}`);
+  set("constraints", cb.length ? cb.join(" · ") : `<span class="dd-hl-dim">—</span>`);
+}
+
+function renderDdKeyfactsDetail() {
+  const el = document.getElementById("dd-keyfacts-detail");
+  if (!el || !deep.station) return;
+  const st = deep.station, ctx = deep._ctx;
+  const rows = [];
+  if (ctx && ctx.lad_name) rows.push(["Local authority", ctx.lad_name]);
+  if (ctx && ctx.control) {
+    rows.push(["Council control", ctx.control === "No overall control"
+      ? `No overall control — ${ctx.largest} largest (${ctx.largest_seats}/${ctx.total_seats})`
+      : `${ctx.control} (${ctx.largest_seats}/${ctx.total_seats} seats)`]);
+  }
+  if (st.region) rows.push(["Region", st.region]);
+  if (st.ttwa_name) rows.push(["Travel to Work Area",
+    `${st.ttwa_name}${st.ttwa_gva_rank != null ? ` · GVA rank #${st.ttwa_gva_rank}` : ""}`]);
+  if (st.crs) rows.push(["Station", `${st.crs}${st.operator ? ` · ${st.operator}` : ""}`]);
+  el.innerHTML =
+    `<div class="dd-kv">${rows.map(([k, v]) =>
+      `<div class="dd-kv-row"><span>${k}</span><b>${v}</b></div>`).join("")}</div>` +
+    (ctx && ctx.control
+      ? `<p class="hint" style="margin-top:6px">Control is the seat arithmetic after the May ${ctx.asof ? ctx.asof.slice(0, 4) : "2026"} elections (Open Council Data UK) — the largest party where it holds a majority — not the coalition actually running the council.</p>`
+      : `<p class="hint" style="margin-top:6px">Council control unavailable for this authority.</p>`);
+}
+
+function renderDdConnectivityDetail() {
+  const el = document.getElementById("dd-connectivity-detail");
+  if (!el || !deep.station) return;
+  const st = deep.station;
+  const p = stationProps(st.crs) || {};
+  const m = nppfMinDph(st.crs);
+  const wc = wellConnectedFrom(p);
+  const rows = [
+    ["Sustained frequency", `${Number(p.sustained_tph) || 0}/hr overall · ${Number(p.sustained_tph_per_dir) || 0}/hr best direction`],
+    ["NPPF status", wc
+      ? `Well-connected — S5(2)(c) minimum ${m ? m.min : 35} dph${m && m.doubleFreq ? " (double frequency)" : ""}`
+      : "Not well-connected — no S5(2)(c) minimum"],
+  ];
+  if (p.connectivity_pctile != null) rows.push(["Connectivity percentile", `${p.connectivity_pctile}`]);
+  if (p.direct_destinations != null) rows.push(["Direct destinations", `${p.direct_destinations}`]);
+  if (p.key_cities) rows.push(["Direct to", String(p.key_cities).split("|").slice(0, 5).join(", ")]);
+  el.innerHTML = `<div class="dd-kv">${rows.map(([k, v]) =>
+    `<div class="dd-kv-row"><span>${k}</span><b>${v}</b></div>`).join("")}</div>`;
+}
+
+function renderDdConstraintsDetail() {
+  const el = document.getElementById("dd-constraints-detail");
+  if (!el || !deep.station) return;
+  const a = deep._assessRow, r = deep.developableResult;
+  const soft = (r && r.soft_cover) || (a && a.soft_cover) || null;
+  const gbHa = r ? Number(r.green_belt_ha) : (a ? Number(a.green_belt_ha) : null);
+  const ha = r ? Number(r.developable_ha) : (a ? Number(a.developable_ha) : null);
+  const fr = r ? Number(r.friction) : (a ? Number(a.constraint_friction) : null);
+  const rows = [];
+  if (gbHa != null) rows.push(["Green Belt", ha ? `${gbHa.toFixed(1)} ha · ${Math.round(100 * Math.min(1, gbHa / Math.max(ha, 0.01)))}% of developable` : `${gbHa.toFixed(1)} ha`]);
+  if (fr != null) rows.push(["Heritage/landscape friction", `${fr.toFixed(2)} <span class="dd-hl-dim">(0 none → 1 blanketed)</span>`]);
+  const softRows = soft ? Object.entries(soft).filter(([, v]) => Number(v) > 0.005)
+    .sort((x, y) => y[1] - x[1])
+    .map(([k, v]) => [k.replace(/_/g, " "), `${Math.round(Number(v) * 100)}% of developable`]) : [];
+  el.innerHTML =
+    (rows.length || softRows.length
+      ? `<div class="dd-kv">${[...rows, ...softRows].map(([k, v]) =>
+          `<div class="dd-kv-row"><span>${k}</span><b>${v}</b></div>`).join("")}</div>`
+      : `<p class="hint">No stored constraint summary for this station yet.</p>`) +
+    `<p class="hint" style="margin-top:6px">Hard exclusions (flood zone 3, SSSI, SAC/SPA/Ramsar, ancient woodland, scheduled monuments…) are already subtracted from the developable figure. Adjust which, and see them mapped, under <b>Capacity · yield → Subtract constraints</b>.</p>`;
+}
+
 function buildDeepDivePanel(meta) {
   const toggles = AMENITY_KINDS.map(a => `
     <label class="dd-row">
@@ -10757,11 +10932,35 @@ function buildDeepDivePanel(meta) {
       <button class="dd-close" aria-label="Close deep dive" title="Close">×</button>
     </div>
 
-    <div class="dd-body">
-      ${meta.station ? developableSectionHTML(meta.station) : ""}
-      ${meta.station ? `
-      <section class="dd-block" data-section="viability">
-        <button class="dd-block-head" type="button" aria-expanded="true">
+    <div class="dd-body${meta.station ? " dd-body5" : ""}">
+      ${meta.station ? ddGroupHead("keyfacts", "Key facts") + `
+      <div class="dd-group-content" data-gc="keyfacts">
+        <div id="dd-keyfacts-detail"><p class="hint">Looking up the local authority…</p></div>
+        ${stationSectionHTML(meta.station)}
+      </div>
+      ` + ddGroupHead("capacity", "Capacity · yield") + `
+      <div class="dd-group-content" data-gc="capacity">
+      ${developableSectionHTML(meta.station)}
+      <section class="dd-block collapsed" data-section="assembly">
+        <button class="dd-block-head" type="button" aria-expanded="false">
+          <span class="dd-h">Site assembly</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <p class="hint">Group several developable plots into one site, appraise the whole, and export a structured site report with a map extract.</p>
+          <button type="button" id="dd-assemble-toggle" class="plot-mode-btn">▶ Assemble a site</button>
+          <div id="dd-assembly-summary"></div>
+        </div>
+      </section>
+      <section class="dd-synthesis" id="dd-synthesis"></section>
+      </div>
+      ` + ddGroupHead("connectivity", "Connectivity") + `
+      <div class="dd-group-content" data-gc="connectivity">
+        <div id="dd-connectivity-detail"></div>
+      </div>
+      ` + ddGroupHead("market", "Market · viability") + `
+      <div class="dd-group-content" data-gc="market">
+      <section class="dd-block collapsed" data-section="viability">
+        <button class="dd-block-head" type="button" aria-expanded="false">
           <span class="dd-h">Viability — residual appraisal</span><span class="dd-caret">▾</span>
         </button>
         <div class="dd-block-content">
@@ -10771,18 +10970,12 @@ function buildDeepDivePanel(meta) {
           <button type="button" class="plot-mode-btn" id="dd-catchment-report">Full report…</button>
         </div>
       </section>
-      <section class="dd-block" data-section="assembly">
-        <button class="dd-block-head" type="button" aria-expanded="true">
-          <span class="dd-h">Site assembly</span><span class="dd-caret">▾</span>
-        </button>
-        <div class="dd-block-content">
-          <p class="hint">Group several developable plots into one site, appraise the whole, and export a structured site report with a map extract.</p>
-          <button type="button" id="dd-assemble-toggle" class="plot-mode-btn">▶ Assemble a site</button>
-          <div id="dd-assembly-summary"></div>
-        </div>
-      </section>` : ""}
-      ${meta.station ? `<section class="dd-synthesis" id="dd-synthesis"></section>` : ""}
-      ${meta.station ? stationSectionHTML(meta.station) : ""}
+      </div>
+      ` + ddGroupHead("constraints", "Constraints") + `
+      <div class="dd-group-content" data-gc="constraints">
+        <div id="dd-constraints-detail"><p class="hint">Constraint coverage loads with the station assessment.</p></div>
+      </div>
+      ` : ""}
 
       <section class="dd-block" data-section="score">
         <button class="dd-block-head" type="button" aria-expanded="true">
@@ -10886,6 +11079,50 @@ function buildDeepDivePanel(meta) {
         </div>
       </section>
     </div>`;
+
+  // Station dives: fold the shared blocks (deprivation, catchment, brownfield,
+  // amenities, access) into their five-group homes, collapse every inner block
+  // so all five group headers fit on screen, and wire the group toggles. The
+  // blocks keep their IDs — everything that binds to them later still works.
+  if (meta.station) {
+    const gc = (k) => panel.querySelector(`[data-gc="${k}"]`);
+    const move = (sel, dest) => {
+      const n = panel.querySelector(sel);
+      if (n && dest) dest.appendChild(n);
+    };
+    move('[data-section="brownfield"]', gc("capacity"));
+    move('[data-section="score"]', gc("market"));
+    move('[data-section="catchment"]', gc("market"));
+    move('[data-section="amenities"]', gc("market"));
+    move('[data-section="access"]', gc("connectivity"));
+    // Inner blocks start collapsed; the group headline carries the summary.
+    panel.querySelectorAll(".dd-group-content .dd-block").forEach(b => {
+      b.classList.add("collapsed");
+      const h = b.querySelector(".dd-block-head");
+      if (h) h.setAttribute("aria-expanded", "false");
+    });
+    // The developable tool is the sidebar's main act — it opens expanded
+    // inside its (collapsed) group so one click on "Capacity" shows it whole.
+    const dev = panel.querySelector('[data-section="developable"]');
+    if (dev) {
+      dev.classList.remove("collapsed");
+      const h = dev.querySelector(".dd-block-head");
+      if (h) h.setAttribute("aria-expanded", "true");
+    }
+    panel.querySelectorAll(".dd-group-head").forEach(head => {
+      head.addEventListener("click", () => {
+        const open = head.getAttribute("aria-expanded") === "true";
+        head.setAttribute("aria-expanded", open ? "false" : "true");
+        const content = head.nextElementSibling;
+        if (content) content.classList.toggle("dd-gc-open", !open);
+        const caret = head.querySelector(".dd-caret");
+        if (caret) caret.textContent = open ? "▸" : "▾";
+      });
+    });
+    deep._ctx = null; deep._assessRow = null; deep._lastProfitPct = null;
+    renderDdHeadlines();
+    fetchDdContext(meta.station);
+  }
 
   setDeepPanelOpen(true);
   panel.querySelector(".dd-close").addEventListener("click", exitDeepDive);
@@ -14339,6 +14576,243 @@ wireImdToggle();          // IMD choropleth is a context layer, OFF by default
 wireSideBoxes();          // minimiseable left boxes (persisted per box)
 wireCollapsibleBlocks();  // secondary blocks (define-an-area) ship collapsed
 wireModeSwitch();         // Explore / Site-sift mode switch
+// ===========================================================================
+// Data-centre sift — the nationwide subtractive screen (bottom-left box).
+// docs/PLAN_DATACENTRE_SIFT.md. A 1 km grid (dc_grid, migration 0070) carries
+// ~16 quantised attributes per cell; the checkboxes and sliders compose a
+// MapLibre expression over them, so every control change recolours the map
+// client-side with no fetch. Two tiers of cells: whole-GB 4 km blocks fetched
+// once (best-case aggregates — coarse green means "somewhere in this block
+// could qualify"), and raw 1 km cells per viewport from z9.
+const DC = {
+  active: false,
+  lo: null,            // FeatureCollection, 4 km blocks (whole GB, cached)
+  crit: Object.assign({
+    exBuilt: true, exTrans: true, exWater: true, exProt: true,
+    exFz3: true, exFz2: false, exHerit: false, exGB: false,
+    exAlc: false, exAqma: false,
+    maxSlopeDeg: 5, powerKm: 5, powerAttr: "d_sub132",
+    avoidQueue: false, maxQueueMw: 2000,
+    greenOnly: false, opacity: 0.4,
+  }, mmStore.get("dcSiftConfig", {})),
+};
+
+function dcPersist() { mmStore.set("dcSiftConfig", DC.crit); }
+
+// A cell with built_pct = -1 has not been precomputed yet (the grid builds in
+// bands); it renders neutral grey rather than pretending to be red or green.
+function dcPassExpr(c) {
+  const pct = (k, max) => ["<=", ["max", ["get", k], 0], max];
+  const conds = [];
+  if (c.exBuilt) conds.push(pct("built_pct", 10));
+  if (c.exTrans) conds.push(pct("transp_pct", 20));
+  if (c.exWater) conds.push(pct("water_pct", 20));
+  if (c.exProt)  conds.push(pct("prot_pct", 5));
+  if (c.exHerit) conds.push(pct("herit_pct", 10));
+  if (c.exFz3)   conds.push(pct("fz3_pct", 10));
+  if (c.exFz2)   conds.push(pct("fz2_pct", 10));
+  if (c.exGB)    conds.push(pct("gb_pct", 25));
+  if (c.exAlc)   conds.push(pct("alc12_pct", 25));
+  if (c.exAqma)  conds.push(["==", ["get", "aqma"], 0]);
+  conds.push(["<=", ["get", "slope10"], Math.round(c.maxSlopeDeg * 10)]);
+  conds.push(["<=", ["get", c.powerAttr], c.powerKm * 10]);
+  if (c.avoidQueue)
+    conds.push(["<=", ["get", "gsp_mw"], Math.round(c.maxQueueMw / 100)]);
+  return ["all", ...conds];
+}
+
+function dcColorExpr(c) {
+  return ["case",
+    ["<", ["get", "built_pct"], 0], "#9aa2ad",   // not yet computed
+    dcPassExpr(c), "#2f9e44",
+    "#c92a2a"];
+}
+
+function dcOpacityExpr(c) {
+  // Red at three-quarters of the green opacity so eliminated mass recedes.
+  return ["case",
+    ["<", ["get", "built_pct"], 0], c.opacity * 0.4,
+    dcPassExpr(c), c.opacity,
+    c.opacity * 0.75];
+}
+
+// Squares from centroid + size — no geometry travels over the wire (the RPCs
+// return numbers only; serialising national geometry is what made the old
+// bbox layers slow). Local metres-per-degree keeps a 1-4 km square accurate
+// to well under 0.1%.
+function dcCellFeature(row, sizeM) {
+  const dLat = sizeM / 2 / 111320;
+  const dLng = sizeM / 2 / (111320 * Math.cos(row.lat * Math.PI / 180));
+  return { type: "Feature",
+    properties: row,
+    geometry: { type: "Polygon",
+      coordinates: [[[row.lng - dLng, row.lat - dLat], [row.lng + dLng, row.lat - dLat],
+                     [row.lng + dLng, row.lat + dLat], [row.lng - dLng, row.lat + dLat],
+                     [row.lng - dLng, row.lat - dLat]]] } };
+}
+
+async function dcEnsureLo() {
+  if (DC.lo) return DC.lo;
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb.rpc("dc_cells_agg", { res_m: 4000 });
+  if (error || !data) { console.error("dc_cells_agg failed", error); return null; }
+  DC.lo = { type: "FeatureCollection",
+            features: data.map(r => dcCellFeature(r, 4000)) };
+  return DC.lo;
+}
+
+let _dcHiTimer = null;
+async function dcRefreshHi() {
+  if (!DC.active || map.getZoom() < 9) return;
+  const sb = getSupabase();
+  if (!sb) return;
+  const b = map.getBounds();
+  const { data, error } = await sb.rpc("dc_cells_bbox", {
+    w: b.getWest(), s: b.getSouth(), e: b.getEast(), n: b.getNorth(), cap: 30000 });
+  if (error || !data || !DC.active) return;
+  const src = map.getSource("dc-hi-src");
+  if (src) src.setData({ type: "FeatureCollection",
+                         features: data.map(r => dcCellFeature(r, 1000)) });
+}
+
+function dcApplyPaint() {
+  const c = DC.crit;
+  for (const id of ["dc-lo-fill", "dc-hi-fill"]) {
+    if (!map.getLayer(id)) continue;
+    map.setPaintProperty(id, "fill-color", dcColorExpr(c));
+    map.setPaintProperty(id, "fill-opacity", dcOpacityExpr(c));
+    map.setFilter(id, c.greenOnly ? dcPassExpr(c) : null);
+  }
+}
+
+async function dcActivate(on) {
+  DC.active = on;
+  const status = document.getElementById("dc-status");
+  if (!on) {
+    for (const id of ["dc-lo-fill", "dc-hi-fill"])
+      if (map.getLayer(id)) map.removeLayer(id);
+    for (const id of ["dc-lo-src", "dc-hi-src"])
+      if (map.getSource(id)) map.removeSource(id);
+    if (status) status.textContent = "";
+    return;
+  }
+  if (status) status.textContent = "loading grid…";
+  const lo = await dcEnsureLo();
+  if (!lo || !DC.active) { if (status) status.textContent = lo ? "" : "grid unavailable"; return; }
+  const before = overlayBeforeId();
+  if (!map.getSource("dc-lo-src"))
+    map.addSource("dc-lo-src", { type: "geojson", data: lo });
+  if (!map.getSource("dc-hi-src"))
+    map.addSource("dc-hi-src", { type: "geojson",
+      data: { type: "FeatureCollection", features: [] } });
+  if (!map.getLayer("dc-lo-fill"))
+    map.addLayer({ id: "dc-lo-fill", type: "fill", source: "dc-lo-src",
+                   maxzoom: 9, paint: {} }, before);
+  if (!map.getLayer("dc-hi-fill"))
+    map.addLayer({ id: "dc-hi-fill", type: "fill", source: "dc-hi-src",
+                   minzoom: 9, paint: {} }, before);
+  dcApplyPaint();
+  dcRefreshHi();
+  if (status) status.textContent = `${lo.features.length.toLocaleString()} blocks`;
+  dcStats();
+}
+
+let _dcStatsTimer = null;
+function dcStats() {
+  clearTimeout(_dcStatsTimer);
+  _dcStatsTimer = setTimeout(async () => {
+    const sb = getSupabase();
+    const el = document.getElementById("dc-result");
+    if (!sb || !el || !DC.active) return;
+    const c = DC.crit;
+    const { data, error } = await sb.rpc("dc_sift_stats", { p: {
+      exBuilt: c.exBuilt, exTrans: c.exTrans, exWater: c.exWater,
+      exProt: c.exProt, exHerit: c.exHerit, exFz3: c.exFz3, exFz2: c.exFz2,
+      exGB: c.exGB, exAlc: c.exAlc, exAqma: c.exAqma,
+      maxSlope10: Math.round(c.maxSlopeDeg * 10),
+      powerAttr: c.powerAttr, powerMax100: c.powerKm * 10,
+      avoidQueue: c.avoidQueue, maxQueue100: Math.round(c.maxQueueMw / 100),
+    }});
+    if (error || !data) return;
+    const km2 = data.green_cells;   // 1 cell = 1 km²
+    const pct = data.total_cells ? (100 * km2 / data.total_cells) : 0;
+    const tops = (data.top_lads || []).slice(0, 5).map((t, i) =>
+      `${i + 1} ${t.lad_name} <b>${t.km2.toLocaleString()}</b>`).join(" · ");
+    el.innerHTML =
+      `<div class="dc-headline"><b>${km2.toLocaleString()} km²</b> potential ` +
+      `<span class="hint">(${pct.toFixed(1)}% of the grid)</span></div>` +
+      (tops ? `<div class="dc-tops hint">Top districts (km²): ${tops}</div>` : "");
+  }, 600);
+}
+
+function wireDcSiftBox() {
+  const act = document.getElementById("dc-activate");
+  const controls = document.getElementById("dc-controls");
+  if (!act) return;
+  const c = DC.crit;
+
+  act.addEventListener("change", () => {
+    controls.hidden = !act.checked;
+    dcActivate(act.checked);
+  });
+
+  document.querySelectorAll('#dc-controls [data-dc]').forEach(cb => {
+    cb.checked = !!c[cb.dataset.dc];
+    cb.addEventListener("change", () => {
+      c[cb.dataset.dc] = cb.checked;
+      dcPersist(); dcApplyPaint(); dcStats();
+    });
+  });
+
+  const slope = document.getElementById("dc-slope");
+  const slopeVal = document.getElementById("dc-slope-val");
+  const showSlope = () => {
+    const d = Number(slope.value);
+    slopeVal.textContent = `${d.toFixed(1)}° (~${Math.round(Math.tan(d * Math.PI / 180) * 100)}%)`;
+  };
+  slope.value = c.maxSlopeDeg; showSlope();
+  slope.addEventListener("input", () => {
+    c.maxSlopeDeg = Number(slope.value); showSlope();
+    dcPersist(); dcApplyPaint(); dcStats();
+  });
+
+  const pkm = document.getElementById("dc-powerkm");
+  const pkmVal = document.getElementById("dc-powerkm-val");
+  pkm.value = c.powerKm; pkmVal.textContent = `${c.powerKm} km`;
+  pkm.addEventListener("input", () => {
+    c.powerKm = Number(pkm.value); pkmVal.textContent = `${c.powerKm} km`;
+    dcPersist(); dcApplyPaint(); dcStats();
+  });
+
+  const pattr = document.getElementById("dc-powerattr");
+  pattr.value = c.powerAttr;
+  pattr.addEventListener("change", () => {
+    c.powerAttr = pattr.value; dcPersist(); dcApplyPaint(); dcStats();
+  });
+
+  const aq = document.getElementById("dc-avoidqueue");
+  const maxq = document.getElementById("dc-maxqueue");
+  aq.checked = c.avoidQueue; maxq.value = c.maxQueueMw;
+  aq.addEventListener("change", () => { c.avoidQueue = aq.checked; dcPersist(); dcApplyPaint(); dcStats(); });
+  maxq.addEventListener("change", () => { c.maxQueueMw = Number(maxq.value) || 0; dcPersist(); dcApplyPaint(); dcStats(); });
+
+  const go = document.getElementById("dc-greenonly");
+  go.checked = c.greenOnly;
+  go.addEventListener("change", () => { c.greenOnly = go.checked; dcPersist(); dcApplyPaint(); });
+
+  const op = document.getElementById("dc-opacity");
+  op.value = Math.round(c.opacity * 100);
+  op.addEventListener("input", () => { c.opacity = Number(op.value) / 100; dcPersist(); dcApplyPaint(); });
+
+  map.on("moveend", () => {
+    if (!DC.active) return;
+    clearTimeout(_dcHiTimer);
+    _dcHiTimer = setTimeout(dcRefreshHi, 400);
+  });
+}
+
+wireDcSiftBox();          // Data-centre sift (bottom box)
 wirePbsaBox();            // PBSA sift (university rail access, box 3)
 wirePortfolioBox();       // Portfolio scorer (priority-1 tool)
 

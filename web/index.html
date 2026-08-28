@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws112-net-standoff" />
+  <link rel="stylesheet" href="src/styles.css?v=ws113-dc-sift-sidebar" />
 </head>
 <body>
   <div id="app">
@@ -203,6 +203,60 @@
         </div>
       </section>
 
+      <section class="side-box" id="dc-sift-box">
+        <button type="button" class="box-head" aria-expanded="true">
+          <span class="box-title">Data-centre sift</span>
+          <span class="box-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="box-body">
+          <section class="block" id="dc-block">
+            <p class="hint">A nationwide subtractive screen: start from all of Great Britain on a 1 km grid, remove land that fails each test, and what survives shows <b style="color:#2f9e44">green</b> — the rest <b style="color:#c92a2a">red</b>. Every control recolours the map instantly.</p>
+            <label class="dd-row dd-row-all">
+              <input type="checkbox" id="dc-activate" />
+              <span class="dd-label"><strong>Activate the sift map</strong></span>
+              <span class="dd-stat" id="dc-status"></span>
+            </label>
+            <div id="dc-controls" hidden>
+              <div class="dc-sec">1 · Remove land</div>
+              <div class="dc-checks">
+                <label><input type="checkbox" data-dc="exBuilt" checked /> Built-up areas</label>
+                <label><input type="checkbox" data-dc="exTrans" checked /> Roads &amp; rail</label>
+                <label><input type="checkbox" data-dc="exWater" checked /> Water</label>
+                <label><input type="checkbox" data-dc="exProt" checked /> Protected nature</label>
+                <label><input type="checkbox" data-dc="exFz3" checked /> Flood zone 3</label>
+                <label><input type="checkbox" data-dc="exFz2" /> Flood zone 2</label>
+                <label><input type="checkbox" data-dc="exHerit" /> Heritage &amp; landscape</label>
+                <label><input type="checkbox" data-dc="exGB" /> Green Belt</label>
+                <label><input type="checkbox" data-dc="exAlc" /> Best farmland (ALC 1–2)</label>
+                <label><input type="checkbox" data-dc="exAqma" /> AQMA</label>
+              </div>
+              <div class="dc-sec">2 · Flatness</div>
+              <label class="pbsa-crit"><span>Max mean slope</span>
+                <input type="range" id="dc-slope" min="1" max="15" step="0.5" value="5" />
+                <span class="pbsa-crit-val" id="dc-slope-val">5.0° (~9%)</span></label>
+              <div class="dc-sec">3 · Power</div>
+              <label class="pbsa-crit"><span>Within</span>
+                <input type="range" id="dc-powerkm" min="1" max="25" step="1" value="5" />
+                <span class="pbsa-crit-val" id="dc-powerkm-val">5 km</span></label>
+              <label class="pbsa-crit"><span>of</span>
+                <select id="dc-powerattr">
+                  <option value="d_sub132">≥132 kV substation</option>
+                  <option value="d_sub275">≥275 kV substation</option>
+                  <option value="d_line132">≥132 kV line</option>
+                </select></label>
+              <label class="dc-check-row"><input type="checkbox" id="dc-avoidqueue" />
+                <span>Avoid contested GSPs (queue &gt; <input type="number" id="dc-maxqueue" value="2000" min="0" step="500" style="width:5em"> MW)</span></label>
+              <div class="dc-sec">Result</div>
+              <div id="dc-result" class="dc-result"><span class="hint">Activate to compute.</span></div>
+              <label class="dc-check-row"><input type="checkbox" id="dc-greenonly" /> <span>Green only (hide eliminated land)</span></label>
+              <label class="pbsa-crit"><span>Opacity</span>
+                <input type="range" id="dc-opacity" min="10" max="90" step="5" value="40" /></label>
+              <p class="hint" id="dc-coverage-note">Substation voltages are OSM-tagged (~20% of substations carry one; 1,729 at ≥132 kV) — treat the power test as indicative. Flood zones are England-only; ALC is England-only. Settlement distance, DNO headroom, heat networks and the planning/politics layers land in phase 2–3 (see docs/PLAN_DATACENTRE_SIFT.md).</p>
+            </div>
+          </section>
+        </div>
+      </section>
+
       <!-- Batch analysis setup + results overlays -->
       <div id="batch-setup" class="batch-setup" hidden></div>
       <div id="batch-results" class="batch-results" hidden></div>
@@ -306,6 +360,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws112-net-standoff"></script>
+  <script type="module" src="src/app.js?v=ws113-dc-sift-sidebar"></script>
 </body>
 </html>

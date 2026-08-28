@@ -2682,3 +2682,63 @@ footer {
 @media (max-width: 900px) {
   #sift-legend { left: 10px; bottom: 10px; width: 200px; }
 }
+
+/* ---- Deep-dive five-group layout -------------------------------------------
+   Station dives read as five compact sections, each a header row carrying a
+   LIVE headline; detail expands beneath. All five headers fit on screen. */
+.dd-body5 { display: flex; flex-direction: column; gap: 2px; }
+.dd-group-head {
+  display: flex; align-items: baseline; gap: 10px;
+  width: 100%; text-align: left; cursor: pointer;
+  padding: 10px 10px 9px; margin-top: 6px;
+  background: var(--panel-2, rgba(128,128,128,.07));
+  border: 1px solid var(--ink-line); border-radius: 9px;
+  color: var(--text); font-family: var(--font-ui);
+}
+.dd-group-head:hover { background: var(--panel-3, rgba(128,128,128,.12)); }
+.dd-g-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .07em;
+  text-transform: uppercase; flex: none; min-width: 118px;
+}
+.dd-hl {
+  flex: 1; min-width: 0; font-size: 12px; font-family: var(--font-data);
+  color: var(--text-dim); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dd-hl b { color: var(--text); font-weight: 600; }
+.dd-hl-dim { opacity: .55; font-style: italic; }
+.dd-ok { color: #2f9e44; }
+.dd-warn { color: #e8590c; }
+.dd-group-head .dd-caret { flex: none; font-size: 10px; opacity: .6; }
+
+/* Detail hidden until its header is opened. */
+.dd-group-content { display: none; padding: 2px 2px 6px; }
+.dd-group-content.dd-gc-open { display: block; }
+
+/* Key-value rows used by the detail panes. */
+.dd-kv { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
+.dd-kv-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-size: 11.5px; color: var(--text-dim);
+}
+.dd-kv-row b { color: var(--text); font-weight: 600; text-align: right; font-family: var(--font-data); }
+
+/* ---- Data-centre sift box --------------------------------------------------- */
+.dc-sec {
+  margin: 10px 0 5px; font-size: 10px; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--text-dim); font-weight: 700;
+}
+.dc-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; }
+.dc-checks label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--text); cursor: pointer;
+}
+.dc-check-row {
+  display: flex; align-items: center; gap: 7px; margin-top: 6px;
+  font-size: 11.5px; color: var(--text); cursor: pointer;
+}
+.dc-result { margin: 4px 0 6px; }
+.dc-headline { font-size: 13px; }
+.dc-headline b { font-family: var(--font-data); font-size: 15px; color: #2f9e44; }
+.dc-tops { margin-top: 3px; line-height: 1.5; }
+.dc-tops b { font-family: var(--font-data); color: var(--text); }
