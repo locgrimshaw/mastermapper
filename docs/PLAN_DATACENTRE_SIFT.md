@@ -306,7 +306,14 @@ committee arithmetic; control changes each May (`asof` shown).
 
 ## 6. Phased roadmap
 
-**Phase 1 — visible green/red map from existing data (≈4–6 days).** No new
+**Phase 1 — visible green/red map from existing data. SHIPPED 2026-08-28.**
+Migrations 0070 (dc_grid + rebuild + serving RPCs + stats) and 0071 (council
+control + dd_station_context); the bottom-left box with erase set, slope,
+power tier/distance, GSP queue, green-only and opacity controls; two-tier
+numbers-only serving (4 km whole-GB blocks + 1 km viewport cells) instead of
+tiles. Grid precompute runs in 16 northing bands; uncomputed cells render
+neutral grey. Council control shipped EARLY (from phase 3) because the deep
+dive's Key Facts wanted it. Original scope note follows. No new
 ingestion. 0067 migration (table + rebuild + stats + grants); workflow
 `build-dc-grid.yml` (loop rebuild parts → mirror to map_features → tile via
 the build-ptal-tiles chain, z4–z11); `#dc-sift-box` markup; `DC` state +

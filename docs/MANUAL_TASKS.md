@@ -246,3 +246,14 @@ university's gateway stations. That needs the National Rail timetable:
 5. When the run shows a green tick, hard-refresh the map (Ctrl/Cmd-Shift-R)
    and the layers will populate. Any dataset that still failed shows a
    ⚠ warning in the run's logs saying exactly what it needs.
+
+## Council control — annual refresh (after each May's elections)
+
+`public.council_control` is derived from Open Council Data UK's councillor
+CSV (https://opencouncildata.co.uk/csv2.php?y=<year>, public domain). Control
+= largest party where it holds a seat majority, else "No overall control" —
+the SEAT arithmetic, not the coalition actually running the council. To
+refresh: download the new year's csv2, group by council counting party seats,
+and upsert into council_control (the deploy session did this via SQL in
+2026-08; a `build_council_control.py` pipeline script is the phase-3 home for
+it). The deep dive's Key Facts group and dd_station_context() read it.
