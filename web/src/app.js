@@ -124,7 +124,36 @@ const DENSITY_BANDS = { urban: 4000, suburban: 1000 };
 // Default dwellings-per-hectare (dph) per regime; surfaced as editable inputs so
 // the assumptions are adjustable. Urban applies a higher inner-ring density
 // (within inner_radius_m of the station) and the suburban rate beyond it.
-const DPH_DEFAULTS = { rural: 40, suburban: 50, urbanOuter: 50, urbanInner: 100 };
+//
+// These ARE the Framework's own numbers, not a house assumption sitting above
+// them. Policy S5(2)(c) sets 35 dph as the minimum within reasonable walking
+// distance of a well-connected station, rising to 45 where the service is at
+// least twice the well-connected frequency. We carried 40/50 from the pre-2026
+// Framework long after the new one landed, which put every capacity in the tool
+// roughly 12% above what the policy actually requires and out of step with the
+// published analyses of the same policy. The urban inner ring stays at 100 —
+// that is an intensification assumption for the first few hundred metres, which
+// S5(3) invites (the minima are to be exceeded where possible), and it only
+// applies in the urban regime.
+const DPH_DEFAULTS = { rural: 35, suburban: 45, urbanOuter: 45, urbanInner: 100 };
+
+// Annex B's GVA limb of the well-connected test: a Travel to Work Area in the
+// top 80 of England by GVA. The stations GeoJSON carries a `well_connected`
+// flag, but it was computed against the 2024 draft's top 60 until
+// build_ttwa_gva.py was corrected, and a stale copy of the file under-counts by
+// 86 stations. Derive from `ttwa_gva_rank`, which is cut-independent, and fall
+// back to the flag only where the rank is missing (16 unmatched stations).
+const TTWA_TOP_N = 80;
+
+function wellConnectedFrom(p) {
+  if (!p) return false;
+  const freq = p.meets_frequency === true || p.meets_frequency === "true"
+            || Number(p.meets_frequency) === 1;
+  if (!freq) return false;
+  const rank = p.ttwa_gva_rank != null && p.ttwa_gva_rank !== "" ? Number(p.ttwa_gva_rank) : null;
+  if (rank != null && Number.isFinite(rank)) return rank <= TTWA_TOP_N;
+  return p.well_connected === true || p.well_connected === "true";
+}
 
 // Constraint kinds the developable-land RPC can subtract, with UI labels. Order
 // here is the display order of the checkboxes. `on` = checked by default.
@@ -5210,8 +5239,11 @@ async function profileStation(p, point) {
     // walk-time catchment).
     stationCentre: coords,
     station: {
-      // NPPF well-connected-station test (top-60 TTWA by GVA AND meets frequency).
-      well_connected: sp.well_connected === true || sp.well_connected === "true",
+      // NPPF well-connected-station test: a top-80 TTWA by GVA AND the
+      // frequency limb. Derived from the rank rather than read straight off the
+      // feature, so a stale GeoJSON built against the draft's top-60 cut cannot
+      // quietly demote 86 stations in the dive while the shortlist promotes them.
+      well_connected: wellConnectedFrom(sp),
       meets_frequency: sp.meets_frequency === true || sp.meets_frequency === "true" || Number(sp.meets_frequency) === 1,
       ttwa_name: sp.ttwa_name || null,
       ttwa_gva_rank: sp.ttwa_gva_rank != null && sp.ttwa_gva_rank !== "" ? Number(sp.ttwa_gva_rank) : null,
@@ -5754,7 +5786,10 @@ function runDeepDive(catchment, meta) {
   deep.developableVisible = false;
   deep.developableRegime = "auto";
   deep.developableDensity = null;
-  deep.developableDph = { ...DPH_DEFAULTS };
+  // Seed from the station's own NPPF floor where it has one, so a dive opens
+  // sizing the same scheme the shortlist row does. Without this a Tier B
+  // station showed 35 dph in the sift and the regime table's rate in its dive.
+  deep.developableDph = dphDefaultsFor(meta.station && meta.station.crs);
   deep.publicLand = null;
   deep.publicLandVisible = false;
   deep._plots = null;
@@ -6869,6 +6904,37 @@ function homesFor(areaHa, innerHa, regime, dph) {
   return Math.round(a * (d[regime] || d.suburban));
 }
 
+// The dive's starting densities for a given station. Where policy S5(2)(c)
+// sets a minimum (35, or 45 at double frequency), that minimum IS the default
+// across the flat-rate regimes — it applies to the whole 800 m catchment
+// regardless of how rural or suburban the land reads. The urban inner ring
+// keeps its higher intensification rate, never below the policy minimum.
+function dphDefaultsFor(crs) {
+  const m = crs ? nppfMinDph(crs) : null;
+  if (!m) return { ...DPH_DEFAULTS };
+  return { rural: m.min, suburban: m.min, urbanOuter: m.min,
+           urbanInner: Math.max(DPH_DEFAULTS.urbanInner, m.min) };
+}
+
+// The policy line under the dive's four density boxes: which minimum applies
+// here and why, plus a warning if a hand-typed rate has gone under it. We do
+// NOT silently clamp — testing a below-policy scheme is a legitimate thing to
+// want to do — but an appraisal that quietly breaches S5(2)(c) should say so.
+function ddDphPolicyNoteHTML(dph) {
+  const m = nppfMinDph(deep.station && deep.station.crs);
+  if (!m) return "";
+  const under = ["rural", "suburban", "urbanOuter", "urbanInner"]
+    .filter(k => (Number(dph[k]) || 0) < m.min);
+  return `<p class="hint" style="margin-top:6px">NPPF minimum here: <strong>${m.min} dph</strong>` +
+    (m.doubleFreq
+      ? ` — ${m.tph}/hr overall and ${m.perDir}/hr each way is at least twice the well-connected minimum, so policy S5(2)(c) sets 45 rather than 35`
+      : ` — a well-connected station at ${m.tph}/hr, so S5(2)(c) sets 35`) +
+    `. S5(3) asks that the minima be exceeded where possible, so these rates are a floor, not a target.` +
+    (under.length
+      ? ` <strong>${under.length === 1 ? "One rate is" : `${under.length} rates are`} below it</strong> — capacity shown here would not meet the policy minimum.`
+      : "") + `</p>`;
+}
+
 // The sift's single-density override, or null when it is on per-station
 // floors. Read by homesFor, so every capacity in the app answers to it.
 function siftOneDensity() {
@@ -7923,7 +7989,7 @@ function developableSectionHTML(station) {
             <label class="dd-bf-filter"><span>Urban outer dph</span><input type="number" id="dd-dph-urban-outer" min="1" max="1000" value="${dph.urbanOuter}" /></label>
             <label class="dd-bf-filter"><span>Urban inner dph</span><input type="number" id="dd-dph-urban-inner" min="1" max="1000" value="${dph.urbanInner}" /></label>
           </div>
-          ${siftOneDensity() ? `<p class="dd-dph-override">Capacity here is using <strong>${siftOneDensity()} dph everywhere</strong> — the single density set in step 2 of the sift — so this dive and the shortlist size the same scheme. The four rates above are paused while that is on; switch the sift back to per-station density floors to use them.</p>` : ""}
+          ${siftOneDensity() ? `<p class="dd-dph-override">Capacity here is using <strong>${siftOneDensity()} dph everywhere</strong> — the single density set in step 2 of the sift — so this dive and the shortlist size the same scheme. The four rates above are paused while that is on; switch the sift back to per-station density floors to use them.</p>` : ddDphPolicyNoteHTML(dph)}
           <div id="dd-developable-summary"></div>
           <label class="dd-row dd-row-all">
             <input type="checkbox" class="enable" id="dd-publicland-show" />
@@ -12926,8 +12992,11 @@ function nppfMinDph(crs) {
       }
     }
     const p = nppfMinDph._byCrs.get(crs);
-    if (!p || !p.meets_frequency) return null;   // the minima attach to
-    const tph = Number(p.sustained_tph) || 0;    // well-connected stations only
+    // The minima attach to well-connected stations only, and "well connected"
+    // is both limbs — frequency AND a top-80 TTWA. Gating on frequency alone
+    // claimed a policy floor for 311 stations that do not have one.
+    if (!wellConnectedFrom(p)) return null;
+    const tph = Number(p.sustained_tph) || 0;
     const dir = Number(p.sustained_tph_per_dir) || 0;
     const dbl = tph >= DOUBLE_TPH || dir >= DOUBLE_TPH_PER_DIR;
     return { min: dbl ? NPPF_MIN_DPH_HIGH : NPPF_MIN_DPH, doubleFreq: dbl,
@@ -13411,9 +13480,9 @@ const SIFT_STEPS = [
   // of both old predicates: nothing passes or fails differently.
   { key: "connectivity", title: "1 · Station gate — connectivity & tier",
     about: {
-      what: "The entry gate. Every station is classed by the NPPF's two-tier test: Tier A — inside a settlement, where station-adjacent development is a 'default yes'; Tier B — outside a settlement but well-connected (a genuine turn-up-and-go service in an economically significant area), where the NPPF permits Green Belt release (policy GB7(1)(h), subject to the GB8 Golden Rules); anything else is ineligible. The tier also sets the density floor used for dwelling capacity: 50 dph for well-connected stations, else 40 dph.",
-      source: "NPPF (August 2026), policies S5(1)(h), L3 and GB7(1)(h) — residential development within reasonable walking distance of a well-connected station — with 'well-connected station' defined in Annex B. Service test: at least 4 trains or trams per hour overall, or 2 per hour in any one direction, through the normal weekday daytime timetable. The GVA limb uses a top-80 Travel to Work Area, per the published definition — corrected from the 2024 draft's top 60 in migration 0063, which moved 86 stations up a tier (949 well-connected to 1,035). The Framework fixes the vintage too: 2023 GVA data applies until the day after the 2028 data publishes, then holds for five-year periods. Density floors of 40/50 dph are our own planning assumption, deliberately set above the Framework's minima of 35/45 dph, which policy S5(3) requires to be exceeded where possible.",
-      calc: "meets_frequency = sustained trains/trams ≥ 4/hour (or ≥ 2/hour each direction), from the GB rail timetable. well_connected = meets_frequency AND top-60 TTWA. 'In settlement' is deliberately NOT a point-in-polygon test — a station often sits in the railway gap of a built-up-area polygon, which wrongly flagged dense urban stations (e.g. South Bermondsey) as out-of-settlement. Instead we measure the BUILT-UP FRACTION of the 800 m catchment (OS Open Built-Up Areas): in-settlement when ≥ 40% built-up, or ≥ 20% with built-up land within 100 m. Tier A = in-settlement; Tier B = out-of-settlement AND well-connected; else ineligible. Density floor = 50 dph if well-connected, else 40 dph." },
+      what: "The entry gate. Every station is classed by the NPPF's two-tier test: Tier A — inside a settlement, where station-adjacent development is a 'default yes'; Tier B — outside a settlement but well-connected (a genuine turn-up-and-go service in an economically significant area), where the NPPF permits Green Belt release (policy GB7(1)(h), subject to the GB8 Golden Rules); anything else is ineligible. The tier also sets the density floor used for dwelling capacity. For a well-connected station that floor is policy S5(2)(c) itself — 35 dph, rising to 45 where the service runs at least twice the well-connected frequency. Tier A in-settlement stations carry no S5(2)(c) minimum, so we apply the same 35 dph baseline as a planning assumption rather than a policy requirement.",
+      source: "NPPF (August 2026), policies S5(1)(h), L3 and GB7(1)(h) — residential development within reasonable walking distance of a well-connected station — with 'well-connected station' defined in Annex B. Service test: at least 4 trains or trams per hour overall, or 2 per hour in any one direction, through the normal weekday daytime timetable. The GVA limb uses a top-80 Travel to Work Area, per the published definition — corrected from the 2024 draft's top 60 in migration 0063, which moved 86 stations up a tier (949 well-connected to 1,035). The Framework fixes the vintage too: 2023 GVA data applies until the day after the 2028 data publishes, then holds for five-year periods. Density floors are the Framework's own minima under policy S5(2)(c) — 35 dph within reasonable walking distance of a well-connected station, 45 where frequency is at least double the Annex B threshold (≥ 8 trains/hour overall or ≥ 4 in one direction). Policy S5(3) requires those minima to be exceeded where possible, so they are a floor on capacity, not a forecast of it. We previously carried 40/50 dph from the pre-2026 Framework, which sized every catchment about 12% above what the policy asks and put us out of step with published analyses of the same policy.",
+      calc: "meets_frequency = sustained trains/trams ≥ 4/hour (or ≥ 2/hour each direction), from the GB rail timetable. well_connected = meets_frequency AND top-80 TTWA by GVA. 'In settlement' is deliberately NOT a point-in-polygon test — a station often sits in the railway gap of a built-up-area polygon, which wrongly flagged dense urban stations (e.g. South Bermondsey) as out-of-settlement. Instead we measure the BUILT-UP FRACTION of the 800 m catchment (OS Open Built-Up Areas): in-settlement when ≥ 40% built-up, or ≥ 20% with built-up land within 100 m. Tier A = in-settlement; Tier B = out-of-settlement AND well-connected; else ineligible. Density floor = 45 dph where sustained frequency is ≥ 8/hour overall or ≥ 4/hour in one direction, else 35 dph for a well-connected or in-settlement station (public.nppf_density_floor, migration 0065)." },
     // The AND of the two former predicates. In-settlement stations are exempt
     // from the service tests by default (the NPPF 'default yes'); the strict
     // toggle applies them everywhere. The tier checkboxes then pick which
@@ -13530,7 +13599,7 @@ function siftNppfMinHTML() {
     `at double frequency — <strong>${high.toLocaleString()}</strong> of ` +
     `${(high + base).toLocaleString()} well-connected stations in this list run ` +
     `8+ trains/hour (or 4+ each way) and carry the higher floor. Both are ` +
-    `minima to be exceeded (S5(3)); the tool's own 40/50 sits above them.</p>`;
+    `minima to be exceeded (S5(3)), so treat this as the floor on capacity, not the answer.</p>`;
 }
 
 // What the minimum-hectares threshold actually MEANS in homes, recomputed as
@@ -13567,13 +13636,13 @@ function siftStepControlsHTML(key) {
   const chk = v => v ? " checked" : "";
   switch (key) {
     case "connectivity":
-      return `<p class="hint">Every station lands in one of two NPPF tiers — or neither. <strong>Tier A · in-settlement</strong>: the catchment is already built-up, so development is a 'default yes' regardless of service level. <strong>Tier B · well-connected, out-of-settlement</strong>: a genuine turn-up-and-go service (≥4 trains/hour, or 2 each way) in a top-60 economic area — where the NPPF permits Green Belt release. Everything else is <strong>ineligible</strong>. The tier also sets the density floor: 50 dph well-connected, else 40 dph. Tick which classes go forward.</p>` +
+      return `<p class="hint">Every station lands in one of two NPPF tiers — or neither. <strong>Tier A · in-settlement</strong>: the catchment is already built-up, so development is a 'default yes' regardless of service level. <strong>Tier B · well-connected, out-of-settlement</strong>: a genuine turn-up-and-go service (≥4 trains/hour, or 2 each way) in a top-80 economic area — where the NPPF permits Green Belt release. Everything else is <strong>ineligible</strong>. The tier also sets the density floor: 35 dph, or 45 where the service runs at least double the well-connected frequency — policy S5(2)(c)'s own minima for a well-connected station, and the same 35 dph baseline applied as an assumption for Tier A. Tick which classes go forward.</p>` +
         `<label class="dd-row"><input type="checkbox" id="sift-tierA"${chk(C.tierA)}> <span>Tier A · in-settlement ('default yes')</span></label>` +
         `<label class="dd-row"><input type="checkbox" id="sift-tierB"${chk(C.tierB)}> <span>Tier B · well-connected, out-of-settlement (Green Belt permitted)</span></label>` +
         `<label class="dd-row"><input type="checkbox" id="sift-inelig"${chk(C.ineligible)}> <span>Include ineligible stations (they still face the service-frequency test)</span></label>` +
         `<p class="hint" style="margin-top:8px"><strong>Stricter than the NPPF</strong> (optional):</p>` +
         `<label class="dd-row"><input type="checkbox" id="sc-strict"${chk(!C.exemptInSettlement)}> <span>Apply the service-frequency test inside settlements too</span></label>` +
-        `<label class="dd-row"><input type="checkbox" id="sc-wc"${chk(C.requireWellConnected)}> <span>Require full 'well-connected' status (frequency + top-60 TTWA)</span></label>` +
+        `<label class="dd-row"><input type="checkbox" id="sc-wc"${chk(C.requireWellConnected)}> <span>Require full 'well-connected' status (frequency + top-80 TTWA)</span></label>` +
         `<p class="hint" style="margin-top:4px">The NPPF treats in-settlement stations as a 'default yes' whatever their timetable — the first toggle removes that exemption. The second demands the full well-connected definition wherever the service tests apply.</p>`;
     case "developable": {
       const custom = C.dphMode === "custom" && Number(C.dphCustom) > 0;
@@ -13584,7 +13653,7 @@ function siftStepControlsHTML(key) {
         siftNumField("sift-minyield", "Min dwelling capacity", C.minYield || 0, 50) +
         `<p class="hint" style="margin-top:10px"><strong>Density</strong> — the NPPF sets its densities near a well-connected station as <em>minima to be exceeded where possible</em> (policy S5), so the floor is a starting point, not a ceiling.</p>` +
         siftNppfMinHTML() +
-        `<label class="dd-row"><input type="radio" name="sift-dph" id="sift-dph-floor"${chk(!custom)}> <span>Each station's own density floor <span class="hint">(40 dph, 50 where well-connected — above the NPPF minimum of 35/45)</span></span></label>` +
+        `<label class="dd-row"><input type="radio" name="sift-dph" id="sift-dph-floor"${chk(!custom)}> <span>Each station's own density floor <span class="hint">(the NPPF minimum: 35 dph, 45 at double frequency)</span></span></label>` +
         `<label class="dd-row"><input type="radio" name="sift-dph" id="sift-dph-custom"${chk(custom)}> <span>Apply one density everywhere</span>` +
           `<input type="number" id="sift-dph-val" min="10" max="400" step="5" value="${Number(C.dphCustom) > 0 ? Number(C.dphCustom) : 75}" style="width:5.5em;margin-left:8px"> <span class="hint">dph</span></label>` +
         `<p class="hint" style="margin-top:4px">Raising the density recomputes every capacity, every appraisal and every total — it is the fastest way to see which stations only stack up as a denser scheme. Typical reference points: 35–45 dph suburban houses, 75–120 dph mid-rise flats, 150+ dph urban apartment blocks.</p>` +
@@ -13911,7 +13980,7 @@ function renderSiftTable(surv, results) {
     `<th title="Rank position within the current survivors, ordered by the 'Rank by' setting on the final step.">#</th>` +
     `<th title="Station name and region. Heavy-rail stations from the National Rail dataset (2,019 stations in England).">Station</th>` +
     `<th title="NPPF tier. A = in-settlement (≥40% of the 800 m catchment is built-up, per OS Open Built-Up Areas — or ≥20% with built-up land within 100 m). B = well-connected station outside a settlement (Green Belt permitted). Sets eligibility.">Tier</th>` +
-    `<th title="Dwelling capacity = net developable hectares × density. Density is each station's own floor (50 dph if well-connected, else 40 — both above the NPPF minimum of 35/45 dph near a well-connected station), or the single dph you set in step 2. Developable ha = 800 m catchment minus built-up land, green space, roads + railway, flood zone 3, and hard environmental designations (PostGIS ST_Difference). ★ marks capacity of 1,500+ dwellings — the NPPF's strategic-site scale. Hover a cell for the ha and dph used.">Capacity</th>` +
+    `<th title="Dwelling capacity = net developable hectares × density. Density is each station's own NPPF floor (35 dph near a well-connected station, 45 where the service runs at least double that frequency — policy S5(2)(c)), or the single dph you set in step 2. Developable ha = 800 m catchment minus built-up land, green space, roads + railway, flood zone 3, and hard environmental designations (PostGIS ST_Difference). ★ marks capacity of 1,500+ dwellings — the NPPF's strategic-site scale. Hover a cell for the ha and dph used.">Capacity</th>` +
     `<th title="Regeneration need — the station's catchment deprivation as a national percentile (population-weighted IMD 2019 of LSOAs within 800 m). 100 = most deprived. ⬡ marks developable land in the Green Belt.">Need</th>` +
     `<th title="Viability — profit on cost from a residual appraisal (GDV − build − soft costs − land). GDV uses each station's local Land Registry £/m²; all assumptions are set on the Viability step. Colour = viable / marginal / unviable vs your profit target.">Via</th>` +
     `</tr></thead><tbody>` +

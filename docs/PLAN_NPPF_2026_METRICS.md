@@ -25,12 +25,15 @@ direction"*, throughout the daytime — with a reasonable prospect of that
 service counting too, where upgrades are planned or agreed with the operator.
 
 The frequency limb is unchanged from the draft. The GVA limb moved from top 60
-to **top 80**. `pipeline/build_ttwa_gva.py` still has `TOP_N = 60`.
+to **top 80**. **DONE**: `pipeline/build_ttwa_gva.py` is now `TOP_N = 80` and
+migration 0063 carries the same cut into `stations.well_connected`.
 
-Measured against the live data: **949 stations are well-connected today; 86
-more qualify under the published definition** (all in England), a 9% increase.
-Those 86 are currently one tier down, which suppresses their density floor and,
-where they sit outside a settlement, denies them the Tier B Green Belt route.
+Measured against the live data: **949 stations were well-connected under the
+draft's top-60 cut; 86 more qualify under the published definition** (all in
+England), a 9% increase — 1,035 in total, which is the figure both the database
+and `web/data/stations.geojson` now carry. Those 86 were one tier down, which
+suppressed their density floor and, where they sit outside a settlement, denied
+them the Tier B Green Belt route.
 
 The Framework also fixes the vintage: 2023 GVA data is to be used until the day
 after the 2028 data is published, then held fixed in five-year blocks. That is
@@ -53,14 +56,17 @@ that proposals failing them *"should be refused"*.
 
 Two things follow:
 
-- Our 40 / 50 dph floors are **not** the NPPF minima — they are our own
-  assumption sitting above them. The copy now says so. That is a defensible
-  position (the Framework wants the minima exceeded), but it must not be
-  presented as compliance arithmetic.
+- Our 40 / 50 dph floors were **not** the NPPF minima — they were inherited
+  from the pre-2026 Framework and sat about 12% above what S5(2)(c) asks,
+  which is why our capacity totals ran ahead of published analyses of the same
+  policy. **DONE**: migration 0065 replaces them with the Framework's own
+  35 / 45, stored via `public.nppf_density_floor()` and mirrored in the
+  frontend's `DPH_DEFAULTS` and per-station dive seeding.
 - The 45 dph tier keys on **twice the well-connected frequency** — 8 trains per
-  hour overall, or 4 in one direction — not on "well-connected" itself. We
-  store `meets_frequency` as a boolean and no trains-per-hour figure, so we
-  cannot currently identify that tier at all. See §2.1.
+  hour overall, or 4 in one direction — not on "well-connected" itself.
+  **DONE**: `stations.sustained_tph` / `sustained_tph_per_dir` (0063) are now
+  populated from the timetable-derived GeoJSON, so the tier is live on both
+  sides. 534 of the 1,035 well-connected stations reach it.
 
 ### 0.3 Green Belt schemes owe the Golden Rules — BUILT
 
