@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import os
 import sys
 import zipfile
 from pathlib import Path
@@ -174,22 +175,50 @@ def hhmm_to_minutes(v: int) -> int:
 DAYTIME_START_H, DAYTIME_END_H = 7, 18   # 07:00..18:59 inclusive (12 clock hours)
 
 
-def sustained_tph(dep_hhmm: list[int]) -> tuple[float, int]:
-    """Given departure times (HHMM ints), return (sustained_tph, busiest_clock_hr).
-    sustained_tph = the MINIMUM departures-per-clock-hour across the daytime
-    window — i.e. the level maintained 'throughout the daytime'. A station that
-    does 8/hr at peak but 1/hr midday has sustained_tph = 1."""
-    if not dep_hhmm:
-        return 0.0, 0
+# How many thin clock hours the "throughout the daytime" test tolerates.
+# 0 = a hard minimum across all twelve hours (the original, and still the
+# default). Raising it takes the Nth-lowest hour instead.
+#
+# This is the single most consequential assumption in the frequency test, so it
+# is a knob rather than a constant. A hard min is unforgiving of clock-hour
+# BUCKETING as much as of real gaps: a half-hourly service each way is 4/hr in
+# every hour when it runs at :05 and :35, but drifting to :58 and :28 puts 3 in
+# one bucket and 5 in the next, and the min reads 3. Greenfield runs 88 trains
+# a day with a 9-train peak hour and scores 2.
+#
+# Measured against the Curtography NPPF-2026 tool's independent off-peak figures
+# for 1,238 stations we both cover, the hard min agrees 1,131 times (91.4%).
+# Allowing one thin hour agrees 1,130 times — no better. So the default stays
+# where it is: the disagreement is a genuine difference in reading "throughout
+# the daytime", not an error to be tuned away. The knob exists so the next
+# person can re-test that claim in one run instead of rediscovering it.
+SUSTAINED_ALLOW_THIN_HOURS = int(os.environ.get("SUSTAINED_ALLOW_THIN_HOURS") or "0")
+
+
+def hour_histogram(dep_hhmm: list[int]) -> dict:
+    """Departures per clock hour across the daytime window."""
     buckets = {h: 0 for h in range(DAYTIME_START_H, DAYTIME_END_H + 1)}
     for v in dep_hhmm:
         h = v // 100
         if DAYTIME_START_H <= h <= DAYTIME_END_H:
             buckets[h] += 1
-    counts = list(buckets.values())
+    return buckets
+
+
+def sustained_tph(dep_hhmm: list[int]) -> tuple[float, int]:
+    """Given departure times (HHMM ints), return (sustained_tph, busiest_clock_hr).
+    sustained_tph = the level maintained 'throughout the daytime': the MINIMUM
+    departures-per-clock-hour across the window, or the (N+1)th lowest when
+    SUSTAINED_ALLOW_THIN_HOURS tolerates N thin hours. A station that does 8/hr
+    at peak but 1/hr midday has sustained_tph = 1."""
+    if not dep_hhmm:
+        return 0.0, 0
+    buckets = hour_histogram(dep_hhmm)
+    counts = sorted(buckets.values())
     if not counts:
         return 0.0, 0
-    sustained = min(counts)
+    idx = min(max(0, SUSTAINED_ALLOW_THIN_HOURS), len(counts) - 1)
+    sustained = counts[idx]
     busiest = max(buckets, key=buckets.get)
     return float(sustained), busiest
 
@@ -448,6 +477,12 @@ def build(msn_path: Path, mca_path: Path) -> dict:
         peak_hr_count, peak_hr_start = busiest_hour(s["dep_times"])
         # NPPF "well-connected" frequency test (the rail-service limb).
         sustained_overall, _busiest_h = sustained_tph(s["dep_times"])
+        # The full daytime shape, pipe-joined 07..18. Emitted so the tolerance
+        # above can be re-tested from the CSV rather than by reparsing 500 MB of
+        # CIF that needs National Rail credentials to fetch.
+        hist = hour_histogram(s["dep_times"])
+        hist_str = "|".join(str(hist[h])
+                            for h in range(DAYTIME_START_H, DAYTIME_END_H + 1))
         # best = the busiest single direction (what Annex B's "any one
         # direction" asks for); worst = the quieter one, kept because it
         # describes service quality even though the policy does not test it.
@@ -468,6 +503,7 @@ def build(msn_path: Path, mca_path: Path) -> dict:
             "key_cities": "|".join(cities),
             # NPPF frequency limb (the TTWA-GVA limb is added by a later step):
             "sustained_tph": round(sustained_overall, 1),
+            "tph_by_hour": hist_str,
             # The policy figure. Renaming would break every downstream reader,
             # so the established key now carries the BEST direction (the test
             # as written) and the quieter direction gets its own column.
@@ -499,7 +535,8 @@ def main() -> int:
     fields = ["crs", "trains_per_day", "peak_trains", "peak_hour_count",
               "peak_hour_start", "first_dep", "last_dep",
               "direct_destinations", "key_cities_count", "key_cities",
-              "sustained_tph", "sustained_tph_per_dir", "sustained_tph_worst_dir",
+              "sustained_tph", "tph_by_hour",
+              "sustained_tph_per_dir", "sustained_tph_worst_dir",
               "meets_4tph", "meets_2tph_per_dir", "meets_frequency"]
     with OUT_CSV.open("w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
