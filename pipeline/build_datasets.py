@@ -279,7 +279,7 @@ ALL_DATASETS = [
     "building_height",
     "build_cost_index", "lad_income", "msoa_income", "land_value",
     "cil_rates", "lsoa_boundary", "local_plan_housing", "housing_need",
-    "connectivity_lsoa", "connectivity_lad", "connectivity_oa",
+    "connectivity_lsoa", "connectivity_lad", "connectivity_oa", "ttwa_gva",
 ]
 
 # dataset -> {"count": int|None, "reason": str} filled in as the run proceeds.
@@ -3372,6 +3372,114 @@ def build_connectivity_oa():
     return {key: rows}
 
 
+def build_ttwa_gva():
+    """Travel to Work Areas ranked by GVA — dataset ttwa_gva.
+
+    The geographic half of the NPPF's well-connected-station test, drawn.
+    Annex B admits a station only if it is "located within a top 80 Travel to
+    Work Area located partially or fully within England by Gross Value Added"
+    — so whether a station qualifies depends on a boundary most people have
+    never seen. Mapping it turns an invisible gate into something checkable.
+
+    Ranking is over England-TOUCHING TTWAs only, which is what "partially or
+    fully within England" means: E30 codes are English, K01 codes straddle the
+    Welsh or Scottish border and count, W22 and S22 do not. Ranking the whole
+    UK set instead would push English areas down the list and quietly change
+    who qualifies.
+
+    The vintage is fixed by the Framework, not chosen by us: 2023 GVA applies
+    until the day after the 2028 data publishes, then holds for five-year
+    periods. Do not update it early.
+
+    Inputs are the same two files build_ttwa_gva.py uses, so the layer and the
+    station flags can never disagree about who is in the top 80."""
+    key = "ttwa_gva"
+    gpath, ghow = _resolve_source(key, ["TTWA_GEOJSON_SRC"], None,
+                                  "ttwa_2011.geojson")
+    xpath, xhow = _resolve_source(key, ["TTWA_GVA_SRC"], None, "ttwa_gva.xlsx")
+    if gpath is None or xpath is None:
+        _warn(key, f"needs data/raw/ttwa_2011.geojson ({ghow}) and "
+                   f"data/raw/ttwa_gva.xlsx ({xhow})")
+        _note(key, "missing TTWA inputs")
+        return {}
+
+    year = os.environ.get("TTWA_GVA_YEAR", "2023").strip()
+    top_n = int(os.environ.get("TTWA_TOP_N", "80"))
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(xpath, read_only=True, data_only=True)
+        ws = wb["Table 2"]
+        rows = ws.iter_rows(min_row=2, values_only=True)
+        header = list(next(rows))
+        try:
+            ycol = header.index(year)
+        except ValueError:
+            ycol = header.index(int(year))
+        gva = {}
+        for r in rows:
+            code = r[0]
+            if code and isinstance(r[ycol], (int, float)):
+                gva[str(code).strip()] = float(r[ycol])
+    except Exception as exc:                                # noqa: BLE001
+        _warn(key, f"could not read the GVA workbook: {exc}")
+        _note(key, "unreadable GVA workbook")
+        return {}
+
+    # "Partially or fully within England": English codes plus the cross-border
+    # ones. Wales-only and Scotland-only are not eligible.
+    elig = sorted(((c, g) for c, g in gva.items()
+                   if c.startswith("E30") or c.startswith("K01")),
+                  key=lambda kv: kv[1], reverse=True)
+    rank_of = {c: i + 1 for i, (c, _g) in enumerate(elig)}
+    gva_of = dict(elig)
+    print(f"  [{key}] {len(gva)} TTWAs in the GVA table, {len(elig)} touching "
+          f"England; top {top_n} qualify under Annex B")
+
+    gdf = gpd.read_file(gpath)
+    code_col = _find_col(gdf, ["ttwa11cd", "ttwa_code", "code"], contains=True)
+    name_col = _find_col(gdf, ["ttwa11nm", "ttwa_name", "name"], contains=True)
+    if code_col is None:
+        _warn(key, f"no TTWA code column, got {list(gdf.columns)[:10]}")
+        _note(key, "no code column")
+        return {}
+
+    n_top = n_elig = 0
+
+    def ttwa_props(f):
+        nonlocal n_top, n_elig
+        code = str(_cell(f, code_col) or "").strip()
+        rank = rank_of.get(code)
+        out = {"ttwa_code": code}
+        if rank is None:
+            # Wales-only or Scotland-only: outside the test entirely, which is
+            # a different thing from ranking below the cut.
+            out.update({"eligible": False, "status": "outside_england",
+                        "src": "not partially or fully within England — outside "
+                               "the Annex B test"})
+            return out
+        n_elig += 1
+        top = rank <= top_n
+        if top:
+            n_top += 1
+        out.update({
+            "eligible": True, "rank": rank, "in_top": top,
+            "top_n": top_n,
+            "gva_gbp_m": round(gva_of.get(code, 0)),
+            "status": "in_top" if top else "below_cut",
+            "src": f"GVA {year}, ranked over the {len(elig)} TTWAs partially or "
+                   f"fully within England; Annex B admits the top {top_n}",
+        })
+        return out
+
+    rows = _emit(gdf, key, name_col=name_col, id_col=code_col, want="polygon",
+                 props_fn=ttwa_props)
+    print(f"  [{key}] {len(rows)} polygons; {n_elig} England-touching, "
+          f"{n_top} in the top {top_n}")
+    _note(key, f"{ghow}; {n_top} of {n_elig} England-touching TTWAs qualify",
+          len(rows))
+    return {key: rows}
+
+
 def build_income():
     """Household earnings on LAD polygons — dataset lad_income.
 
@@ -3970,6 +4078,7 @@ GROUPS = (
         (["housing_need"], build_housing_need, []),
         (["connectivity_lsoa", "connectivity_lad"], build_connectivity, []),
         (["connectivity_oa"], build_connectivity_oa, []),
+        (["ttwa_gva"], build_ttwa_gva, []),
     ]
 )
 

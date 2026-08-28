@@ -212,17 +212,37 @@ def bearing_group(station_xy, term_xy) -> str | None:
     return ang  # caller bins into two opposing groups
 
 
-def directional_sustained(dep_with_bearing: list[tuple[int, float]]) -> float:
+def directional_sustained(dep_with_bearing: list[tuple[int, float]]) -> tuple[float, float]:
     """Given [(dep_hhmm, bearing_deg), ...], split into two opposing directional
-    groups along the line's dominant axis and return the WORSE direction's
-    sustained tph (so 'both directions sustain >=2' == result >=2).
+    groups along the line's dominant axis and return (best, worst) direction's
+    sustained tph.
+
+    WHICH ONE THE NPPF ASKS FOR. Annex B: served "by at least four trains or
+    trams per hour overall, OR at least two trains or trams per hour in ANY ONE
+    direction". Any one direction is the BEST direction, not the worst.
+
+    This function used to return only the worst, which made the second limb
+    mathematically redundant: two per hour in BOTH directions is four per hour
+    overall, so anything passing the worst-direction test had already passed
+    the four-per-hour test. Measured against the live data that is exactly what
+    happened — 1,035 stations qualified either way, the second limb doing no
+    work at all. A drafter does not write a redundant limb, which is the
+    strongest evidence that the worst-direction reading is the wrong one.
+
+    Read as the best direction, the limb does real work: it admits a station
+    with a decent service one way and little the other, which is precisely the
+    branch-line case the wording seems meant to catch.
+
+    Both figures are returned and stored. The best drives the policy test; the
+    worst still describes service QUALITY (a station with 6/hr one way and
+    nothing back is not the same proposition as 3/hr each way), so it stays.
 
     Method: find the dominant axis by the circular mean of bearings, split
-    departures into the two half-planes around the perpendicular, then take the
-    min of each group's sustained_tph."""
+    departures into the two half-planes around the perpendicular, then take
+    each group's sustained_tph."""
     pts = [(t, b) for (t, b) in dep_with_bearing if b is not None]
     if len(pts) < 2:
-        return 0.0
+        return 0.0, 0.0
     import math
     # Dominant axis via doubled-angle mean (axis, not direction).
     sx = sum(math.cos(math.radians(2 * b)) for _, b in pts)
@@ -238,10 +258,13 @@ def directional_sustained(dep_with_bearing: list[tuple[int, float]]) -> float:
         grp[side(b)].append(t)
     a, _ = sustained_tph(grp["A"])
     b_, _ = sustained_tph(grp["B"])
-    # If one side has no trains, it's not a two-way service on this axis.
+    # A one-directional service is still a service in "any one direction" — a
+    # terminus running 3/hr the only way the track goes meets the limb as
+    # written. It previously scored zero, which read the policy as requiring a
+    # two-way service the words do not ask for.
     if not grp["A"] or not grp["B"]:
-        return 0.0
-    return min(a, b_)
+        return max(a, b_), 0.0
+    return max(a, b_), min(a, b_)
 
 
 def busiest_hour(dep_times: list[int]) -> tuple[int, int]:
@@ -425,9 +448,12 @@ def build(msn_path: Path, mca_path: Path) -> dict:
         peak_hr_count, peak_hr_start = busiest_hour(s["dep_times"])
         # NPPF "well-connected" frequency test (the rail-service limb).
         sustained_overall, _busiest_h = sustained_tph(s["dep_times"])
-        sustained_per_dir = directional_sustained(s["dep_dir"])
+        # best = the busiest single direction (what Annex B's "any one
+        # direction" asks for); worst = the quieter one, kept because it
+        # describes service quality even though the policy does not test it.
+        sustained_best_dir, sustained_worst_dir = directional_sustained(s["dep_dir"])
         meets_4tph = sustained_overall >= 4
-        meets_2tph_dir = sustained_per_dir >= 2
+        meets_2tph_dir = sustained_best_dir >= 2
         meets_frequency = meets_4tph or meets_2tph_dir
         out[crs] = {
             "crs": crs,
@@ -442,7 +468,11 @@ def build(msn_path: Path, mca_path: Path) -> dict:
             "key_cities": "|".join(cities),
             # NPPF frequency limb (the TTWA-GVA limb is added by a later step):
             "sustained_tph": round(sustained_overall, 1),
-            "sustained_tph_per_dir": round(sustained_per_dir, 1),
+            # The policy figure. Renaming would break every downstream reader,
+            # so the established key now carries the BEST direction (the test
+            # as written) and the quieter direction gets its own column.
+            "sustained_tph_per_dir": round(sustained_best_dir, 1),
+            "sustained_tph_worst_dir": round(sustained_worst_dir, 1),
             "meets_4tph": int(meets_4tph),
             "meets_2tph_per_dir": int(meets_2tph_dir),
             "meets_frequency": int(meets_frequency),
@@ -469,7 +499,7 @@ def main() -> int:
     fields = ["crs", "trains_per_day", "peak_trains", "peak_hour_count",
               "peak_hour_start", "first_dep", "last_dep",
               "direct_destinations", "key_cities_count", "key_cities",
-              "sustained_tph", "sustained_tph_per_dir",
+              "sustained_tph", "sustained_tph_per_dir", "sustained_tph_worst_dir",
               "meets_4tph", "meets_2tph_per_dir", "meets_frequency"]
     with OUT_CSV.open("w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)

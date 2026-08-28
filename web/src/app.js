@@ -1269,6 +1269,13 @@ const MAP_OVERLAYS = [
   // 35,672 LSOAs are sub-pixel nationally and features_in_bbox drops sub-pixel
   // features, so authorities wide out and neighbourhoods from z9. Borderless,
   // because the colour is the whole story and LSOA outlines would fight it.
+  // The geographic half of the NPPF's well-connected-station test, drawn.
+  // Annex B admits a station only if it sits in a top-80 Travel to Work Area
+  // by GVA — a boundary most people have never seen, deciding whether the
+  // policy applies at all. Green in, amber below the cut, grey outside the
+  // test (Wales-only and Scotland-only areas are not ranked at all).
+  { key: "ttwa_gva", group: "access", label: "Travel to Work Areas (top 80 by GVA)",
+    color: "#2f9e44", dataset: "ttwa_gva", minZoom: 4, nameLabel: true },
   { key: "connectivity", group: "access", label: "Connectivity (DfT metric)",
     color: "#00b48c", dataset: "connectivity_lad", minZoom: 4, lim: 8000,
     datasetFn: z => z < 9 ? "connectivity_lad" : "connectivity_lsoa",
@@ -1485,6 +1492,7 @@ const LAYER_INFO = {
   lpa_boundary:        { about: "Local planning authority boundaries — who decides planning applications where. Complete for England.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   local_plan_boundary: { about: "Adopted and emerging local plan areas. Coverage is still partial — only LPAs that have published to the platform.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   connectivity:        { about: "How easily people living in each area can reach the things they travel for — employment, education, healthcare, leisure, shopping and other homes — by walking, cycling, public transport or driving. DfT computes it from real networks and timetables; scores run 0-100 and higher is better connected. Use the mode and purpose buttons above to switch which of the 35 scores is painted; the colours are DfT's own spectral scale (black and purple worst, through blue and green, to yellow and red best) so this map reads directly against the department's own Connectivity Tool. TWO REASONS THIS MATTERS: it is a NATIONAL equivalent of PTAL, which we can only show for London because TfL's is London-only; and NPPF (Aug 2026) policies TR3(2) and S5(3) name the Connectivity Tool by URL as the evidence that 'should be used ... in assessing the connectivity of particular locations proposed for development', so this is the Framework's own measure rather than a proxy we picked. Authority averages at wide zooms (population-weighted from neighbourhoods, so a city's score is not dragged by its empty edges), neighbourhood LSOAs from z9. Note the caveats DfT states: these are EXPERIMENTAL statistics covering Q4 2024, based on timetabled rather than actual services, and the modes are not meant to be compared directly with each other — a rural area scoring 90 for driving and 20 for public transport is telling you something real about the mode, not about the place's overall accessibility. England and Wales; the published file stops at neighbourhood level, so the 100 m grid shown in DfT's own tool is not in it.", source: "Department for Transport, transport connectivity metric 2025 (experimental statistics, Q4 2024)" },
+  ttwa_gva:            { about: "Travel to Work Areas ranked by Gross Value Added — the geographic half of the NPPF's well-connected-station test, which is otherwise invisible. Annex B admits a station only if it sits within a <strong>top 80</strong> Travel to Work Area 'located partially or fully within England by Gross Value Added'. Green = in the top 80, so stations there can qualify; amber = England-touching but below the cut, where a station CANNOT qualify however good its service; grey = Wales-only or Scotland-only, outside the test rather than failing it. Ranking is over the 155 England-touching areas only (English E30 codes plus the K01 cross-border ones) — ranking the whole UK set would push English areas down and quietly change who qualifies. The vintage is fixed by the Framework, not chosen: 2023 GVA applies until the day after the 2028 data publishes, then holds for five-year periods. Same two inputs as the station flags, so the layer and the shortlist can never disagree about who is in.", source: "ONS Travel to Work Areas 2011 boundaries + ONS regional GVA (both OGL v3); threshold per NPPF Aug 2026 Annex B" },
   connectivity_oa:     { about: "The same DfT connectivity measure as the layer above, but at OUTPUT AREA level — 188,884 areas of roughly 125 households each, about 5.6 times the detail of the neighbourhood layer, and as fine as the published data goes. DfT's own metadata names Output Area (2021) as its lowest geography, so the 100 m grid their interactive tool draws is rendered inside that tool and is not distributed; this is the finest version that exists outside it. Streams from pre-built vector tiles rather than the database, for the same reason PTAL does: serving 188,884 polygons per viewport is not something a per-view query can do at any zoom. Appears from z12 — zoom in past the neighbourhood layer to see individual streets separate. Mode and purpose follow the picker above, and every caveat on the neighbourhood layer applies here too.", source: "Department for Transport, transport connectivity metric 2025 (experimental statistics, Q4 2024) on ONS Output Area 2021 boundaries" },
   housing_need:        { about: "The minimum number of homes each authority must plan for every year, computed exactly as NPPF (Aug 2026) Annex D specifies: 0.8% of the authority's existing dwelling stock, then adjusted for affordability — no adjustment where the median workplace-based house-price-to-earnings ratio is 5 or below, and 0.95% added to the baseline for each 1% above 5, on the five-year average. Pale teal is low need, deep teal high. This is the number the rest of housing policy hangs off: it sets how much land an authority has to find. Summed across England it comes to 367,693 homes a year, against the government's published standard-method total of about 370,000 — the two agree to well under a percent. England only: both sources stop at the border.", source: "MHCLG Live Table 125 (dwelling stock by local authority) + ONS ratio of house price to workplace-based earnings, table 5c (both OGL v3); method per NPPF Aug 2026 Annex D" },
   plan_vs_need:        { about: "Each authority's ADOPTED plan requirement, per year, as a percentage of what the standard method now says it needs. Red means the plan is far below current need — where an applicant argues from a deficient plan; green means it meets or beats it. The 80% break matters: Annex D para 9(c) attaches a 20% buffer to authorities whose annual requirement is 80% or less of current need, though that test has a second limb (a requirement adopted in the last five years, examined against a pre-December-2024 Framework) which cannot be confirmed per authority from open data — so treat this as one limb, not the buffer itself. 172 of 293 authorities can be compared honestly; the rest are grey and say why on hover. Three exclusions are deliberate, because each was producing a fabricated shortfall: authorities carrying several predecessor district plans after reorganisation (North Yorkshire holds seven), joint plans whose requirement covers several authorities together with no published split, and plans whose period began before the authority existed.", source: "MHCLG planning.data.gov.uk local-plan + local-plan-housing (OGL v3), set against the Annex D standard method" },
@@ -2270,6 +2278,13 @@ function renderOverlay(key, def, fc) {
       ? ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "slope"]], 0],
          0.5, "#2f9e44", 1.5, "#94d82d", 3, "#ffd43b", 5, "#f59f00",
          8, "#e8590c", 12, "#e03131"]
+      : def.dataset === "ttwa_gva"
+      // Three states, and the third is not "worse than the second": an area
+      // outside England is outside the test, not ranked and failing it.
+      ? ["case",
+         ["==", ["to-string", ["get", "status"]], "in_top"], "#2f9e44",
+         ["==", ["to-string", ["get", "status"]], "below_cut"], "#e8590c",
+         "rgba(150,150,150,0.30)"]
       : def.conn
       ? connPaint()
       : def.dataset === "ptal"
@@ -3986,6 +4001,21 @@ function hoverContentForOverlay(def, p) {
                 "flagged"),
             row(p.note || null, "note"),
             row(st === "adopted" ? `~${p.asof} indexation · omits future uplift` : null, "vintage")];
+  } else if (d === "ttwa_gva") {
+    title = p.name || "Travel to Work Area";
+    const top = p.in_top === true || p.in_top === "true";
+    kind = p.status === "outside_england"
+      ? "Outside the NPPF test — not partially or fully within England"
+      : top ? `Rank ${p.rank} of 155 — qualifies` : `Rank ${p.rank} of 155 — below the cut`;
+    rows = [row(p.rank != null ? `#${p.rank} of 155 England-touching areas` : null, "GVA rank"),
+            row(p.gva_gbp_m != null ? `£${Number(p.gva_gbp_m).toLocaleString()}m` : null, "GVA (2023)"),
+            row(p.status === "in_top"
+                ? `stations here can qualify as well-connected (top ${p.top_n})`
+                : p.status === "below_cut"
+                ? `stations here CANNOT qualify, whatever their service level`
+                : "Wales-only or Scotland-only — outside the Annex B test",
+                "effect on the station policy"),
+            row("2023 GVA is fixed until the day after the 2028 data publishes", "vintage")];
   } else if (d === "connectivity_lsoa" || d === "connectivity_lad"
              || d === "connectivity_oa") {
     const sc = v => v == null ? null : `${Number(v).toFixed(1)} / 100`;

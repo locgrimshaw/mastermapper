@@ -539,6 +539,7 @@ def load_connectivity():
                 "key_cities": cities.split("|") if cities else [],
                 "sustained_tph": _flt(r.get("sustained_tph")),
                 "sustained_tph_per_dir": _flt(r.get("sustained_tph_per_dir")),
+                "sustained_tph_worst_dir": _flt(r.get("sustained_tph_worst_dir")),
                 "meets_4tph": _int(r.get("meets_4tph")),
                 "meets_2tph_per_dir": _int(r.get("meets_2tph_per_dir")),
                 "meets_frequency": _int(r.get("meets_frequency")),
@@ -614,6 +615,7 @@ def main() -> int:
             props["key_cities"] = conn["key_cities"]
             props["sustained_tph"] = conn["sustained_tph"]
             props["sustained_tph_per_dir"] = conn["sustained_tph_per_dir"]
+            props["sustained_tph_worst_dir"] = conn["sustained_tph_worst_dir"]
             props["meets_4tph"] = conn["meets_4tph"]
             props["meets_2tph_per_dir"] = conn["meets_2tph_per_dir"]
             props["meets_frequency"] = conn["meets_frequency"]
