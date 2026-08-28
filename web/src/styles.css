@@ -2628,3 +2628,57 @@ footer {
 .lt-conn-row { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 3px; }
 .lt-conn-row:last-child { margin-bottom: 0; }
 .lt-conn-row .lt-seg-btn { flex: 0 0 auto; font-size: 10.5px; padding: 2px 6px; }
+
+/* ---- Sift map legend -------------------------------------------------------
+   Keys the two things a survivor dot encodes: colour = the density policy in
+   force, size = developable hectares. Sits bottom-left of the map, clear of
+   the deep-dive legend (bottom-centre) and the nav/draw controls (top-right).
+   pointer-events:none so it never eats a map click. */
+#sift-legend {
+  position: absolute;
+  left: 454px;
+  bottom: 14px;
+  z-index: 6;
+  width: 224px;
+  padding: 8px 11px 9px;
+  border-radius: 10px;
+  background: var(--surface-float);
+  border: 1px solid var(--ink-line);
+  box-shadow: var(--float-shadow);
+  font-family: var(--font-ui);
+  color: var(--text);
+  pointer-events: none;
+}
+#sift-legend[hidden] { display: none; }
+.sl-head {
+  font-size: 9.5px; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--text-dim); margin-bottom: 5px;
+}
+.sl-head-2 { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--ink-line); }
+.sl-rows { display: flex; flex-direction: column; gap: 4px; }
+.sl-item { display: flex; align-items: center; gap: 8px; }
+.sl-dot {
+  width: 12px; height: 12px; border-radius: 50%; flex: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .3);
+}
+/* Size-band swatches are drawn at their true radius, centred in a fixed
+   column, so the ladder reads as a ladder. */
+.sl-ring {
+  border-radius: 50%; flex: none;
+  border: 1.4px solid var(--text-dim);
+  background: transparent;
+}
+.sl-txt { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; flex: 1; }
+/* Label and count share a line — stacking them tripled the legend's height. */
+.sl-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sl-txt b { font-size: 11px; font-weight: 600; }
+.sl-txt em { font-style: normal; font-size: 9px; color: var(--text-dim); line-height: 1.25; }
+.sl-n { font-family: var(--font-data); font-size: 10px; color: var(--text-dim); }
+.sl-note {
+  margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--ink-line);
+  font-size: 9.5px; line-height: 1.35; color: var(--text-dim);
+}
+
+@media (max-width: 900px) {
+  #sift-legend { left: 10px; bottom: 10px; width: 200px; }
+}

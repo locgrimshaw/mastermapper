@@ -12978,20 +12978,36 @@ function toggleShortlist(crs) {
 // double is 8 and 4. Read from the station data the browser already holds —
 // no round trip, and it works whether or not the DB columns are populated.
 const NPPF_MIN_DPH = 35, NPPF_MIN_DPH_HIGH = 45;
+// Annex B's well-connected frequency threshold, and double it.
+const WC_TPH = 4, WC_TPH_PER_DIR = 2;
 const DOUBLE_TPH = 8, DOUBLE_TPH_PER_DIR = 4;
+
+// Station properties by CRS, indexed once off the GeoJSON the browser already
+// holds. Several callers want the raw props, not just the density verdict.
+function stationPropsByCrs() {
+  const feats = (state.stationsData && state.stationsData.features) || [];
+  if (!feats.length) return null;
+  if (!stationPropsByCrs._m || stationPropsByCrs._n !== feats.length) {
+    const m = new Map();
+    for (const f of feats) {
+      const p = f.properties || {};
+      if (p.crs) m.set(p.crs, p);
+    }
+    stationPropsByCrs._m = m;
+    stationPropsByCrs._n = feats.length;
+  }
+  return stationPropsByCrs._m;
+}
+
+function stationProps(crs) {
+  const m = crs ? stationPropsByCrs() : null;
+  return (m && m.get(crs)) || null;
+}
 
 function nppfMinDph(crs) {
   try {
-    const feats = (state.stationsData && state.stationsData.features) || [];
-    if (!feats.length || !crs) return null;
-    if (!nppfMinDph._byCrs) {
-      nppfMinDph._byCrs = new Map();
-      for (const f of feats) {
-        const p = f.properties || {};
-        if (p.crs) nppfMinDph._byCrs.set(p.crs, p);
-      }
-    }
-    const p = nppfMinDph._byCrs.get(crs);
+    if (!crs) return null;
+    const p = stationProps(crs);
     // The minima attach to well-connected stations only, and "well connected"
     // is both limbs — frequency AND a top-80 TTWA. Gating on frequency alone
     // claimed a policy floor for 311 stations that do not have one.
@@ -13003,6 +13019,58 @@ function nppfMinDph(crs) {
              tph, perDir: dir };
   } catch (_) { return null; }
 }
+
+// ---- Sift map symbology ----------------------------------------------------
+// The national sift map used to draw every survivor as the same orange dot,
+// which said "this station passed" and nothing else. Two facts are worth
+// carrying in the symbol itself, and both are already computed: WHICH density
+// policy applies (colour) and HOW MUCH developable land is there (size). The
+// scheme deliberately mirrors the one Lichfields published for the same
+// policy, so the two maps can be read against each other.
+//
+// The classes are the two limbs of Annex B's frequency test crossed with the
+// double-frequency uplift in S5(2)(c):
+//   d45     well-connected AND at double frequency          -> 45 dph
+//   d35     well-connected on the >=4/hr overall limb        -> 35 dph
+//   d35dir  well-connected ONLY via >=2/hr in one direction  -> 35 dph
+//   none    not well-connected — no S5(2)(c) minimum at all
+// `none` has no counterpart on the Lichfields map, which plots well-connected
+// stations only; our sift also carries Tier A in-settlement stations, and
+// showing them in a policy colour would claim a minimum they do not have.
+const SIFT_DENSITY_CLASSES = [
+  { key: "d45", color: "#e0452c", label: "≥45 dph",
+    note: "double frequency — 8+ trains/hr, or 4+ one way" },
+  { key: "d35", color: "#6f7276", label: "≥35 dph",
+    note: "well-connected — 4+ trains/hr overall" },
+  { key: "d35dir", color: "#f0b322", label: "≥35 dph",
+    note: "well-connected on the one-direction limb only — 2+ trains/hr one way" },
+  { key: "none", color: "#8b5cf6", label: "No S5(2)(c) minimum",
+    note: "not well-connected — 35 dph applied as our own assumption" },
+];
+const SIFT_DENSITY_COLOR = Object.fromEntries(
+  SIFT_DENSITY_CLASSES.map(c => [c.key, c.color]));
+
+function siftDensityClass(crs) {
+  const p = stationProps(crs);
+  if (!wellConnectedFrom(p)) return "none";
+  const tph = Number(p.sustained_tph) || 0;
+  const dir = Number(p.sustained_tph_per_dir) || 0;
+  if (tph >= DOUBLE_TPH || dir >= DOUBLE_TPH_PER_DIR) return "d45";
+  return tph >= WC_TPH ? "d35" : "d35dir";
+}
+
+// Developable-hectare size bands, matching the published bands so the two maps
+// are directly comparable. `min` is inclusive; the list runs largest first.
+// The under-25 band has no counterpart there (their map starts at 25 ha) but
+// our sift's minimum is a control the user sets, so small sites can survive.
+const SIFT_HA_BANDS = [
+  { min: 150, r: 12,  label: "150+ ha" },
+  { min: 100, r: 9.5, label: "100–149 ha" },
+  { min: 75,  r: 7.5, label: "75–99 ha" },
+  { min: 50,  r: 6,   label: "50–74 ha" },
+  { min: 25,  r: 4.5, label: "25–49 ha" },
+  { min: 0,   r: 3,   label: "under 25 ha" },
+];
 
 const MAJOR_MIN_UNITS = 10, MAJOR_MIN_HA = 0.5;
 const MEDIUM_MAX_UNITS = 49, MEDIUM_MAX_HA = 2.5;
@@ -14031,40 +14099,78 @@ function highlightSiftSurvivors(surv) {
 }
 
 // Survivors drawn STRONGLY at any zoom, so a nationwide view reads as a
-// geography of opportunity rather than a scatter of faint dots: every
-// survivor gets a solid orange dot sized to survive z5, and the CURRENT top
-// 10 (in the active sort) wear their rank as a number on an enlarged dot,
-// with the station name alongside from regional zooms. Rebuilt on every sift
-// re-render, torn down on leaving sift mode.
+// geography of opportunity rather than a scatter of faint dots. Each dot
+// carries two facts as well as its position: COLOUR is the density policy in
+// force (SIFT_DENSITY_CLASSES) and SIZE is the developable land behind it
+// (SIFT_HA_BANDS). The CURRENT top 10 (in the active sort) wear their rank as
+// a number, with the station name alongside from regional zooms. Rebuilt on
+// every sift re-render, torn down on leaving sift mode.
 function renderSiftEmphasis(surv) {
-  const byCrs = new Map(surv.map((r, i) => [r.crs, i + 1]));
+  const byCrs = new Map(surv.map((r, i) => [r.crs, r]));
+  const rankOf = new Map(surv.map((r, i) => [r.crs, i + 1]));
   const feats = ((state.stationsData && state.stationsData.features) || [])
     .filter(f => byCrs.has(f.properties.crs))
-    .map(f => ({ type: "Feature", geometry: f.geometry,
-      properties: { crs: f.properties.crs, name: f.properties.name || f.properties.crs,
-                    rank: byCrs.get(f.properties.crs) } }));
+    .map(f => {
+      const crs = f.properties.crs;
+      const r = byCrs.get(crs);
+      return { type: "Feature", geometry: f.geometry,
+        properties: { crs, name: f.properties.name || crs,
+                      rank: rankOf.get(crs),
+                      // effHa is the hectares the sift is actually crediting —
+                      // after the largest-plot and Green Belt adjustments — so
+                      // the dot matches the capacity in the table beside it.
+                      ha: Math.round(((r.effHa ?? r.developableHa) || 0) * 10) / 10,
+                      dcls: siftDensityClass(crs) } };
+    });
   const fc = { type: "FeatureCollection", features: feats };
   const src = map.getSource("sift-emph-src");
-  if (src) { src.setData(fc); return; }
+  if (src) { src.setData(fc); renderSiftLegend(feats); return; }
   map.addSource("sift-emph-src", { type: "geojson", data: fc });
   const topTen = ["<=", ["get", "rank"], 10];
-  // Zoom must be the OUTER interpolate; the rank test nests inside each stop.
+  // Size band -> radius, scaled for one zoom level. `step` takes ASCENDING
+  // stops, so the band list (largest first, for the legend) is reversed here.
+  // Scaling the whole ladder rather than replacing it keeps the size ORDER
+  // stable at every zoom — a 150 ha dot always outranks a 30 ha one.
+  const bandStepAt = (mul) => {
+    const e = ["step", ["get", "ha"],
+      Math.round(SIFT_HA_BANDS[SIFT_HA_BANDS.length - 1].r * mul * 10) / 10];
+    for (const b of [...SIFT_HA_BANDS].reverse()) {
+      if (b.min > 0) e.push(b.min, Math.round(b.r * mul * 10) / 10);
+    }
+    return e;
+  };
+  // A ranked dot must stay big enough to hold a two-digit number, whatever its
+  // hectares; below that floor the number would spill over the edge.
+  const at = (mul) => ["case", topTen,
+    ["max", bandStepAt(mul), 9], bandStepAt(mul)];
+  // Zoom must be the OUTER interpolate — MapLibre rejects a ["zoom"] input
+  // nested inside any other expression, so the band ladder and the rank test
+  // both live inside each zoom stop rather than wrapping it.
   const radius = ["interpolate", ["linear"], ["zoom"],
-    4,  ["case", topTen, 8, 3.4],
-    8,  ["case", topTen, 10, 5],
-    12, ["case", topTen, 13, 7]];
+    4, at(0.72), 8, at(1), 12, at(1.35)];
+  const color = ["match", ["get", "dcls"],
+    ...SIFT_DENSITY_CLASSES.slice(0, -1).flatMap(c => [c.key, c.color]),
+    SIFT_DENSITY_CLASSES[SIFT_DENSITY_CLASSES.length - 1].color];
   map.addLayer({ id: "sift-emph-dot", type: "circle", source: "sift-emph-src",
+    // Big dots underneath: without this a 150 ha circle swallows the small
+    // ones inside it and the map loses the stations it should be showing.
+    layout: { "circle-sort-key": ["-", 0, ["get", "ha"]] },
     paint: { "circle-radius": radius,
-             "circle-color": "#e8590c",
-             "circle-stroke-color": "#ffffff",
-             "circle-stroke-width": ["case", topTen, 2, 1.2] } });
+             "circle-color": color,
+             "circle-opacity": 0.9,
+             "circle-stroke-color": ["case", topTen, "#ffffff", "#2b2b2b"],
+             "circle-stroke-width": ["case", topTen, 2, 0.8],
+             "circle-stroke-opacity": ["case", topTen, 1, 0.55] } });
   map.addLayer({ id: "sift-emph-num", type: "symbol", source: "sift-emph-src",
     filter: topTen,
     layout: { "text-field": ["to-string", ["get", "rank"]],
               "text-font": ["Noto Sans Regular"],
               "text-size": ["interpolate", ["linear"], ["zoom"], 4, 10, 8, 12, 12, 14],
               "text-allow-overlap": true },
-    paint: { "text-color": "#ffffff" } });
+    // White on every class colour except the yellow one-direction class,
+    // where it is unreadable; that gets near-black instead.
+    paint: { "text-color": ["case", ["==", ["get", "dcls"], "d35dir"],
+                            "#33270a", "#ffffff"] } });
   map.addLayer({ id: "sift-emph-name", type: "symbol", source: "sift-emph-src",
     filter: topTen, minzoom: 6,
     layout: { "text-field": ["get", "name"],
@@ -14072,14 +14178,68 @@ function renderSiftEmphasis(surv) {
               "text-size": 10.5,
               "text-anchor": "top", "text-offset": [0, 1.1],
               "text-optional": true },
-    paint: { "text-color": "#7c2d05", "text-halo-color": "#ffffff",
+    // Neutral now the dots are no longer uniformly orange.
+    paint: { "text-color": "#33383f", "text-halo-color": "#ffffff",
              "text-halo-width": 1.4 } });
+  renderSiftLegend(feats);
+}
+
+// The key for the two things the dots encode. Only classes and bands actually
+// present are listed — a legend for an empty class is noise, and one of them
+// (d35dir) is empty in the current data for a reason worth stating rather than
+// papering over: see the note below.
+function renderSiftLegend(feats) {
+  let el = document.getElementById("sift-legend");
+  if (!feats || !feats.length) { if (el) el.hidden = true; return; }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "sift-legend";
+    (document.getElementById("app") || document.body).appendChild(el);
+  }
+  el.hidden = false;
+  const nCls = {}, nBand = {};
+  for (const f of feats) {
+    const p = f.properties;
+    nCls[p.dcls] = (nCls[p.dcls] || 0) + 1;
+    const b = SIFT_HA_BANDS.find(x => p.ha >= x.min) || SIFT_HA_BANDS[SIFT_HA_BANDS.length - 1];
+    nBand[b.label] = (nBand[b.label] || 0) + 1;
+  }
+  const clsRows = SIFT_DENSITY_CLASSES.filter(c => nCls[c.key]).map(c =>
+    `<span class="sl-item"><i class="sl-dot" style="background:${c.color}"></i>` +
+    `<span class="sl-txt"><span class="sl-line"><b>${c.label}</b>` +
+    `<span class="sl-n">${nCls[c.key].toLocaleString()}</span></span>` +
+    `<em>${c.note}</em></span></span>`).join("");
+  // Circles at their true relative radius, so the size ladder is readable as a
+  // ladder rather than as five labelled swatches of the same size.
+  const maxR = Math.max(...SIFT_HA_BANDS.map(b => b.r));
+  const bandRows = SIFT_HA_BANDS.filter(b => nBand[b.label]).map(b =>
+    `<span class="sl-item"><i class="sl-ring" style="width:${b.r * 2}px;height:${b.r * 2}px;` +
+    `margin:0 ${(maxR - b.r)}px"></i>` +
+    `<span class="sl-txt"><span class="sl-line"><b>${b.label}</b>` +
+    `<span class="sl-n">${nBand[b.label].toLocaleString()}</span></span></span></span>`
+  ).join("");
+  // The one-direction limb is currently unreachable: station_connectivity.csv
+  // still carries the WORST direction's sustained frequency (it predates the
+  // best-direction fix in build_connectivity_cif.py), and 2/hr in the worst
+  // direction is 4/hr overall, so nothing can qualify on that limb alone.
+  // Saying so beats showing a class that silently never appears.
+  const dormant = !nCls.d35dir && (nCls.d45 || nCls.d35)
+    ? `<div class="sl-note">The one-direction limb shows no stations: the ` +
+      `timetable extract still measures the worst direction, where 2/hr each ` +
+      `way is already 4/hr overall. Rebuild it to populate this class.</div>`
+    : "";
+  el.innerHTML =
+    `<div class="sl-head">Density policy</div><div class="sl-rows">${clsRows}</div>` +
+    `<div class="sl-head sl-head-2">Developable land</div><div class="sl-rows">${bandRows}</div>` +
+    dormant;
 }
 
 function removeSiftEmphasis() {
   for (const id of ["sift-emph-num", "sift-emph-name", "sift-emph-dot"])
     if (map.getLayer(id)) map.removeLayer(id);
   if (map.getSource("sift-emph-src")) map.removeSource("sift-emph-src");
+  const el = document.getElementById("sift-legend");
+  if (el) el.hidden = true;
 }
 
 // ---- Info-tooltip placement -----------------------------------------------
