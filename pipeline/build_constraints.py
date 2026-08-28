@@ -27,7 +27,7 @@ CLIPPING (CLIP_MODE env var).
   storage. Pair with a coarser SIMPLIFY_M (e.g. SIMPLIFY_M=10) and a paid
   Supabase tier, or load a subset of kinds.
 
-kinds produced: built_land, green_space, transport, flood_zone_2,
+kinds produced: built_land, buildings, green_space, transport, flood_zone_2,
 flood_zone_3, green_belt, plus the Gate-3 heritage/environmental designations
 from planning.data.gov.uk (all OGL, already EPSG:4326):
   hard exclusions: sssi, sac, spa, ramsar, ancient_woodland, scheduled_monument
@@ -129,7 +129,7 @@ SIMPLIFY_M = float(os.environ.get("SIMPLIFY_M", "1.0"))
 # Coordinate precision kept in the output WKT (~0.1 m at 6 dp).
 COORD_DP = 6
 
-ALL_KINDS = ["built_land", "green_space", "transport", "water",
+ALL_KINDS = ["built_land", "buildings", "green_space", "transport", "water",
              "flood_zone_2", "flood_zone_3", "green_belt",
              # Gate 3 heritage/environmental designations (planning.data.gov.uk,
              # all OGL v3.0, all already EPSG:4326). Hard exclusions remove land;
@@ -167,6 +167,12 @@ PLANNING_DATA_KINDS = {
 # fence) rather than a hairline centreline — so it reads as a real development
 # barrier. ~12 m half-width ≈ a 24 m corridor.
 RAIL_HALF_WIDTH = 12.0
+
+# A building footprint is not the extent of the land it takes out of supply.
+# 12 m around it is a modest garden/yard/access allowance — enough to stop an
+# isolated farmstead reading as a hole in otherwise-open land without swallowing
+# the field beyond it.
+BUILDING_CURTILAGE_M = float(os.environ.get("BUILDING_CURTILAGE_M") or "12")
 
 # A listed-building LIST ENTRY is a point, but the developable RPC measures
 # heritage friction by area, so each point becomes a small footprint proxy.
@@ -585,6 +591,47 @@ def build_built_land(mask_27700, mask_geom_27700):
                    prop_cols=["areahectares", "area_hectares"])
 
 
+def build_buildings(mask_27700, mask_geom_27700):
+    """Individual BUILDING FOOTPRINTS from OS OpenMap Local.
+
+    WHY THIS IS SEPARATE FROM built_land. OS Open Built Up Areas is a
+    SETTLEMENT dataset — 8,716 polygons for the whole of England — with a size
+    threshold beneath which nothing is drawn. Farmsteads, hamlets, a row of
+    cottages on a lane and an isolated works all fall outside every BUA
+    polygon, so subtracting built_land alone leaves them sitting inside
+    "developable" land. At Habrough that is two visible clusters of buildings
+    counted as open land; comparing station by station against the published
+    NPPF-2026 tools, it is a recurring source of our being the more generous.
+
+    OpenMap Local is the SAME GeoPackage build_transport already reads, so this
+    costs one more layer read and no new download. Footprints are buffered by
+    BUILDING_CURTILAGE_M: a building is not just its walls, it comes with a
+    garden, a yard and an access, none of which is developable land.
+    """
+    path = _src_path("BUILDINGS_SRC", [
+        "os_openmap_local.gpkg", "os_open_map_local.gpkg",
+        "opmplc_gb.gpkg", "openmap_local.gpkg",
+    ])
+    if not path:
+        _skip("buildings", "OS OpenMap Local (Building)", "BUILDINGS_SRC")
+        return None
+    print(f"  [buildings] reading buildings from {path.name} ...")
+    layer = _pick_layer(path, ["Building", "building", "OpenMapLocal_Building",
+                               "Buildings"])
+    gdf = _to_27700(_read_source(path, layer, mask_geom_27700))
+    gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
+    if gdf.empty:
+        return None
+    if BUILDING_CURTILAGE_M > 0:
+        gdf = gdf.copy()
+        gdf["geometry"] = gdf.geometry.buffer(BUILDING_CURTILAGE_M)
+    print(f"    {len(gdf)} building footprints, buffered by "
+          f"{BUILDING_CURTILAGE_M} m for curtilage")
+    # dissolve=True: a catchment holds thousands of footprints and the RPC only
+    # ever unions them, so merge into a few corridors rather than storing each.
+    return _finish(gdf, "buildings", mask_27700, dissolve=True)
+
+
 def build_green_space(mask_27700, mask_geom_27700):
     path = _src_path("GREEN_SPACE_SRC", [
         "os_open_greenspace.gpkg", "os_open_greenspace.shp",
@@ -1001,6 +1048,7 @@ def build_listed_building(mask_27700, mask_geom_4326):
 
 BUILDERS = {
     "built_land": lambda m27, g27, g43: build_built_land(m27, g27),
+    "buildings": lambda m27, g27, g43: build_buildings(m27, g27),
     "green_space": lambda m27, g27, g43: build_green_space(m27, g27),
     "transport": lambda m27, g27, g43: build_transport(m27, g27),
     "water": lambda m27, g27, g43: build_water(m27, g27),

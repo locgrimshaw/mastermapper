@@ -159,6 +159,12 @@ function wellConnectedFrom(p) {
 // here is the display order of the checkboxes. `on` = checked by default.
 const DEVELOPABLE_SUBTRACT_KINDS = [
   { key: "built_land",   label: "Built-up land",  on: true  },
+  // Individual footprints, which built_land does NOT cover: OS Open Built Up
+  // Areas is a settlement dataset with a size threshold, so an isolated
+  // farmstead or a row of cottages on a lane falls outside every BUA polygon
+  // and reads as open land. Harmless until pipeline/build_constraints.py is run
+  // with --kinds buildings (no rows = no effect).
+  { key: "buildings",    label: "Buildings",      on: true  },
   { key: "green_space",  label: "Green space",    on: true  },
   { key: "transport",    label: "Roads &amp; rail",  on: true  },
   { key: "water",        label: "Water bodies",   on: true  },
@@ -6895,13 +6901,14 @@ function homesFor(areaHa, innerHa, regime, dph) {
   // land — Hatfield Peverel came out 8,441 homes and 42% profit on cost in the
   // sift at 70 dph, and 4,812 homes and 20.5% in its own deep dive on the
   // regime rates. Same station, same hectares, two answers.
+  const net = netDevFactor();
   const one = siftOneDensity();
-  if (one) return Math.round(a * one);
+  if (one) return Math.round(a * one * net);
   const d = dph || deep.developableDph || DPH_DEFAULTS;
   const inner = Math.min(a, Math.max(0, Number(innerHa) || 0));
   if (regime === "urban")
-    return Math.round(inner * d.urbanInner + (a - inner) * d.urbanOuter);
-  return Math.round(a * (d[regime] || d.suburban));
+    return Math.round((inner * d.urbanInner + (a - inner) * d.urbanOuter) * net);
+  return Math.round(a * (d[regime] || d.suburban) * net);
 }
 
 // The dive's starting densities for a given station. Where policy S5(2)(c)
@@ -8038,6 +8045,13 @@ function wireDevelopableControls(panel) {
   if (minWidth) minWidth.addEventListener("change", (e) => {
     const v = parseFloat(e.target.value);
     deep.developable.minWidthM = (isNaN(v) || v < 0) ? 0 : v;
+    refreshDevelopable();
+  });
+
+  const standoff = panel.querySelector("#dd-developable-standoff");
+  if (standoff) standoff.addEventListener("change", (e) => {
+    const v = parseFloat(e.target.value);
+    deep.developable.roadStandoffM = (isNaN(v) || v < 0) ? 0 : v;
     refreshDevelopable();
   });
 
@@ -12905,7 +12919,9 @@ const SIFT = {
           excludeGreenBelt: false, largestPlotOnly: false,
           // Density basis: "floor" = each station's own NPPF-derived density
           // floor; "custom" = one dph applied everywhere (dphCustom).
-          dphMode: "floor", dphCustom: 0, strategicOnly: false },
+          dphMode: "floor", dphCustom: 0, strategicOnly: false,
+          // Apply the 2/3 net-developable-area factor to every capacity.
+          netDev: false },
   sort: "viability",   // yield | regen | viability
   country: mmStore.get("siftCountry", "england"),  // england | scotland (sifted separately)
   guidance: mmStore.get("siftGuidance", false),   // show the per-step prose?
@@ -13020,6 +13036,32 @@ function nppfMinDph(crs) {
   } catch (_) { return null; }
 }
 
+// ---- Net developable area --------------------------------------------------
+// Our hectares are GROSS: the catchment minus built-up land, greenspace,
+// transport corridors and hard designations. What is left still has to carry
+// the estate roads, the drainage, the POS and the buffers that any scheme
+// needs, so capacity = gross ha x dph overstates deliverable homes.
+//
+// The published analyses of this policy apply a two-thirds factor at exactly
+// this point. Lichfields' 535,000-570,000 headline implies a factor of 0.60-0.64
+// on their own gross 886,470 (470 stations x ~1,385 homes + 320 x 736), and the
+// Curtography NPPF 2026 tool ships it as an explicit switch — "Apply 2/3
+// factor - converts gross dph to net homes capacity" — taking its 706,045 to
+// 470,704. We had no equivalent, which is the single biggest reason our
+// headline looked out of line with theirs rather than a difference in method.
+//
+// Kept OFF by default, as theirs is: gross is the honest description of what
+// the geometry measures, and switching the default would silently restate
+// every number in the tool. Both figures are shown in the funnel summary so
+// the comparison never has to be hunted for.
+const NET_DEV_FACTOR = 2 / 3;
+
+function netDevOn() {
+  try { return !!(SIFT && SIFT.crit && SIFT.crit.netDev); } catch (_) { return false; }
+}
+
+function netDevFactor() { return netDevOn() ? NET_DEV_FACTOR : 1; }
+
 // ---- Sift map symbology ----------------------------------------------------
 // The national sift map used to draw every survivor as the same orange dot,
 // which said "this station passed" and nothing else. Two facts are worth
@@ -13040,9 +13082,13 @@ function nppfMinDph(crs) {
 const SIFT_DENSITY_CLASSES = [
   { key: "d45", color: "#e0452c", label: "≥45 dph",
     note: "double frequency — 8+ trains/hr, or 4+ one way" },
-  { key: "d35", color: "#6f7276", label: "≥35 dph",
+  // Yellow, not grey: this is the biggest class on the map by some way, and a
+  // mid-grey dot reads as "disabled" against the pale basemap and the TTWA
+  // choropleth. Grey goes to the one-direction class, which is rare (and today
+  // empty), where muted is the right register.
+  { key: "d35", color: "#f0b322", label: "≥35 dph", dark: true,
     note: "well-connected — 4+ trains/hr overall" },
-  { key: "d35dir", color: "#f0b322", label: "≥35 dph",
+  { key: "d35dir", color: "#6f7276", label: "≥35 dph",
     note: "well-connected on the one-direction limb only — 2+ trains/hr one way" },
   { key: "none", color: "#8b5cf6", label: "No S5(2)(c) minimum",
     note: "not well-connected — 35 dph applied as our own assumption" },
@@ -13445,10 +13491,12 @@ function scoreSiftRows() {
     r.effDph = dphOverride ?? (r.densityFloor || null);
     // Recomputing from hectares × dph keeps the override honest; the
     // proportional fallback covers rows with no stored floor at all.
-    r.effYield = r.effDph != null
+    const grossYield = r.effDph != null
       ? Math.round(r.effHa * r.effDph)
       : (r.developableHa > 0
           ? Math.round((r.yield || 0) * (r.effHa / r.developableHa)) : (r.yield || 0));
+    r.grossYield = grossYield;
+    r.effYield = Math.round(grossYield * netDevFactor());
     r.strategic = r.effYield >= STRATEGIC_MIN_UNITS;
     r._viab = computeViability(r);
   }
@@ -13725,6 +13773,7 @@ function siftStepControlsHTML(key) {
         `<label class="dd-row"><input type="radio" name="sift-dph" id="sift-dph-custom"${chk(custom)}> <span>Apply one density everywhere</span>` +
           `<input type="number" id="sift-dph-val" min="10" max="400" step="5" value="${Number(C.dphCustom) > 0 ? Number(C.dphCustom) : 75}" style="width:5.5em;margin-left:8px"> <span class="hint">dph</span></label>` +
         `<p class="hint" style="margin-top:4px">Raising the density recomputes every capacity, every appraisal and every total — it is the fastest way to see which stations only stack up as a denser scheme. Typical reference points: 35–45 dph suburban houses, 75–120 dph mid-rise flats, 150+ dph urban apartment blocks.</p>` +
+        `<label class="dd-row" style="margin-top:6px"><input type="checkbox" id="sift-netdev"${chk(!!C.netDev)}> <span>Net developable area <span class="hint">(×⅔ — what is left after estate roads, drainage, open space and buffers; the factor the published analyses of this policy use)</span></span></label>` +
         `<p class="hint" style="margin-top:10px"><strong>Scale</strong></p>` +
         `<label class="dd-row"><input type="checkbox" id="sift-strategic"${chk(C.strategicOnly)}> <span>Strategic sites only — capacity ≥ ${STRATEGIC_MIN_UNITS.toLocaleString()} dwellings</span></label>` +
         `<p class="hint" style="margin-top:4px">The NPPF (Aug 2026, Annex B) treats a site as <strong>strategic</strong> when it is built in multiple phases, carries significant infrastructure and needs a masterplan — typically capacity for at least 1,500 dwellings. Policy HO4 asks plans to find locations for exactly this. At the current density <strong>${nStrategic.toLocaleString()}</strong> ${nStrategic === 1 ? "station reaches" : "stations reach"} that scale. Treat it as a marker of scale, not a designation: the Framework says the figure varies with the mix of uses.</p>` +
@@ -13782,6 +13831,7 @@ function readSiftControls() {
   if (g("sift-strategic")) C.strategicOnly = g("sift-strategic").checked;
   // Density basis. Typing in the dph box implies you meant to use it, so the
   // radio follows the keystroke rather than making you click twice.
+  if (g("sift-netdev")) C.netDev = g("sift-netdev").checked;
   if (g("sift-dph-custom")) {
     const wasCustom = C.dphMode === "custom";
     C.dphMode = g("sift-dph-custom").checked ? "custom" : "floor";
@@ -13967,11 +14017,19 @@ function updateSiftFunnel() {
   });
   const surv = siftSurvivorsUpTo(SIFT.step);
   const totalYield = surv.reduce((s, r) => s + (r.effYield ?? r.yield ?? 0), 0);
+  // The other basis, always. Whichever one is driving the table, the reader can
+  // see the pair — it is the difference between a number that looks wildly out
+  // of line with the published analyses and one that sits alongside them.
+  const otherYield = netDevOn()
+    ? Math.round(totalYield / NET_DEV_FACTOR)
+    : Math.round(totalYield * NET_DEV_FACTOR);
   const stepTitle = SIFT_STEPS[SIFT.step].title.replace(/^\d+ · /, "");
   const countryTotal = siftCountryRows().length;
   summary.innerHTML =
     `<strong>${surv.length.toLocaleString()}</strong> of ${countryTotal.toLocaleString()} ${SIFT.country === "scotland" ? "Scottish" : "English"} stations remain after ` +
-    `<em>${escapeSift(stepTitle)}</em> · ~<strong>${totalYield.toLocaleString()}</strong> dwellings`;
+    `<em>${escapeSift(stepTitle)}</em> · ~<strong>${totalYield.toLocaleString()}</strong> dwellings ` +
+    `<span class="hint">${netDevOn() ? "net of developable-area losses" : "gross"} · ` +
+    `${otherYield.toLocaleString()} ${netDevOn() ? "gross" : "net (×⅔)"}</span>`;
   const sc = document.getElementById("sift-stepcount");
   if (sc) sc.textContent = `${surv.length.toLocaleString()} remain`;
   renderSiftTable(surv, results);
@@ -14167,10 +14225,13 @@ function renderSiftEmphasis(surv) {
               "text-font": ["Noto Sans Regular"],
               "text-size": ["interpolate", ["linear"], ["zoom"], 4, 10, 8, 12, 12, 14],
               "text-allow-overlap": true },
-    // White on every class colour except the yellow one-direction class,
-    // where it is unreadable; that gets near-black instead.
-    paint: { "text-color": ["case", ["==", ["get", "dcls"], "d35dir"],
-                            "#33270a", "#ffffff"] } });
+    // White numerals on every class except the light one(s), which take
+    // near-black. Driven off the class list's `dark` flag rather than a
+    // hard-coded key, so swapping the palette cannot leave text unreadable.
+    paint: { "text-color": ["case",
+      ["in", ["get", "dcls"], ["literal",
+        SIFT_DENSITY_CLASSES.filter(c => c.dark).map(c => c.key)]],
+      "#33270a", "#ffffff"] } });
   map.addLayer({ id: "sift-emph-name", type: "symbol", source: "sift-emph-src",
     filter: topTen, minzoom: 6,
     layout: { "text-field": ["get", "name"],
