@@ -1,3 +1,10 @@
+> **SUPERSEDED (2026-08-28).** The user's brief moved from a hex-candidate
+> funnel inside the station-sift wizard to a **nationwide subtractive map**
+> (green = remaining potential, red = removed) in its own left-bar box, plus a
+> politics/planning layer. The current plan is
+> [PLAN_DATACENTRE_SIFT.md](PLAN_DATACENTRE_SIFT.md); the substation/TEC
+> research below remains valid input and is folded into it.
+
 # Plan · Data-centre site-finding sift
 
 A third sift tool alongside the NPPF station funnel: a sequential, adjustable
