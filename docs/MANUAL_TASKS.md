@@ -280,3 +280,14 @@ pipeline loader:
   `select public.rebuild_dc_rates();`
   (upserts by uid, so undecided applications pick up their decisions).
   PlanIt's 'Conditions' state counts as an approval.
+
+## Data-centre estate layer — refresh (loaded 2026-08)
+
+`dc_site` (built / built-live-app / approved-pipeline) and `dc_tec_demand`
+derive entirely in the database. To refresh:
+`select public.fetch_osm_dc_sites();`  (server-side Overpass pull into
+`_osm_dc_raw` — no file handling), then
+`select public.rebuild_dc_estate();`  (re-parses OSM, re-joins the current
+`dc_application` table, and re-derives the TEC ≥50 MW Demand subset from the
+already-loaded tec_register dataset). Run it after any PlanIt re-sweep or
+tec_register reload so statuses stay in step.

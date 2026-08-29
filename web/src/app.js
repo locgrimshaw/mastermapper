@@ -1217,6 +1217,16 @@ const MAP_OVERLAYS = [
     cap: { color: ["match", ["to-string", ["get", "state"]],
       "Permitted", "#2f9e44", "Rejected", "#c92a2a",
       "Withdrawn", "#868e96", "#f59f00"] } },
+  // The composited estate: built (OSM), built with a live application
+  // nearby, and the consented new-build pipeline (large approvals since
+  // 2019 away from any built site).
+  { key: "dc_site",             group: "policy", label: "Data-centre estate (status)",    color: "#1971c2", dataset: "dc_site", render: "point", minZoom: 4, lim: 2000,
+    radius: ["interpolate", ["linear"], ["zoom"], 5, 3.5, 10, 6.5],
+    cap: { color: ["match", ["to-string", ["get", "status"]],
+      "built", "#1971c2", "built-live-app", "#7048e8",
+      "approved-pipeline", "#e8590c", "#868e96"] } },
+  { key: "dc_tec_demand",       group: "policy", label: "Probable DC-scale demand (TEC ≥50 MW)", color: "#845ef7", dataset: "dc_tec_demand", render: "point", minZoom: 4,
+    cap: { mwKey: "mw", color: "#845ef7" } },
   // Universities & students
   { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5, icon: "uni" },
   { key: "uni_campus_site", group: "students", label: "Campus grounds (OSM)",     color: "#9775fa", dataset: "uni_campus_site", minZoom: 8 },
@@ -1512,6 +1522,8 @@ const LAYER_INFO = {
   council_control:    { about: "Which party controls each council, from the seat arithmetic after the May 2026 elections: the largest party where it holds a majority, otherwise No overall control. This is seat maths, not the coalition actually running the council. Counties/combined authorities without a matching district are not shown.", source: "Open Council Data UK (opencouncildata.co.uk)" },
   dc_application:     { about: "Individual data-centre planning applications (green approved, red refused, grey withdrawn, amber pending/other). Click a dot for the description and decision.", source: "PlanIt (planit.org.uk)" },
   mp_constituency:    { about: "The sitting MP and their party for every Westminster constituency (July 2024 boundaries). Labour (Co-op) is coloured with Labour.", source: "ONS Open Geography (boundaries, OGL v3) + UK Parliament Members API" },
+  dc_site:            { about: "The UK data-centre estate, composited from free sources (no single official register exists): blue = built (OSM-mapped, covers the major colo/hyperscale estate; small private server rooms are absent), violet = built with a live planning application within 400 m, orange = a Large data-centre application approved since 2019 away from any built site — the consented new-build pipeline. Nearby approvals count on the built site as expansions.", source: "OpenStreetMap (ODbL) + PlanIt" },
+  dc_tec_demand:      { about: "Transmission connection-queue entries of Demand type at ≥50 MW, sized by MW. Recent large demand connections are dominated by data centres, but they are filed through SPVs with generic names — treat as probable, never confirmed.", source: "NESO TEC register" },
   gsp_queue:          { about: "Total MW already queued for connection (NESO TEC register) inside each Grid Supply Point boundary — the data-centre developer's 'how contested is this supply point' number. Green = light queue, red/purple = heavily contested. Grey = no queued projects recorded.", source: "Derived: NESO TEC register × GSP boundaries" },
   ofcom_fibre:        { about: "Share of premises with full-fibre (FTTP) available per authority, with gigabit-capable share in the hover. Red = poorly served, green = gigabit-ready.", source: "Ofcom Connected Nations (fixed coverage), OGL" },
   census_students:    { about: "Full-time students (NS-SeC class L15) as a share of adults per authority — the structural PBSA demand base, independent of any one university's numbers.", source: "Census 2021 TS062 via NOMIS (OGL)" },
@@ -4252,6 +4264,25 @@ function hoverContentForOverlay(def, p) {
     kind = "Westminster constituency — sitting MP";
     rows = [row(p.mp, "MP"),
             row(p.party, "party")];
+  } else if (d === "dc_site") {
+    title = p.name || "Data centre";
+    kind = p.status === "approved-pipeline"
+      ? "Approved data centre — not yet built (PlanIt)"
+      : "Data centre (OSM)";
+    rows = p.status === "approved-pipeline"
+      ? [row(p.decided, "approved"),
+         row(p.descr ? String(p.descr).slice(0, 160) + (String(p.descr).length > 160 ? "…" : "") : null, "")]
+      : [row(p.operator, "operator"),
+         row(p.status === "built-live-app" ? "live planning application nearby" : null, ""),
+         row(p.apps_near != null && Number(p.apps_near) > 0
+           ? `${p.apps_near} nearby (${p.apps_approved_near} approved)` : null, "DC applications")];
+  } else if (d === "dc_tec_demand") {
+    title = p.customer || p.name || "Demand connection";
+    kind = "Large demand connection (TEC register) — probably a data centre, unconfirmed";
+    rows = [row(p.mw != null ? `${Number(p.mw).toLocaleString()} MW` : null, "capacity"),
+            row(p.status, "queue status"),
+            row(p.site, "connection site"),
+            row(p.effective ? String(p.effective).slice(0, 4) : null, "target year")];
   } else if (d === "dc_application") {
     title = p.area ? `${p.area}` : "Planning application";
     kind = "Data-centre planning application (PlanIt)";
