@@ -336,10 +336,20 @@ in the power selector with a coverage note, HNPD overlay via
 `build_major_roads`/d_road, SPEN/ENWL/SSEN (exports permission-gated),
 largest-zones-in-view, LA ranking panel, export-view GeoJSON.
 
-**Phase 3 — politics & planning (≈3–4 days).** `build_planit_dc` +
-`rebuild_dc_rates` + workflow; `build_council_control` +
-`build_constituencies`; three overlays + small-n hatching + scorecard
-integration.
+**Phase 3 — politics & planning. SHIPPED 2026-08-29 (core).**
+Migration 0073: `dc_application` (1,763 PlanIt applications mentioning a data
+centre, 2015→now, swept live and committed as
+`data/planit_dc_applications.json`; refresh = re-sweep, push, one
+`load_dc_applications()` call — the http extension fetches it server-side);
+`rebuild_dc_rates()` → 'planit_dc_rates' LAD choropleth (approval % only at
+≥5 decided, Conditions counts as approved; spatial join with name fallback)
++ 'dc_application' point mirror; `rebuild_council_control_features()` →
+'council_control' choropleth (357 LADs); 'mp_constituency' (650 July-2024
+constituencies fetched server-side from ONS ArcGIS via
+`rebuild_mp_boundaries()`, MP + party merged from the Parliament Members
+API). Four registry layers in the Policy group with party/rate colours and
+popups. Deferred: scorecard integration, small-n hatching (small-n renders
+grey instead).
 
 **Phase 4 — refinements.** 500 m grid rerun; Wales flood (G6); Scotland gaps
 badged (G7/G13/G14); ETYS (G5); NSIP points (G12); default-preset contiguous

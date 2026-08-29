@@ -1208,6 +1208,15 @@ const MAP_OVERLAYS = [
   { key: "hdt",                 group: "policy", label: "Housing Delivery Test",         color: "#e03131", dataset: "hdt", minZoom: 5 },
   // Decision culture: share of applications approved over 3 years (PlanIt).
   { key: "planit_rates",        group: "policy", label: "Approval rates (PlanIt)",       color: "#0b7285", dataset: "planit_rates", minZoom: 5 },
+  // Politics & data-centre planning history (DC sift phase 3).
+  { key: "council_control",     group: "policy", label: "Council control (party)",       color: "#4c6ef5", dataset: "council_control", minZoom: 4 },
+  { key: "planit_dc_rates",     group: "policy", label: "Data-centre decisions (PlanIt)", color: "#0b7285", dataset: "planit_dc_rates", minZoom: 4 },
+  { key: "mp_constituency",     group: "policy", label: "MP by constituency (party)",     color: "#845ef7", dataset: "mp_constituency", minZoom: 4 },
+  { key: "dc_application",      group: "policy", label: "Data-centre applications",       color: "#12b886", dataset: "dc_application", render: "point", minZoom: 4, lim: 4000,
+    radius: ["interpolate", ["linear"], ["zoom"], 5, 3, 10, 6],
+    cap: { color: ["match", ["to-string", ["get", "state"]],
+      "Permitted", "#2f9e44", "Rejected", "#c92a2a",
+      "Withdrawn", "#868e96", "#f59f00"] } },
   // Universities & students
   { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5, icon: "uni" },
   { key: "uni_campus_site", group: "students", label: "Campus grounds (OSM)",     color: "#9775fa", dataset: "uni_campus_site", minZoom: 8 },
@@ -1499,6 +1508,10 @@ const LAYER_INFO = {
   enwl_sites:         { about: "Electricity North West grid & primary substations with published demand headroom — click a dot for the full record.", source: "Electricity North West open data portal" },
   ssen_sites:         { about: "SSEN substations with published network capacity/headroom — click a dot for the full record.", source: "SSEN distribution open data" },
   planit_rates:       { about: "Share of planning applications APPROVED over the last 3 years per authority (approved ÷ (approved + refused); withdrawn excluded). Local decision culture in one number — pair with the Housing Delivery Test for the full NPPF picture.", source: "PlanIt (planit.org.uk) aggregation of council planning registers" },
+  planit_dc_rates:    { about: "Every planning application since 2015 whose description mentions a data centre, aggregated per authority. Colour = approval share of decided applications, shown only where at least 5 were decided; grey authorities have applications but too few decisions for a meaningful rate.", source: "PlanIt (planit.org.uk) aggregation of council planning registers" },
+  council_control:    { about: "Which party controls each council, from the seat arithmetic after the May 2026 elections: the largest party where it holds a majority, otherwise No overall control. This is seat maths, not the coalition actually running the council. Counties/combined authorities without a matching district are not shown.", source: "Open Council Data UK (opencouncildata.co.uk)" },
+  dc_application:     { about: "Individual data-centre planning applications (green approved, red refused, grey withdrawn, amber pending/other). Click a dot for the description and decision.", source: "PlanIt (planit.org.uk)" },
+  mp_constituency:    { about: "The sitting MP and their party for every Westminster constituency (July 2024 boundaries). Labour (Co-op) is coloured with Labour.", source: "ONS Open Geography (boundaries, OGL v3) + UK Parliament Members API" },
   gsp_queue:          { about: "Total MW already queued for connection (NESO TEC register) inside each Grid Supply Point boundary — the data-centre developer's 'how contested is this supply point' number. Green = light queue, red/purple = heavily contested. Grey = no queued projects recorded.", source: "Derived: NESO TEC register × GSP boundaries" },
   ofcom_fibre:        { about: "Share of premises with full-fibre (FTTP) available per authority, with gigabit-capable share in the hover. Red = poorly served, green = gigabit-ready.", source: "Ofcom Connected Nations (fixed coverage), OGL" },
   census_students:    { about: "Full-time students (NS-SeC class L15) as a share of adults per authority — the structural PBSA demand base, independent of any one university's numbers.", source: "Census 2021 TS062 via NOMIS (OGL)" },
@@ -2436,6 +2449,45 @@ function renderOverlay(key, def, fc) {
       ? ["case", ["!", ["has", "approval_pct"]], "rgba(160,170,175,0.4)",
          ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "approval_pct"]], 0],
           60, "#e03131", 75, "#f59f00", 85, "#ffd43b", 92, "#94d82d", 97, "#2f9e44"]]
+      : def.dataset === "planit_dc_rates"
+      // Data-centre decision rate. dc_approval_pct only exists where ≥5
+      // applications were decided; below that a rate is noise, so those
+      // authorities render pale grey and the popup shows the raw counts.
+      ? ["case", ["!", ["has", "dc_approval_pct"]], "rgba(160,170,175,0.45)",
+         ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "dc_approval_pct"]], 0],
+          30, "#e03131", 50, "#f59f00", 70, "#ffd43b", 85, "#94d82d", 95, "#2f9e44"]]
+      : def.dataset === "mp_constituency"
+      // Sitting MP's party (July 2024 boundaries; Labour (Co-op) sits with
+      // Labour). Conventional party colours, NI parties included.
+      ? ["match", ["to-string", ["get", "party"]],
+         ["Labour", "Labour (Co-op)"], "#e03131",
+         "Conservative", "#1971c2",
+         "Liberal Democrat", "#f59f00",
+         "Reform UK", "#0ea8bc",
+         "Green Party", "#2f9e44",
+         "Scottish National Party", "#ffd43b",
+         "Plaid Cymru", "#087f5b",
+         "Sinn Féin", "#1b5e20",
+         "Democratic Unionist Party", "#b71c1c",
+         "Ulster Unionist Party", "#4a148c",
+         "Social Democratic & Labour Party", "#33691e",
+         "Alliance", "#fbc02d",
+         "Your Party", "#7b1fa2",
+         "Speaker", "#adb5bd",
+         "#868e96"]
+      : def.dataset === "council_control"
+      // Party of control — conventional UK party colours; No overall control
+      // stays a light neutral so real control pops.
+      ? ["match", ["to-string", ["get", "control"]],
+         "Labour Party", "#e03131",
+         "Conservative and Unionist", "#1971c2",
+         "Liberal Democrats", "#f59f00",
+         "Reform UK", "#0ea8bc",
+         "Green Party (E&W)", "#2f9e44",
+         "Scottish National Party (SNP)", "#ffd43b",
+         "Plaid Cymru - The Party of Wales", "#087f5b",
+         "No overall control", "#ced4da",
+         "#868e96"]
       : def.dataset === "grey_belt_candidate"
       // Basis split: indigo = built-up area inside the Green Belt, orange =
       // registered brownfield inside it (the stronger signal).
@@ -4182,6 +4234,31 @@ function hoverContentForOverlay(def, p) {
     rows = [row(p.approval_pct != null ? `${p.approval_pct}%` : null, "approved"),
             row(p.approved_3y != null ? `${Number(p.approved_3y).toLocaleString()} approved · ${Number(p.refused_3y).toLocaleString()} refused` : null, "decisions"),
             row(p.apps_year != null ? `${Number(p.apps_year).toLocaleString()}/yr` : null, "decision volume")];
+  } else if (d === "planit_dc_rates") {
+    title = p.name || "Authority";
+    kind = "Data-centre applications — PlanIt, 2015 on";
+    rows = [row(p.dc_approval_pct != null ? `${p.dc_approval_pct}%` : null, "approved (of decided)"),
+            row(p.dc_apps != null ? `${Number(p.dc_apps).toLocaleString()} applications` : null, "mentioning a data centre"),
+            row(p.dc_approved != null ? `${p.dc_approved} approved · ${p.dc_refused} refused · ${p.dc_withdrawn} withdrawn` : null, "outcomes"),
+            row(p.dc_approval_pct == null && p.dc_apps != null ? "under 5 decided — rate not shown" : null, "")];
+  } else if (d === "council_control") {
+    title = p.name || "Council";
+    kind = "Council control — seat arithmetic, May 2026";
+    rows = [row(p.control, "control"),
+            row(p.largest && p.largest_seats != null ? `${p.largest} (${p.largest_seats}/${p.total_seats} seats)` : null, "largest party"),
+            row("Seat majority, not the ruling coalition", "")];
+  } else if (d === "mp_constituency") {
+    title = p.name || "Constituency";
+    kind = "Westminster constituency — sitting MP";
+    rows = [row(p.mp, "MP"),
+            row(p.party, "party")];
+  } else if (d === "dc_application") {
+    title = p.area ? `${p.area}` : "Planning application";
+    kind = "Data-centre planning application (PlanIt)";
+    rows = [row(p.state, "status"),
+            row(p.decided, "decided"),
+            row(p.size, "scale"),
+            row(p.descr ? String(p.descr).slice(0, 160) + (String(p.descr).length > 160 ? "…" : "") : null, "")];
   } else if (def.key === "gsp_queue" || (d === "gsp_boundary" && p.queued_mw != null)) {
     title = p.name || "Grid Supply Point";
     kind = "Connection queue at this GSP";

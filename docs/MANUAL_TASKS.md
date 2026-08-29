@@ -257,3 +257,26 @@ refresh: download the new year's csv2, group by council counting party seats,
 and upsert into council_control (the deploy session did this via SQL in
 2026-08; a `build_council_control.py` pipeline script is the phase-3 home for
 it). The deep dive's Key Facts group and dd_station_context() read it.
+
+## Politics & data-centre planning layers — refresh (phase 3, loaded 2026-08)
+
+Three datasets ship in `map_features` and refresh independently of the
+pipeline loader:
+
+- **council_control** (LAD choropleth): after refreshing the
+  `council_control` table (above), run
+  `select public.rebuild_council_control_features();`.
+- **mp_constituency**: boundaries load server-side from the ONS ArcGIS
+  service via `select public.rebuild_mp_boundaries();` (http extension —
+  no file download). Then re-fetch MPs from the UK Parliament Members API
+  (`/api/Members/Search?IsCurrentMember=true&House=1`, 33 pages of 20) and
+  merge `mp`/`party` into props by constituency name. Refresh after a
+  general election or by-election flurry.
+- **planit_dc_rates + dc_application**: re-run the PlanIt sweep (phrases
+  "data centre" / "data center" / datacentre, 6-month start_date slices from
+  2015, pg_sz 200, dedupe by uid — script pattern in the 2026-08 session),
+  commit the trimmed JSON to `data/planit_dc_applications.json`, push, then:
+  `select public.load_dc_applications('https://raw.githubusercontent.com/locgrimshaw/mastermapper/main/data/planit_dc_applications.json');`
+  `select public.rebuild_dc_rates();`
+  (upserts by uid, so undecided applications pick up their decisions).
+  PlanIt's 'Conditions' state counts as an approval.
