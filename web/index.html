@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws113-dc-sift-sidebar" />
+  <link rel="stylesheet" href="src/styles.css?v=ws114-dc-phase2" />
 </head>
 <body>
   <div id="app">
@@ -243,15 +243,41 @@
                   <option value="d_sub132">≥132 kV substation</option>
                   <option value="d_sub275">≥275 kV substation</option>
                   <option value="d_line132">≥132 kV line</option>
+                  <option value="d_dno50">DNO substation, ≥50 MW headroom</option>
+                  <option value="d_dno20">DNO substation, ≥20 MW headroom</option>
                 </select></label>
+              <p class="hint" id="dc-dno-note" hidden>Published headroom covers 3 of 6 DNO groups (NGED, Northern Powergrid, UKPN — the Midlands, North East, Yorkshire, London, South East &amp; East). Areas without data pass this test rather than vanish.</p>
               <label class="dc-check-row"><input type="checkbox" id="dc-avoidqueue" />
                 <span>Avoid contested GSPs (queue &gt; <input type="number" id="dc-maxqueue" value="2000" min="0" step="500" style="width:5em"> MW)</span></label>
+              <div class="dc-sec">4 · Settlement &amp; heat offtake</div>
+              <label class="dc-check-row"><input type="checkbox" id="dc-useset" />
+                <span>Near a settlement (district-heat offtake)</span></label>
+              <div id="dc-set-controls" hidden>
+                <label class="pbsa-crit"><span>Within</span>
+                  <input type="range" id="dc-setkm" min="1" max="25" step="1" value="10" />
+                  <span class="pbsa-crit-val" id="dc-setkm-val">10 km</span></label>
+                <label class="pbsa-crit"><span>of a town of</span>
+                  <select id="dc-setattr">
+                    <option value="d_set5">≥5,000 people</option>
+                    <option value="d_set20">≥20,000 people</option>
+                    <option value="d_set100">≥100,000 people</option>
+                  </select></label>
+              </div>
+              <label class="dc-check-row"><input type="checkbox" id="dc-useheat" />
+                <span>Near an existing/planned heat network</span></label>
+              <div id="dc-heat-controls" hidden>
+                <label class="pbsa-crit"><span>Within</span>
+                  <input type="range" id="dc-heatkm" min="1" max="25" step="1" value="5" />
+                  <span class="pbsa-crit-val" id="dc-heatkm-val">5 km</span></label>
+              </div>
+              <label class="dc-check-row"><input type="checkbox" id="dc-showheat" />
+                <span>Show heat networks on the map</span></label>
               <div class="dc-sec">Result</div>
               <div id="dc-result" class="dc-result"><span class="hint">Activate to compute.</span></div>
               <label class="dc-check-row"><input type="checkbox" id="dc-greenonly" /> <span>Green only (hide eliminated land)</span></label>
               <label class="pbsa-crit"><span>Opacity</span>
                 <input type="range" id="dc-opacity" min="10" max="90" step="5" value="40" /></label>
-              <p class="hint" id="dc-coverage-note">Substation voltages are OSM-tagged (~20% of substations carry one; 1,729 at ≥132 kV) — treat the power test as indicative. Flood zones are England-only; ALC is England-only. Settlement distance, DNO headroom, heat networks and the planning/politics layers land in phase 2–3 (see docs/PLAN_DATACENTRE_SIFT.md).</p>
+              <p class="hint" id="dc-coverage-note">Substation voltages are OSM-tagged (~20% of substations carry one; 1,729 at ≥132 kV) — treat the power test as indicative. DNO headroom covers NGED, Northern Powergrid and UKPN only. Flood zones and ALC are England-only. Heat networks: DESNZ HNPD (1,495 schemes). Settlements: ONS BUA 2022 (Scotland/Wales populations estimated). Planning/politics layers land in phase 3 (docs/PLAN_DATACENTRE_SIFT.md).</p>
             </div>
           </section>
         </div>
@@ -360,6 +386,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws113-dc-sift-sidebar"></script>
+  <script type="module" src="src/app.js?v=ws114-dc-phase2"></script>
 </body>
 </html>

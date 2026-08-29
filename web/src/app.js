@@ -14593,6 +14593,8 @@ const DC = {
     exAlc: false, exAqma: false,
     maxSlopeDeg: 5, powerKm: 5, powerAttr: "d_sub132",
     avoidQueue: false, maxQueueMw: 2000,
+    useSet: false, setAttr: "d_set20", setKm: 10,
+    useHeat: false, heatKm: 5, showHeat: false,
     greenOnly: false, opacity: 0.4,
   }, mmStore.get("dcSiftConfig", {})),
 };
@@ -14615,9 +14617,18 @@ function dcPassExpr(c) {
   if (c.exAlc)   conds.push(pct("alc12_pct", 25));
   if (c.exAqma)  conds.push(["==", ["get", "aqma"], 0]);
   conds.push(["<=", ["get", "slope10"], Math.round(c.maxSlopeDeg * 10)]);
-  conds.push(["<=", ["get", c.powerAttr], c.powerKm * 10]);
+  // DNO headroom covers 3 of 6 licence groups; 255 = no data there, and the
+  // server-side dc_sift_stats treats it as a pass — mirror that exactly.
+  const powerVal = c.powerAttr.startsWith("d_dno")
+    ? ["case", ["==", ["get", c.powerAttr], 255], 0, ["get", c.powerAttr]]
+    : ["get", c.powerAttr];
+  conds.push(["<=", powerVal, c.powerKm * 10]);
   if (c.avoidQueue)
     conds.push(["<=", ["get", "gsp_mw"], Math.round(c.maxQueueMw / 100)]);
+  if (c.useSet)
+    conds.push(["<=", ["get", c.setAttr], c.setKm * 10]);
+  if (c.useHeat)
+    conds.push(["<=", ["get", "d_heat"], c.heatKm * 10]);
   return ["all", ...conds];
 }
 
@@ -14718,6 +14729,57 @@ async function dcActivate(on) {
   dcStats();
 }
 
+// Heat-network overlay: HNPD points, coloured by delivery status. Fetched once
+// (numbers + labels via dc_heat_points(), no server geometry) and toggled with
+// the "Show heat networks" checkbox — independent of the sift grid itself.
+let _dcHeatFc = null;
+async function dcHeatOverlay(on) {
+  if (!on) {
+    if (map.getLayer("dc-heat-pts")) map.removeLayer("dc-heat-pts");
+    if (map.getSource("dc-heat-src")) map.removeSource("dc-heat-src");
+    return;
+  }
+  if (!_dcHeatFc) {
+    const sb = getSupabase();
+    if (!sb) return;
+    const { data, error } = await sb.rpc("dc_heat_points");
+    if (error || !data) { console.error("dc_heat_points failed", error); return; }
+    _dcHeatFc = { type: "FeatureCollection", features: data.map(r => ({
+      type: "Feature",
+      properties: { status: r.status || "", name: r.name || "", tech: r.tech || "" },
+      geometry: { type: "Point", coordinates: [r.lng, r.lat] } })) };
+  }
+  if (!DC.crit.showHeat) return;   // unticked while fetching
+  if (!map.getSource("dc-heat-src"))
+    map.addSource("dc-heat-src", { type: "geojson", data: _dcHeatFc });
+  if (!map.getLayer("dc-heat-pts")) {
+    map.addLayer({ id: "dc-heat-pts", type: "circle", source: "dc-heat-src",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 2.5, 10, 5],
+        "circle-color": ["match", ["get", "status"],
+          "Operational", "#2b8a3e",
+          "Under Construction", "#e8890c",
+          "Awaiting Construction", "#e8890c",
+          "#868e96"],
+        "circle-stroke-width": 0.8,
+        "circle-stroke-color": "#fff",
+        "circle-opacity": 0.9,
+      } });
+    map.on("click", "dc-heat-pts", (e) => {
+      const p = e.features?.[0]?.properties;
+      if (!p) return;
+      new maplibregl.Popup({ closeButton: true, maxWidth: "280px" })
+        .setLngLat(e.lngLat)
+        .setHTML(`<strong>${escapeSift(p.name || "Heat network")}</strong><br>` +
+                 `${escapeSift(p.status)}${p.tech ? " · " + escapeSift(p.tech) : ""}<br>` +
+                 `<span class="hint">DESNZ Heat Networks Planning Database</span>`)
+        .addTo(map);
+    });
+    map.on("mouseenter", "dc-heat-pts", () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "dc-heat-pts", () => { map.getCanvas().style.cursor = ""; });
+  }
+}
+
 let _dcStatsTimer = null;
 function dcStats() {
   clearTimeout(_dcStatsTimer);
@@ -14733,6 +14795,8 @@ function dcStats() {
       maxSlope10: Math.round(c.maxSlopeDeg * 10),
       powerAttr: c.powerAttr, powerMax100: c.powerKm * 10,
       avoidQueue: c.avoidQueue, maxQueue100: Math.round(c.maxQueueMw / 100),
+      useSet: c.useSet, setAttr: c.setAttr, setMax100: c.setKm * 10,
+      useHeat: c.useHeat, heatMax100: c.heatKm * 10,
     }});
     if (error || !data) return;
     const km2 = data.green_cells;   // 1 cell = 1 km²
@@ -14786,9 +14850,55 @@ function wireDcSiftBox() {
   });
 
   const pattr = document.getElementById("dc-powerattr");
-  pattr.value = c.powerAttr;
+  const dnoNote = document.getElementById("dc-dno-note");
+  const showDnoNote = () => { if (dnoNote) dnoNote.hidden = !c.powerAttr.startsWith("d_dno"); };
+  pattr.value = c.powerAttr; showDnoNote();
   pattr.addEventListener("change", () => {
-    c.powerAttr = pattr.value; dcPersist(); dcApplyPaint(); dcStats();
+    c.powerAttr = pattr.value; showDnoNote();
+    dcPersist(); dcApplyPaint(); dcStats();
+  });
+
+  // Criterion 4 — settlement proximity (district-heat offtake) + heat networks.
+  const useSet = document.getElementById("dc-useset");
+  const setCtl = document.getElementById("dc-set-controls");
+  const setKm = document.getElementById("dc-setkm");
+  const setKmVal = document.getElementById("dc-setkm-val");
+  const setAttr = document.getElementById("dc-setattr");
+  useSet.checked = c.useSet; setCtl.hidden = !c.useSet;
+  setKm.value = c.setKm; setKmVal.textContent = `${c.setKm} km`;
+  setAttr.value = c.setAttr;
+  useSet.addEventListener("change", () => {
+    c.useSet = useSet.checked; setCtl.hidden = !c.useSet;
+    dcPersist(); dcApplyPaint(); dcStats();
+  });
+  setKm.addEventListener("input", () => {
+    c.setKm = Number(setKm.value); setKmVal.textContent = `${c.setKm} km`;
+    dcPersist(); dcApplyPaint(); dcStats();
+  });
+  setAttr.addEventListener("change", () => {
+    c.setAttr = setAttr.value; dcPersist(); dcApplyPaint(); dcStats();
+  });
+
+  const useHeat = document.getElementById("dc-useheat");
+  const heatCtl = document.getElementById("dc-heat-controls");
+  const heatKm = document.getElementById("dc-heatkm");
+  const heatKmVal = document.getElementById("dc-heatkm-val");
+  useHeat.checked = c.useHeat; heatCtl.hidden = !c.useHeat;
+  heatKm.value = c.heatKm; heatKmVal.textContent = `${c.heatKm} km`;
+  useHeat.addEventListener("change", () => {
+    c.useHeat = useHeat.checked; heatCtl.hidden = !c.useHeat;
+    dcPersist(); dcApplyPaint(); dcStats();
+  });
+  heatKm.addEventListener("input", () => {
+    c.heatKm = Number(heatKm.value); heatKmVal.textContent = `${c.heatKm} km`;
+    dcPersist(); dcApplyPaint(); dcStats();
+  });
+
+  const showHeat = document.getElementById("dc-showheat");
+  showHeat.checked = c.showHeat;
+  if (c.showHeat) map.on("load", () => dcHeatOverlay(true));
+  showHeat.addEventListener("change", () => {
+    c.showHeat = showHeat.checked; dcPersist(); dcHeatOverlay(c.showHeat);
   });
 
   const aq = document.getElementById("dc-avoidqueue");

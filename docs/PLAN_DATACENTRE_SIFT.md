@@ -322,11 +322,19 @@ Ships criteria 1, 2, 3 (voltage tiers, HV line, GSP queue) + readout.
 Phase-1 attrs: slope10, the *_pct set, d_sub132/275, d_line132, gsp_mw,
 water_stat, aqma, lad; d_dno*/d_set*/d_road/d_heat = 255 for now.
 
-**Phase 2 — settlement, DNO, heat, roads (≈4–5 days).** `build_settlements`,
-`build_heat_networks`, `build_major_roads`; run SPEN/ENWL loaders, chase SSEN
-URL; extend rebuild with d_set/d_dno/d_road/d_heat; re-tile; criterion 4 UI +
-DNO selector + coverage badge; largest-zones-in-view; LA ranking panel;
-export-view GeoJSON.
+**Phase 2 — settlement, DNO, heat, roads. SHIPPED 2026-08-29 (core).**
+Migration 0072: `dc_settlement` (1,669 BUAs ≥5k pop — England ONS
+LSOA→BUA×IMD populations; Scotland/Wales area-estimated, `est` flag),
+`dc_heat` (1,495 DESNZ HNPD schemes, OSGB→WGS84), `dc_dno` (2,521 primary
+substations with demand headroom: NGED + NPG published, UKPN derived N-1
+excluding HOT sites; 252 ≥50 MW); six dc_grid distance columns
+d_set5/20/100, d_dno20/50, d_heat filled by `rebuild_dc_grid_dist2()`
+(whole-grid KNN, minutes); dc_cells_agg/dc_sift_stats extended (DNO 255 =
+no-data passes); criterion-4 UI (settlement scale + km, heat km), DNO options
+in the power selector with a coverage note, HNPD overlay via
+`dc_heat_points()` with status-coloured points. Deferred from phase 2:
+`build_major_roads`/d_road, SPEN/ENWL/SSEN (exports permission-gated),
+largest-zones-in-view, LA ranking panel, export-view GeoJSON.
 
 **Phase 3 — politics & planning (≈3–4 days).** `build_planit_dc` +
 `rebuild_dc_rates` + workflow; `build_council_control` +
