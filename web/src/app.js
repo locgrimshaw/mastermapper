@@ -407,29 +407,35 @@ const map = new maplibregl.Map({
   // the map with canvas.toDataURL(). Costs a little GPU memory; the
   // alternative (capture inside a render callback) is flakier across browsers.
   preserveDrawingBuffer: true,
+  // Basemap: OpenFreeMap vector tiles (keyless, no usage limits; CARTO's
+  // raster basemaps started watermarking keyless traffic in 2026). The style
+  // opens with just the sources, glyphs/sprite, and a background-colour
+  // placeholder; the actual basemap layers (Positron-style fills/lines below
+  // every overlay, place labels pinned above them all) stream in from the
+  // fetched OpenFreeMap style JSON — see applyBasemapLayers() below. Both
+  // OFM themes share these exact sources, glyphs and sprite, so switching
+  // theme swaps only layer definitions.
   style: {
     version: 8,
-    glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+    glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+    sprite: "https://tiles.openfreemap.org/sprites/ofm_f384/ofm",
     sources: {
-      carto: {
-        type: "raster",
-        tiles: ["https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"],
-        tileSize: 256,
-        attribution: "© OpenStreetMap, © CARTO",
+      openmaptiles: {
+        type: "vector",
+        url: "https://tiles.openfreemap.org/planet",
+        attribution: "© OpenStreetMap contributors, © OpenFreeMap",
       },
-      // CARTO's matching label-only tiles: minimal place names (cities,
-      // towns, key roads) that ride ABOVE every data layer so you can keep
-      // your bearings with any overlay on. The keeper below pins them top.
-      "carto-labels": {
+      ne2_shaded: {
         type: "raster",
-        tiles: ["https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}@2x.png"],
+        tiles: ["https://tiles.openfreemap.org/natural_earth/ne2sr/{z}/{x}/{y}.png"],
         tileSize: 256,
+        maxzoom: 6,
       },
     },
     layers: [
-      { id: "base", type: "raster", source: "carto" },
-      { id: "base-labels", type: "raster", source: "carto-labels",
-        paint: { "raster-opacity": 0.85 } },
+      // Instant first paint while the basemap style JSON is in flight.
+      { id: "base", type: "background",
+        paint: { "background-color": "#f4f1ec" } },
     ],
   },
   center: [-0.11, 51.51],
@@ -441,7 +447,59 @@ const map = new maplibregl.Map({
 });
 window.map = map;   // dev: expose for console debugging
 
-// Every addLayer lands above base-labels; re-pin the labels to the very top
+// ---- Basemap layers (OpenFreeMap) ------------------------------------------
+// The basemap's fills/lines must sit BELOW every data overlay and its place
+// labels ABOVE them all, whatever order things load in. So: fetch the OFM
+// style for the theme, prefix its layer ids with "bm-", insert non-symbol
+// layers before the first non-basemap layer currently in the style, append
+// symbol (label) layers at the top, and let the pinning block below keep
+// them there. Idempotent — a theme switch just re-applies with the other
+// style's layers.
+const BASEMAP_STYLE_URLS = {
+  light: "https://tiles.openfreemap.org/styles/positron",
+  dark: "https://tiles.openfreemap.org/styles/dark",
+};
+const _bmStyleCache = {};
+let _bmLayerIds = [];    // every basemap layer id, in style order
+let _bmLabelIds = [];    // the symbol subset pinned to the top
+
+async function fetchBasemapStyle(theme) {
+  if (!_bmStyleCache[theme]) {
+    const r = await fetch(BASEMAP_STYLE_URLS[theme] || BASEMAP_STYLE_URLS.light);
+    _bmStyleCache[theme] = await r.json();
+  }
+  return _bmStyleCache[theme];
+}
+
+function applyBasemapLayers(styleJson) {
+  for (const id of _bmLayerIds) if (map.getLayer(id)) map.removeLayer(id);
+  _bmLayerIds = []; _bmLabelIds = [];
+  const anchor = (map.getStyle().layers || []).map(l => l.id)
+    .find(id => id !== "base" && !id.startsWith("bm-"));
+  for (const l of styleJson.layers) {
+    const def = { ...l, id: "bm-" + l.id };
+    _bmLayerIds.push(def.id);
+    try {
+      if (l.type === "symbol") { _bmLabelIds.push(def.id); map.addLayer(def); }
+      else map.addLayer(def, anchor);
+    } catch (e) { console.error("basemap layer failed", def.id, e); }
+  }
+}
+
+async function setBasemapTheme(theme) {
+  try { applyBasemapLayers(await fetchBasemapStyle(theme)); }
+  catch (e) { console.error("basemap style fetch failed", e); }
+}
+
+{
+  const bmFetch = fetchBasemapStyle(state.theme);
+  map.on("load", async () => {
+    try { applyBasemapLayers(await bmFetch); }
+    catch (e) { console.error("basemap style fetch failed", e); }
+  });
+}
+
+// Every addLayer lands above the basemap labels; re-pin them to the very top
 // whenever the style changes (rAF-debounced; guard avoids a moveLayer ->
 // styledata feedback loop by only acting when they're not already last).
 let _lblRaf = 0;
@@ -450,10 +508,12 @@ map.on("styledata", () => {
   _lblRaf = requestAnimationFrame(() => {
     _lblRaf = 0;
     try {
-      const layers = map.getStyle().layers;
-      if (layers && layers.length && layers[layers.length - 1].id !== "base-labels"
-          && map.getLayer("base-labels"))
-        map.moveLayer("base-labels");
+      const want = _bmLabelIds.filter(id => map.getLayer(id));
+      if (!want.length) return;
+      const layers = map.getStyle().layers || [];
+      const tail = layers.slice(-want.length).map(l => l.id);
+      if (tail.join("\n") !== want.join("\n"))
+        for (const id of want) map.moveLayer(id);
     } catch (_) {}
   });
 });
@@ -5483,15 +5543,9 @@ function setColourMode(mode) {
 function setTheme(theme) {
   state.theme = theme;
   document.body.classList.toggle("light", theme === "light");
-  // Swap the basemap tiles to match the theme.
-  const url = theme === "light"
-    ? "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"
-    : "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png";
-  if (map.getSource("carto")) map.getSource("carto").setTiles([url]);
-  const lblUrl = theme === "light"
-    ? "https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}@2x.png"
-    : "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png";
-  if (map.getSource("carto-labels")) map.getSource("carto-labels").setTiles([lblUrl]);
+  // Swap the basemap layers to match the theme (same sources either way —
+  // only the OpenFreeMap layer definitions differ between light and dark).
+  setBasemapTheme(theme);
   // Boundary + selection lines are tuned per theme so areas stay cohesive.
   for (const id of ["lsoa-line", "simd-line"])
     if (map.getLayer(id)) map.setPaintProperty(id, "line-color", LINE_COLOR());
@@ -12889,8 +12943,8 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeUniPa
 // ---- Boot -----------------------------------------------------------------
 
 // Reflect the default theme onto <body> immediately so the UI starts in the
-// right palette (the CSS variables flip on body.light). The basemap source is
-// already created with the matching light tiles above.
+// right palette (the CSS variables flip on body.light). The basemap layers
+// load for the matching theme at startup (applyBasemapLayers above).
 document.body.classList.toggle("light", state.theme === "light");
 
 // Mobile controls drawer: the toggle button and scrim show only on small
