@@ -2751,3 +2751,49 @@ footer {
   font-size: 12.5px; color: var(--ink-dim, inherit);
 }
 .other-data-row input { accent-color: var(--accent, #4c6ef5); }
+
+/* ---- Deep-dive dashboard pills (renderDdHeadlines) ---- */
+/* Always-visible headline metrics under each group header; the group's
+   detail stays collapsed behind the header's "detail ▸" affordance. */
+.dd-pills {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px; margin: 6px 0 2px;
+}
+.dd-pill {
+  position: relative;
+  background: var(--panel-2, rgba(128,128,128,.07));
+  border: 1px solid var(--ink-line);
+  border-radius: 10px;
+  padding: 8px 10px 7px 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+.dd-pill::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--pill-accent, transparent);
+}
+.dd-pill-v {
+  display: block; font-family: var(--font-data);
+  font-size: 15px; font-weight: 650; color: var(--text);
+  line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dd-pill-v small { font-size: 10.5px; font-weight: 500; color: var(--text-dim); }
+.dd-pill-v i { font-size: 9.5px; font-style: normal; color: var(--text-dim); }
+.dd-pill-k {
+  display: block; margin-top: 2px;
+  font-size: 9.5px; font-weight: 600; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dd-pill-ok::before   { background: #2f9e44; }
+.dd-pill-warn::before { background: #f59f00; }
+.dd-pill-bad::before  { background: #e03131; }
+.dd-pill-ok .dd-pill-v   { color: #2f9e44; }
+.dd-pill-warn .dd-pill-v { color: #e8590c; }
+.dd-pill-bad .dd-pill-v  { color: #e03131; }
+.dd-pill-dim .dd-pill-v  { color: var(--text-dim); font-weight: 500; font-size: 12.5px; font-style: italic; }
+.dd-g-more {
+  flex: 1; text-align: right;
+  font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-dim); opacity: .8;
+}

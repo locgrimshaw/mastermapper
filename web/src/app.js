@@ -7850,6 +7850,7 @@ async function renderDeepDiveViability() {
     greenBeltShare: gbShareOf(r.green_belt_ha, r.developable_ha),
   }, SIFT.assumptions, { noSens: true });
   deep._lastProfitPct = ap.profitOnCost == null ? null : Number(ap.profitOnCost);
+  deep._lastGdv = ap.gdv == null ? null : Number(ap.gdv);
   if (typeof renderDdHeadlines === "function") renderDdHeadlines();
   if (ap.profitOnCost == null) {
     el.innerHTML = `<p class="hint">No dwelling capacity to appraise yet.</p>`;
@@ -10914,9 +10915,32 @@ function renderUsagePerResident() {
 function ddGroupHead(key, title) {
   return `<button class="dd-group-head" type="button" data-g="${key}" aria-expanded="false">` +
     `<span class="dd-g-title">${title}</span>` +
-    `<span class="dd-hl" id="dd-hl-${key}">—</span>` +
-    `<span class="dd-caret">▸</span></button>`;
+    `<span class="dd-g-more">detail</span>` +
+    `<span class="dd-caret">▸</span></button>` +
+    `<div class="dd-pills" id="dd-pills-${key}"></div>`;
 }
+
+// One dashboard pill: big value, small caption, optional tone (ok/warn/bad/
+// dim) or an accent colour rendered as the pill's left edge.
+function ddPill(value, label, tone, accent) {
+  const style = accent ? ` style="--pill-accent:${accent}"` : "";
+  return `<div class="dd-pill${tone ? " dd-pill-" + tone : ""}${accent ? " dd-pill-accent" : ""}"${style}>` +
+    `<span class="dd-pill-v">${value}</span>` +
+    `<span class="dd-pill-k">${label}</span></div>`;
+}
+function ddPillNA(label, hint) {
+  return `<div class="dd-pill dd-pill-dim">` +
+    `<span class="dd-pill-v">${hint || "—"}</span>` +
+    `<span class="dd-pill-k">${label}</span></div>`;
+}
+
+const DD_PARTY_COLOR = {
+  "Labour Party": "#e03131", "Conservative and Unionist": "#1971c2",
+  "Liberal Democrats": "#f59f00", "Reform UK": "#0ea8bc",
+  "Green Party (E&W)": "#2f9e44", "Scottish National Party (SNP)": "#d4b106",
+  "Plaid Cymru - The Party of Wales": "#087f5b",
+  "No overall control": "#adb5bd",
+};
 
 // One round trip for the Key Facts group: local authority + council control
 // (migration 0071), plus this station's stored assessment row so capacity,
@@ -10934,6 +10958,25 @@ async function fetchDdContext(station) {
     ]);
     deep._ctx = (ctx && ctx.data) || null;
     deep._assessRow = (arow && arow.data) || null;
+    // Local plan housing gap for the authority: the dataset's rows are named
+    // as LPA councils ("Calderdale Metropolitan Borough Council"), so prefix-
+    // match on the LAD name. No match, or a plan without published numbers,
+    // degrades to "no data" — absence of evidence stays that way.
+    if (deep._ctx && deep._ctx.lad_name) {
+      const { data: lp } = await sb.from("map_features")
+        .select("name, props")
+        .eq("dataset", "local_plan_housing")
+        .ilike("name", deep._ctx.lad_name.replace(/[%_]/g, "") + "%")
+        .limit(1);
+      const props = lp && lp[0] && lp[0].props;
+      if (props && props.gap != null) {
+        deep._planGap = Number(props.gap);
+        deep._planStage = props.stage || null;
+      } else {
+        deep._planGap = null;
+        deep._planGapStatus = props ? "plan, no figures" : "no plan data";
+      }
+    }
   } catch (_) { /* headlines degrade to what the browser already holds */ }
   renderDdKeyfactsDetail();
   renderDdConnectivityDetail();
@@ -10950,62 +10993,131 @@ const DD_PARTY_SHORT = {
 };
 function ddParty(name) { return DD_PARTY_SHORT[name] || name || ""; }
 
+// The dashboard: each group's pill row, always visible under its header. This
+// is called from every hook that lands new data (context fetch, catchment
+// stats, developable tool, viability, deprivation score), so pills fill in
+// live as the numbers arrive.
 function renderDdHeadlines() {
   const set = (k, html) => {
-    const el = document.getElementById("dd-hl-" + k);
+    const el = document.getElementById("dd-pills-" + k);
     if (el) el.innerHTML = html;
   };
   const st = deep.station;
   if (!st) return;
   const ctx = deep._ctx, a = deep._assessRow, r = deep.developableResult;
 
-  // Key facts: LA + control.
-  if (ctx && ctx.lad_name) {
-    const pol = ctx.control
-      ? (ctx.control === "No overall control"
-          ? `NOC · ${ddParty(ctx.largest)} lead` : ddParty(ctx.control))
-      : "";
-    set("keyfacts", `<b>${ctx.lad_name}</b>${pol ? ` · ${pol}` : ""}`);
-  } else {
-    set("keyfacts", st.region || "—");
+  // --- Key facts: control · population · density · plan gap ---------------
+  {
+    const pills = [];
+    if (ctx && ctx.control) {
+      const noc = ctx.control === "No overall control";
+      pills.push(ddPill(
+        noc ? `NOC <small>${ddParty(ctx.largest)} lead</small>` : ddParty(ctx.control),
+        "Council control", null,
+        DD_PARTY_COLOR[noc ? ctx.largest : ctx.control] || "#868e96"));
+    } else {
+      pills.push(ddPillNA("Council control", ctx ? "n/a" : "…"));
+    }
+    pills.push(deep.population != null
+      ? ddPill(fmtCount(deep.population), "Est. population")
+      : ddPillNA("Est. population", "…"));
+    const dens = densityPerKm2(deep.population, deep.area_km2);
+    pills.push(dens != null
+      ? ddPill(fmtCount(dens), "Density / km²")
+      : ddPillNA("Density / km²", "…"));
+    if (deep._planGap != null) {
+      const g = Number(deep._planGap);
+      pills.push(g <= 0
+        ? ddPill("Met", "Plan housing gap", "ok")
+        : ddPill(fmtCount(g) + " <small>homes</small>", "Plan housing gap", g >= 3000 ? "bad" : "warn"));
+    } else {
+      pills.push(ddPillNA("Plan housing gap", deep._planGapStatus || "no data"));
+    }
+    set("keyfacts", pills.join(""));
   }
 
-  // Capacity: live tool result wins; stored assessment row otherwise.
-  const ha = r ? Number(r.developable_ha) : (a ? Number(a.developable_ha) : null);
-  const homes = r ? (developableDwellings() || {})[activeDevelopableRegime() === "urban" ? "urban" : activeDevelopableRegime()] : (a ? a.dwelling_yield : null);
-  if (ha != null) {
-    set("capacity", `<b>${ha.toFixed(1)} ha</b> → <b>${(homes ?? 0).toLocaleString()}</b> homes` +
-      (r ? "" : ` <span class="dd-hl-dim">@${a && a.density_floor ? a.density_floor + " dph" : "floor"}</span>`));
-  } else {
-    set("capacity", `<span class="dd-hl-dim">run the land tool</span>`);
+  // --- Capacity / yield ----------------------------------------------------
+  {
+    const ha = r ? Number(r.developable_ha) : (a ? Number(a.developable_ha) : null);
+    const homes = r
+      ? (developableDwellings() || {})[activeDevelopableRegime() === "urban" ? "urban" : activeDevelopableRegime()]
+      : (a ? a.dwelling_yield : null);
+    const fr = r ? Number(r.friction) : (a ? Number(a.constraint_friction) : null);
+    const pills = [];
+    pills.push(ha != null ? ddPill(ha.toFixed(1) + " <small>ha</small>", "Developable land")
+                          : ddPillNA("Developable land", "run tool"));
+    pills.push(homes != null ? ddPill(Number(homes).toLocaleString(), "Approx. dwellings" + (r ? "" : " <i>@floor</i>"))
+                             : ddPillNA("Approx. dwellings"));
+    const catchHa = deep.area_km2 ? deep.area_km2 * 100 : null;
+    pills.push((ha != null && catchHa)
+      ? ddPill(Math.round(100 * Math.min(1, ha / catchHa)) + "%", "Of catchment")
+      : ddPillNA("Of catchment"));
+    pills.push(fr != null
+      ? ddPill(Math.round(fr * 100) + "%", "Planning friction",
+               fr < 0.15 ? "ok" : fr < 0.35 ? "warn" : "bad")
+      : ddPillNA("Planning friction"));
+    set("capacity", pills.join(""));
   }
 
-  // Connectivity: frequency + NPPF verdict + usage.
-  const p = stationProps(st.crs);
-  if (p) {
+  // --- Connectivity --------------------------------------------------------
+  {
+    const p = stationProps(st.crs) || {};
     const wc = wellConnectedFrom(p);
     const m = nppfMinDph(st.crs);
-    const bits = [`${Number(p.sustained_tph) || 0}/hr`, `${Number(p.sustained_tph_per_dir) || 0}/dir`];
-    bits.push(wc ? `<b class="dd-ok">WC ✓ ${m ? m.min + " dph" : ""}</b>` : `<span class="dd-hl-dim">not WC</span>`);
-    if (st.usage != null) bits.push(fmtCount(st.usage) + " pax/yr");
-    set("connectivity", bits.join(" · "));
+    const pills = [];
+    pills.push(wc
+      ? ddPill(`WC ✓ <small>${m ? m.min + " dph" : ""}</small>`, "NPPF status", "ok")
+      : ddPill("Not WC", "NPPF status", "dim"));
+    const pk = Number(p.peak_trains) || null, sus = Number(p.sustained_tph) || null;
+    pills.push((pk || sus)
+      ? ddPill(`${pk ?? "—"} <small>pk</small> · ${sus ?? "—"} <small>sus</small>`, "Trains / hour")
+      : ddPillNA("Trains / hour"));
+    pills.push(p.connectivity_pctile != null
+      ? ddPill(Math.round(Number(p.connectivity_pctile)) + "<small>%</small>", "Connectivity pctile")
+      : ddPillNA("Connectivity pctile"));
+    set("connectivity", pills.join(""));
   }
 
-  // Market: £/m² + profit when an appraisal has run.
-  const ppm2 = (r && deep._marketPpm2) || (a && a.catchment_ppm2) || null;
-  const mb = [];
-  if (ppm2) mb.push(`£${Math.round(Number(ppm2)).toLocaleString()}/m²`);
-  if (deep._lastProfitPct != null)
-    mb.push(`profit <b class="${deep._lastProfitPct >= 15 ? "dd-ok" : "dd-warn"}">${deep._lastProfitPct.toFixed(1)}%</b>`);
-  set("market", mb.length ? mb.join(" · ") : `<span class="dd-hl-dim">appraisal pending</span>`);
+  // --- Market / viability --------------------------------------------------
+  {
+    const ppm2 = deep._marketPpm2 || (a && a.catchment_ppm2) || null;
+    const pills = [];
+    pills.push(ppm2 ? ddPill("£" + Math.round(Number(ppm2)).toLocaleString(), "Avg £/m²")
+                    : ddPillNA("Avg £/m²"));
+    pills.push(deep._lastProfitPct != null
+      ? ddPill(deep._lastProfitPct.toFixed(1) + "%", "Profit on cost",
+               deep._lastProfitPct >= 15 ? "ok" : deep._lastProfitPct >= 10 ? "warn" : "bad")
+      : ddPillNA("Profit on cost", "appraise"));
+    pills.push(deep._lastGdv != null
+      ? ddPill(fmtMoneyShort(deep._lastGdv), "GDV")
+      : ddPillNA("GDV", "appraise"));
+    set("market", pills.join(""));
+  }
 
-  // Constraints: Green Belt share + friction.
-  const gbHa = r ? Number(r.green_belt_ha) : (a ? Number(a.green_belt_ha) : null);
-  const fr = r ? Number(r.friction) : (a ? Number(a.constraint_friction) : null);
-  const cb = [];
-  if (gbHa != null && ha) cb.push(`GB ${Math.round(100 * Math.min(1, gbHa / Math.max(ha, 0.01)))}%`);
-  if (fr != null) cb.push(`friction ${fr.toFixed(2)}`);
-  set("constraints", cb.length ? cb.join(" · ") : `<span class="dd-hl-dim">—</span>`);
+  // --- Need / deprivation --------------------------------------------------
+  {
+    const score = deep._needScore;
+    const barriers = deep.domains ? deep.domains.housing : null;
+    const pills = [];
+    pills.push(score != null && !isNaN(score)
+      ? ddPill(score.toFixed(0) + "<small>/100</small>", "Catchment deprivation",
+               score >= 75 ? "bad" : score >= 50 ? "warn" : "ok")
+      : ddPillNA("Catchment deprivation", "…"));
+    pills.push(barriers != null && !isNaN(barriers)
+      ? ddPill(Number(barriers).toFixed(0) + "<small>/100</small>", "Barriers to housing",
+               barriers >= 75 ? "bad" : barriers >= 50 ? "warn" : "ok")
+      : ddPillNA("Barriers to housing"));
+    set("need", pills.join(""));
+  }
+}
+
+// £ shortened for a pill: £48m / £1.2bn.
+function fmtMoneyShort(v) {
+  if (v == null || isNaN(v)) return "—";
+  const n = Number(v);
+  if (n >= 1e9) return "£" + (n / 1e9).toFixed(1) + "bn";
+  if (n >= 1e6) return "£" + Math.round(n / 1e6) + "m";
+  return "£" + Math.round(n / 1e3) + "k";
 }
 
 function renderDdKeyfactsDetail() {
@@ -11018,6 +11130,11 @@ function renderDdKeyfactsDetail() {
     rows.push(["Council control", ctx.control === "No overall control"
       ? `No overall control — ${ctx.largest} largest (${ctx.largest_seats}/${ctx.total_seats})`
       : `${ctx.control} (${ctx.largest_seats}/${ctx.total_seats} seats)`]);
+  }
+  if (deep._planGap != null) {
+    rows.push(["Local plan housing gap", Number(deep._planGap) <= 0
+      ? "Requirement fully covered by published supply"
+      : `${Number(deep._planGap).toLocaleString()} homes short of the plan requirement${deep._planStage ? ` (${deep._planStage} plan)` : ""}`]);
   }
   if (st.region) rows.push(["Region", st.region]);
   if (st.ttwa_name) rows.push(["Travel to Work Area",
@@ -11108,6 +11225,14 @@ function buildDeepDivePanel(meta) {
       ` + ddGroupHead("capacity", "Capacity · yield") + `
       <div class="dd-group-content" data-gc="capacity">
       ${developableSectionHTML(meta.station)}
+      <section class="dd-block collapsed" data-section="dd-constraints">
+        <button class="dd-block-head" type="button" aria-expanded="false">
+          <span class="dd-h">Constraints</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <div id="dd-constraints-detail"><p class="hint">Constraint coverage loads with the station assessment.</p></div>
+        </div>
+      </section>
       <section class="dd-block collapsed" data-section="assembly">
         <button class="dd-block-head" type="button" aria-expanded="false">
           <span class="dd-h">Site assembly</span><span class="dd-caret">▾</span>
@@ -11138,10 +11263,8 @@ function buildDeepDivePanel(meta) {
         </div>
       </section>
       </div>
-      ` + ddGroupHead("constraints", "Constraints") + `
-      <div class="dd-group-content" data-gc="constraints">
-        <div id="dd-constraints-detail"><p class="hint">Constraint coverage loads with the station assessment.</p></div>
-      </div>
+      ` + ddGroupHead("need", "Need · deprivation") + `
+      <div class="dd-group-content" data-gc="need"></div>
       ` : ""}
 
       <section class="dd-block" data-section="score">
@@ -11258,8 +11381,8 @@ function buildDeepDivePanel(meta) {
       if (n && dest) dest.appendChild(n);
     };
     move('[data-section="brownfield"]', gc("capacity"));
-    move('[data-section="score"]', gc("market"));
-    move('[data-section="catchment"]', gc("market"));
+    move('[data-section="score"]', gc("need"));
+    move('[data-section="catchment"]', gc("keyfacts"));
     move('[data-section="amenities"]', gc("market"));
     move('[data-section="access"]', gc("connectivity"));
     // Inner blocks start collapsed; the group headline carries the summary.
@@ -11280,13 +11403,16 @@ function buildDeepDivePanel(meta) {
       head.addEventListener("click", () => {
         const open = head.getAttribute("aria-expanded") === "true";
         head.setAttribute("aria-expanded", open ? "false" : "true");
-        const content = head.nextElementSibling;
+        // The pills row sits between the header and its content now.
+        const content = panel.querySelector(`[data-gc="${head.dataset.g}"]`);
         if (content) content.classList.toggle("dd-gc-open", !open);
         const caret = head.querySelector(".dd-caret");
         if (caret) caret.textContent = open ? "▸" : "▾";
       });
     });
     deep._ctx = null; deep._assessRow = null; deep._lastProfitPct = null;
+    deep._lastGdv = null; deep._planGap = null; deep._planGapStatus = null;
+    deep._needScore = null;
     renderDdHeadlines();
     fetchDdContext(meta.station);
   }
@@ -11471,6 +11597,8 @@ function renderDeprivationScore() {
   let score = combinedScoreFromDomains(domains, state.weights);
   const dbImd = deep.assessment && deep.assessment.catchment_imd;
   if ((score == null || isNaN(score)) && dbImd != null) score = Number(dbImd);
+  deep._needScore = (score == null || isNaN(score)) ? null : Number(score);
+  if (typeof renderDdHeadlines === "function") renderDdHeadlines();
   valEl.innerHTML = (score == null || isNaN(score))
     ? `—<span>/100</span>`
     : `${score.toFixed(0)}<span>/100</span>`;
