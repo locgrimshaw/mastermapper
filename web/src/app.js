@@ -10912,26 +10912,69 @@ function renderUsagePerResident() {
 // Connectivity / Market · viability / Constraints — each a compact header with
 // a live HEADLINE line, detail collapsed beneath. The aim is all five headers
 // on screen at once: the panel answers at a glance and expands on demand.
-function ddGroupHead(key, title) {
-  return `<button class="dd-group-head" type="button" data-g="${key}" aria-expanded="false">` +
-    `<span class="dd-g-title">${title}</span>` +
-    `<span class="dd-g-more">detail</span>` +
-    `<span class="dd-caret">▸</span></button>` +
-    `<div class="dd-pills" id="dd-pills-${key}"></div>`;
+// Small feather-style inline icons (stroke = currentColor) used across the
+// dashboard: one per group header, one per pill. Kept as one map so the
+// symbol language stays consistent.
+const DD_ICONS = {
+  landmark: '<path d="M3 21h18M5 21V10m4 11V10m6 11V10m4 11V10M2 10l10-6 10 6z"/>',
+  users: '<circle cx="9" cy="7" r="4"/><path d="M1 21v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2M17 3.5a4 4 0 0 1 0 7M23 21v-2a4 4 0 0 0-3-3.9"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+  map: '<path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4z M8 2v16M16 6v16"/>',
+  home: '<path d="M3 9.5 12 2l9 7.5V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM9 22v-8h6v8"/>',
+  pie: '<path d="M21.2 15.9A10 10 0 1 1 8 2.8M22 12A10 10 0 0 0 12 2v10z"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  check: '<path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"/><path d="M22 4 12 14l-3-3"/>',
+  train: '<rect x="4" y="3" width="16" height="13" rx="2"/><path d="M4 10h16M12 3v7M8 19l-2 3M16 19l2 3M8 16v3h8v-3"/>',
+  signal: '<path d="M4 20v-2M9 20v-6M14 20V10M19 20V4"/>',
+  tag: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/>',
+  trend: '<path d="M23 6 13.5 15.5 8.5 10.5 1 18"/><path d="M17 6h6v6"/>',
+  coins: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.7-4 3-9 3s-9-1.3-9-3M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/>',
+  pulse: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+};
+function ddIcon(name) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${DD_ICONS[name] || ""}</svg>`;
 }
 
-// One dashboard pill: big value, small caption, optional tone (ok/warn/bad/
-// dim) or an accent colour rendered as the pill's left edge.
-function ddPill(value, label, tone, accent) {
+const DD_GROUP_ICON = {
+  keyfacts: "landmark", capacity: "home", connectivity: "train",
+  market: "trend", need: "pulse",
+};
+
+// One dashboard group: an accent-coloured card wrapping the header (icon
+// chip + title + detail affordance), the always-visible pill grid, and the
+// collapsed detail content.
+function ddGroup(key, title, content) {
+  return `<section class="dd-g dd-g-${key}">` +
+    `<button class="dd-group-head" type="button" data-g="${key}" aria-expanded="false">` +
+      `<span class="dd-g-icon">${ddIcon(DD_GROUP_ICON[key])}</span>` +
+      `<span class="dd-g-title">${title}</span>` +
+      `<span class="dd-g-more">detail</span>` +
+      `<span class="dd-caret">▸</span></button>` +
+    `<div class="dd-pills" id="dd-pills-${key}"></div>` +
+    `<div class="dd-group-content" data-gc="${key}">${content}</div>` +
+    `</section>`;
+}
+
+// One dashboard pill: an icon chip, a big value and a small caption.
+// `tone` (ok/warn/bad/dim) colours the value + chip semantically; `accent`
+// overrides the chip colour outright (party colours). Without either, the
+// chip inherits its group's accent, so each card reads as one family.
+function ddPill(value, label, tone, accent, icon) {
   const style = accent ? ` style="--pill-accent:${accent}"` : "";
   return `<div class="dd-pill${tone ? " dd-pill-" + tone : ""}${accent ? " dd-pill-accent" : ""}"${style}>` +
+    (icon ? `<span class="dd-pill-i">${ddIcon(icon)}</span>` : "") +
+    `<span class="dd-pill-tx">` +
     `<span class="dd-pill-v">${value}</span>` +
-    `<span class="dd-pill-k">${label}</span></div>`;
+    `<span class="dd-pill-k">${label}</span></span></div>`;
 }
-function ddPillNA(label, hint) {
+function ddPillNA(label, hint, icon) {
   return `<div class="dd-pill dd-pill-dim">` +
+    (icon ? `<span class="dd-pill-i">${ddIcon(icon)}</span>` : "") +
+    `<span class="dd-pill-tx">` +
     `<span class="dd-pill-v">${hint || "—"}</span>` +
-    `<span class="dd-pill-k">${label}</span></div>`;
+    `<span class="dd-pill-k">${label}</span></span></div>`;
 }
 
 const DD_PARTY_COLOR = {
@@ -11014,24 +11057,24 @@ function renderDdHeadlines() {
       pills.push(ddPill(
         noc ? `NOC <small>${ddParty(ctx.largest)} lead</small>` : ddParty(ctx.control),
         "Council control", null,
-        DD_PARTY_COLOR[noc ? ctx.largest : ctx.control] || "#868e96"));
+        DD_PARTY_COLOR[noc ? ctx.largest : ctx.control] || "#868e96", "landmark"));
     } else {
-      pills.push(ddPillNA("Council control", ctx ? "n/a" : "…"));
+      pills.push(ddPillNA("Council control", ctx ? "n/a" : "…", "landmark"));
     }
     pills.push(deep.population != null
-      ? ddPill(fmtCount(deep.population), "Est. population")
-      : ddPillNA("Est. population", "…"));
+      ? ddPill(fmtCount(deep.population), "Est. population", null, null, "users")
+      : ddPillNA("Est. population", "…", "users"));
     const dens = densityPerKm2(deep.population, deep.area_km2);
     pills.push(dens != null
-      ? ddPill(fmtCount(dens), "Density / km²")
-      : ddPillNA("Density / km²", "…"));
+      ? ddPill(fmtCount(dens), "Density / km²", null, null, "grid")
+      : ddPillNA("Density / km²", "…", "grid"));
     if (deep._planGap != null) {
       const g = Number(deep._planGap);
       pills.push(g <= 0
-        ? ddPill("Met", "Plan housing gap", "ok")
-        : ddPill(fmtCount(g) + " <small>homes</small>", "Plan housing gap", g >= 3000 ? "bad" : "warn"));
+        ? ddPill("Met", "Plan housing gap", "ok", null, "target")
+        : ddPill(fmtCount(g) + " <small>homes</small>", "Plan housing gap", g >= 3000 ? "bad" : "warn", null, "target"));
     } else {
-      pills.push(ddPillNA("Plan housing gap", deep._planGapStatus || "no data"));
+      pills.push(ddPillNA("Plan housing gap", deep._planGapStatus || "no data", "target"));
     }
     set("keyfacts", pills.join(""));
   }
@@ -11044,18 +11087,18 @@ function renderDdHeadlines() {
       : (a ? a.dwelling_yield : null);
     const fr = r ? Number(r.friction) : (a ? Number(a.constraint_friction) : null);
     const pills = [];
-    pills.push(ha != null ? ddPill(ha.toFixed(1) + " <small>ha</small>", "Developable land")
-                          : ddPillNA("Developable land", "run tool"));
-    pills.push(homes != null ? ddPill(Number(homes).toLocaleString(), "Approx. dwellings" + (r ? "" : " <i>@floor</i>"))
-                             : ddPillNA("Approx. dwellings"));
+    pills.push(ha != null ? ddPill(ha.toFixed(1) + " <small>ha</small>", "Developable land", null, null, "map")
+                          : ddPillNA("Developable land", "run tool", "map"));
+    pills.push(homes != null ? ddPill(Number(homes).toLocaleString(), "Approx. dwellings" + (r ? "" : " <i>@floor</i>"), null, null, "home")
+                             : ddPillNA("Approx. dwellings", null, "home"));
     const catchHa = deep.area_km2 ? deep.area_km2 * 100 : null;
     pills.push((ha != null && catchHa)
-      ? ddPill(Math.round(100 * Math.min(1, ha / catchHa)) + "%", "Of catchment")
-      : ddPillNA("Of catchment"));
+      ? ddPill(Math.round(100 * Math.min(1, ha / catchHa)) + "%", "Of catchment", null, null, "pie")
+      : ddPillNA("Of catchment", null, "pie"));
     pills.push(fr != null
       ? ddPill(Math.round(fr * 100) + "%", "Planning friction",
-               fr < 0.15 ? "ok" : fr < 0.35 ? "warn" : "bad")
-      : ddPillNA("Planning friction"));
+               fr < 0.15 ? "ok" : fr < 0.35 ? "warn" : "bad", null, "shield")
+      : ddPillNA("Planning friction", null, "shield"));
     set("capacity", pills.join(""));
   }
 
@@ -11066,15 +11109,15 @@ function renderDdHeadlines() {
     const m = nppfMinDph(st.crs);
     const pills = [];
     pills.push(wc
-      ? ddPill(`WC ✓ <small>${m ? m.min + " dph" : ""}</small>`, "NPPF status", "ok")
-      : ddPill("Not WC", "NPPF status", "dim"));
+      ? ddPill(`WC ✓ <small>${m ? m.min + " dph" : ""}</small>`, "NPPF status", "ok", null, "check")
+      : ddPill("Not WC", "NPPF status", "dim", null, "check"));
     const pk = Number(p.peak_trains) || null, sus = Number(p.sustained_tph) || null;
     pills.push((pk || sus)
-      ? ddPill(`${pk ?? "—"} <small>pk</small> · ${sus ?? "—"} <small>sus</small>`, "Trains / hour")
-      : ddPillNA("Trains / hour"));
+      ? ddPill(`${pk ?? "—"}<small>pk</small>/${sus ?? "—"}<small>sus</small>`, "Trains / hour", null, null, "train")
+      : ddPillNA("Trains / hour", null, "train"));
     pills.push(p.connectivity_pctile != null
-      ? ddPill(Math.round(Number(p.connectivity_pctile)) + "<small>%</small>", "Connectivity pctile")
-      : ddPillNA("Connectivity pctile"));
+      ? ddPill(Math.round(Number(p.connectivity_pctile)) + "<small>%</small>", "Connectivity pctile", null, null, "signal")
+      : ddPillNA("Connectivity pctile", null, "signal"));
     set("connectivity", pills.join(""));
   }
 
@@ -11082,15 +11125,15 @@ function renderDdHeadlines() {
   {
     const ppm2 = deep._marketPpm2 || (a && a.catchment_ppm2) || null;
     const pills = [];
-    pills.push(ppm2 ? ddPill("£" + Math.round(Number(ppm2)).toLocaleString(), "Avg £/m²")
-                    : ddPillNA("Avg £/m²"));
+    pills.push(ppm2 ? ddPill("£" + Math.round(Number(ppm2)).toLocaleString(), "Avg £/m²", null, null, "tag")
+                    : ddPillNA("Avg £/m²", null, "tag"));
     pills.push(deep._lastProfitPct != null
       ? ddPill(deep._lastProfitPct.toFixed(1) + "%", "Profit on cost",
-               deep._lastProfitPct >= 15 ? "ok" : deep._lastProfitPct >= 10 ? "warn" : "bad")
-      : ddPillNA("Profit on cost", "appraise"));
+               deep._lastProfitPct >= 15 ? "ok" : deep._lastProfitPct >= 10 ? "warn" : "bad", null, "trend")
+      : ddPillNA("Profit on cost", "appraise", "trend"));
     pills.push(deep._lastGdv != null
-      ? ddPill(fmtMoneyShort(deep._lastGdv), "GDV")
-      : ddPillNA("GDV", "appraise"));
+      ? ddPill(fmtMoneyShort(deep._lastGdv), "GDV", null, null, "coins")
+      : ddPillNA("GDV", "appraise", "coins"));
     set("market", pills.join(""));
   }
 
@@ -11101,12 +11144,12 @@ function renderDdHeadlines() {
     const pills = [];
     pills.push(score != null && !isNaN(score)
       ? ddPill(score.toFixed(0) + "<small>/100</small>", "Catchment deprivation",
-               score >= 75 ? "bad" : score >= 50 ? "warn" : "ok")
-      : ddPillNA("Catchment deprivation", "…"));
+               score >= 75 ? "bad" : score >= 50 ? "warn" : "ok", null, "pulse")
+      : ddPillNA("Catchment deprivation", "…", "pulse"));
     pills.push(barriers != null && !isNaN(barriers)
       ? ddPill(Number(barriers).toFixed(0) + "<small>/100</small>", "Barriers to housing",
-               barriers >= 75 ? "bad" : barriers >= 50 ? "warn" : "ok")
-      : ddPillNA("Barriers to housing"));
+               barriers >= 75 ? "bad" : barriers >= 50 ? "warn" : "ok", null, "lock")
+      : ddPillNA("Barriers to housing", null, "lock"));
     set("need", pills.join(""));
   }
 }
@@ -11217,13 +11260,10 @@ function buildDeepDivePanel(meta) {
     </div>
 
     <div class="dd-body${meta.station ? " dd-body5" : ""}">
-      ${meta.station ? ddGroupHead("keyfacts", "Key facts") + `
-      <div class="dd-group-content" data-gc="keyfacts">
+      ${meta.station ? ddGroup("keyfacts", "Key facts", `
         <div id="dd-keyfacts-detail"><p class="hint">Looking up the local authority…</p></div>
-        ${stationSectionHTML(meta.station)}
-      </div>
-      ` + ddGroupHead("capacity", "Capacity · yield") + `
-      <div class="dd-group-content" data-gc="capacity">
+        ${stationSectionHTML(meta.station)}`)
+      + ddGroup("capacity", "Capacity · yield", `
       ${developableSectionHTML(meta.station)}
       <section class="dd-block collapsed" data-section="dd-constraints">
         <button class="dd-block-head" type="button" aria-expanded="false">
@@ -11243,14 +11283,10 @@ function buildDeepDivePanel(meta) {
           <div id="dd-assembly-summary"></div>
         </div>
       </section>
-      <section class="dd-synthesis" id="dd-synthesis"></section>
-      </div>
-      ` + ddGroupHead("connectivity", "Connectivity") + `
-      <div class="dd-group-content" data-gc="connectivity">
-        <div id="dd-connectivity-detail"></div>
-      </div>
-      ` + ddGroupHead("market", "Market · viability") + `
-      <div class="dd-group-content" data-gc="market">
+      <section class="dd-synthesis" id="dd-synthesis"></section>`)
+      + ddGroup("connectivity", "Connectivity", `
+        <div id="dd-connectivity-detail"></div>`)
+      + ddGroup("market", "Market · viability", `
       <section class="dd-block collapsed" data-section="viability">
         <button class="dd-block-head" type="button" aria-expanded="false">
           <span class="dd-h">Viability — residual appraisal</span><span class="dd-caret">▾</span>
@@ -11261,11 +11297,9 @@ function buildDeepDivePanel(meta) {
           <button type="button" class="ghost" id="dd-viab-calc">Full calculation…</button>
           <button type="button" class="plot-mode-btn" id="dd-catchment-report">Full report…</button>
         </div>
-      </section>
-      </div>
-      ` + ddGroupHead("need", "Need · deprivation") + `
-      <div class="dd-group-content" data-gc="need"></div>
-      ` : ""}
+      </section>`)
+      + ddGroup("need", "Need · deprivation", "")
+      : ""}
 
       <section class="dd-block" data-section="score">
         <button class="dd-block-head" type="button" aria-expanded="true">

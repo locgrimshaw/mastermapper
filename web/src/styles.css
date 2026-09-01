@@ -2752,48 +2752,105 @@ footer {
 }
 .other-data-row input { accent-color: var(--accent, #4c6ef5); }
 
-/* ---- Deep-dive dashboard pills (renderDdHeadlines) ---- */
-/* Always-visible headline metrics under each group header; the group's
-   detail stays collapsed behind the header's "detail ▸" affordance. */
-.dd-pills {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px; margin: 6px 0 2px;
+/* ---- Deep-dive dashboard (renderDdHeadlines) ---- */
+/* Five accent-coloured group cards; each card = icon-chip header + pill
+   grid (always visible) + collapsed detail. The accent flows through the
+   card border, header tint, title and pill icon chips so every group reads
+   as one family at a glance. */
+.dd-g {
+  --g: #4c6ef5;
+  border: 1px solid color-mix(in srgb, var(--g) 30%, var(--ink-line));
+  border-radius: 13px;
+  margin-top: 10px;
+  padding: 7px 8px 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--g) 9%, transparent),
+                            color-mix(in srgb, var(--g) 2%, transparent) 46px,
+                            transparent 46px);
 }
-.dd-pill {
-  position: relative;
-  background: var(--panel-2, rgba(128,128,128,.07));
-  border: 1px solid var(--ink-line);
-  border-radius: 10px;
-  padding: 8px 10px 7px 12px;
-  min-width: 0;
-  overflow: hidden;
+.dd-g-keyfacts     { --g: #4c6ef5; }
+.dd-g-capacity     { --g: #2f9e44; }
+.dd-g-connectivity { --g: #7048e8; }
+.dd-g-market       { --g: #e8860c; }
+.dd-g-need         { --g: #e64980; }
+
+.dd-g .dd-group-head {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left; cursor: pointer;
+  padding: 3px 2px 8px; margin: 0;
+  background: transparent; border: none; border-radius: 0;
+  color: var(--text); font-family: var(--font-ui);
 }
-.dd-pill::before {
-  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
-  background: var(--pill-accent, transparent);
+.dd-g .dd-group-head:hover .dd-g-more { opacity: 1; color: var(--g); }
+.dd-g-icon {
+  flex: none; width: 24px; height: 24px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--g); color: #fff;
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--g) 45%, transparent);
 }
-.dd-pill-v {
-  display: block; font-family: var(--font-data);
-  font-size: 15px; font-weight: 650; color: var(--text);
-  line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.dd-g-icon svg { width: 14px; height: 14px; }
+.dd-g-title {
+  font-size: 11px; font-weight: 800; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--g); flex: none;
 }
-.dd-pill-v small { font-size: 10.5px; font-weight: 500; color: var(--text-dim); }
-.dd-pill-v i { font-size: 9.5px; font-style: normal; color: var(--text-dim); }
-.dd-pill-k {
-  display: block; margin-top: 2px;
-  font-size: 9.5px; font-weight: 600; letter-spacing: .05em;
-  text-transform: uppercase; color: var(--text-dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.dd-pill-ok::before   { background: #2f9e44; }
-.dd-pill-warn::before { background: #f59f00; }
-.dd-pill-bad::before  { background: #e03131; }
-.dd-pill-ok .dd-pill-v   { color: #2f9e44; }
-.dd-pill-warn .dd-pill-v { color: #e8590c; }
-.dd-pill-bad .dd-pill-v  { color: #e03131; }
-.dd-pill-dim .dd-pill-v  { color: var(--text-dim); font-weight: 500; font-size: 12.5px; font-style: italic; }
 .dd-g-more {
   flex: 1; text-align: right;
-  font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--text-dim); opacity: .8;
+  font-size: 9px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-dim); opacity: .7;
 }
+.dd-g .dd-caret { flex: none; font-size: 10px; color: var(--g); opacity: .8; }
+
+.dd-pills {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.dd-pill {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--ink-2);
+  border: 1px solid color-mix(in srgb, var(--g) 18%, var(--ink-line));
+  border-radius: 11px;
+  padding: 7px 8px;
+  min-width: 0; overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+}
+.dd-pill-i {
+  flex: none; width: 24px; height: 24px; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--g) 13%, transparent);
+  color: var(--g);
+}
+.dd-pill-i svg { width: 14px; height: 14px; }
+.dd-pill-tx { min-width: 0; }
+.dd-pill-v {
+  display: block; font-family: var(--font-data);
+  font-size: 15.5px; font-weight: 700; color: var(--text);
+  line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dd-pill-v small { font-size: 10px; font-weight: 500; color: var(--text-dim); }
+.dd-pill-v i { font-size: 9.5px; font-style: normal; color: var(--text-dim); }
+.dd-pill-k {
+  display: block; margin-top: 1px;
+  font-size: 8px; font-weight: 700; letter-spacing: .045em;
+  text-transform: uppercase; color: var(--text-dim);
+  line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Semantic tones override the group accent on the value + chip. */
+.dd-pill-ok   { --t: #2f9e44; }
+.dd-pill-warn { --t: #e8590c; }
+.dd-pill-bad  { --t: #e03131; }
+.dd-pill-ok .dd-pill-v, .dd-pill-warn .dd-pill-v, .dd-pill-bad .dd-pill-v { color: var(--t); }
+.dd-pill-ok .dd-pill-i, .dd-pill-warn .dd-pill-i, .dd-pill-bad .dd-pill-i {
+  background: color-mix(in srgb, var(--t) 14%, transparent); color: var(--t);
+}
+.dd-pill-ok   { border-color: color-mix(in srgb, #2f9e44 35%, var(--ink-line)); }
+.dd-pill-warn { border-color: color-mix(in srgb, #e8590c 35%, var(--ink-line)); }
+.dd-pill-bad  { border-color: color-mix(in srgb, #e03131 35%, var(--ink-line)); }
+/* Party-coloured (or otherwise custom-accented) pills. */
+.dd-pill-accent .dd-pill-i {
+  background: var(--pill-accent); color: #fff;
+}
+.dd-pill-accent { border-color: color-mix(in srgb, var(--pill-accent) 40%, var(--ink-line)); }
+.dd-pill-dim .dd-pill-v { color: var(--text-dim); font-weight: 500; font-size: 12px; font-style: italic; }
+.dd-pill-dim .dd-pill-i { opacity: .55; }
