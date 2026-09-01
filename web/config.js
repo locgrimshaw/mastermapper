@@ -22,4 +22,17 @@ window.MASTERMAPPER_CONFIG = {
   // Leave empty for normal same-origin loading. Used by preview deployments of
   // the frontend so they don't need to ship ~130 MB of data files.
   DATA_BASE: "",
+
+  // Site-wide viability defaults: every key here overrides the built-in
+  // figure in VIAB_SCHEMA (web/src/app.js) as the value ALL users start
+  // from — the sift, the deep-dive appraisal and site reports all read them.
+  // Users can still tune variables locally; their own edits win on their
+  // browser, but any field they never touched follows this block.
+  //
+  // Easiest workflow: open any station's "Viability variables…", tune the
+  // numbers, press "Copy as site defaults", and paste the copied block here
+  // (replacing this one). Keys are the schema keys, e.g.:
+  //   VIABILITY_DEFAULTS: { profitTargetPct: 18, buildMonths: 30 },
+  // Unknown keys and non-numeric values are ignored.
+  VIABILITY_DEFAULTS: {},
 };

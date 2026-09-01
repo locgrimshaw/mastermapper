@@ -8952,7 +8952,8 @@ function openViabilityModal(ctx) {
         <strong>Viability variables</strong>
         <span class="hint" style="margin-left:8px">the full assumption set behind every appraisal — sift, deep dive and site reports share it</span>
         <div class="compare-head-actions">
-          <button type="button" class="ghost" id="viab-reset-all">Reset all</button>
+          <button type="button" class="ghost" id="viab-copy-defaults" title="Copy the current variables as a config.js VIABILITY_DEFAULTS block — paste it into web/config.js (or hand it to a Claude session) to make these the defaults every user starts from.">Copy as site defaults</button>
+          <button type="button" class="ghost" id="viab-reset-all">Reset to site defaults</button>
           <button type="button" class="compare-close" aria-label="Close">×</button>
         </div>
       </div>
@@ -8977,19 +8978,43 @@ function openViabilityModal(ctx) {
       commit();
     });
   });
+  const siteBase = siteViabilityDefaults();
   modal.querySelectorAll(".viab-reset").forEach(btn =>
     btn.addEventListener("click", () => {
       for (const f of VIAB_SCHEMA.filter(f => f.group === btn.dataset.group))
-        a[f.key] = f.default;
+        a[f.key] = siteBase[f.key];
       openViabilityModal(ctx);   // re-render with defaults restored
       if (ctx && ctx.onChange) ctx.onChange();
       persistSiftConfig();
     }));
   modal.querySelector("#viab-reset-all").addEventListener("click", () => {
-    for (const f of VIAB_SCHEMA) a[f.key] = f.default;
+    for (const f of VIAB_SCHEMA) a[f.key] = siteBase[f.key];
     openViabilityModal(ctx);
     if (ctx && ctx.onChange) ctx.onChange();
     persistSiftConfig();
+  });
+  // Owner tooling: the current variable set, expressed as the minimal
+  // config.js override block (only fields that differ from the built-in
+  // schema figures), straight to the clipboard.
+  const copyBtn = modal.querySelector("#viab-copy-defaults");
+  if (copyBtn) copyBtn.addEventListener("click", async () => {
+    const deltas = {};
+    for (const f of VIAB_SCHEMA)
+      if (a[f.key] != null && a[f.key] !== VIABILITY_DEFAULTS[f.key])
+        deltas[f.key] = a[f.key];
+    const snippet =
+      "// Paste inside window.MASTERMAPPER_CONFIG in web/config.js:\n" +
+      "VIABILITY_DEFAULTS: " + JSON.stringify(deltas, null, 2) + ",";
+    try {
+      await navigator.clipboard.writeText(snippet);
+      copyBtn.textContent = Object.keys(deltas).length
+        ? `Copied ${Object.keys(deltas).length} override(s) ✓`
+        : "Copied (no changes vs built-in) ✓";
+    } catch (_) {
+      copyBtn.textContent = "Copy failed — see console";
+      console.log(snippet);
+    }
+    setTimeout(() => { copyBtn.textContent = "Copy as site defaults"; }, 2500);
   });
   // Delegated: the preview's innerHTML is replaced on every keystroke, but the
   // #viab-preview container survives, so one listener covers every re-render.
@@ -13468,6 +13493,28 @@ const VIAB_GROUPS = [
 
 const VIABILITY_DEFAULTS = Object.fromEntries(
   VIAB_SCHEMA.map(f => [f.key, f.default]));
+
+// The SITE defaults every user starts from: the schema's built-in figures
+// overridden by VIABILITY_DEFAULTS in config.js. Editing config.js (and
+// pushing) retunes the whole appraisal for everyone; the "Copy site-defaults
+// snippet" button in the variables modal writes the config block for you.
+// Only known keys are honoured, values are coerced to the field's type, so a
+// typo in config.js can't corrupt the model.
+function siteViabilityDefaults() {
+  const out = Object.assign({}, VIABILITY_DEFAULTS);
+  const cfg = (typeof window !== "undefined" && window.MASTERMAPPER_CONFIG
+    && window.MASTERMAPPER_CONFIG.VIABILITY_DEFAULTS) || {};
+  for (const f of VIAB_SCHEMA) {
+    const v = cfg[f.key];
+    if (v == null) continue;
+    if (f.unit === "choice") {
+      if (f.choices && f.choices.includes(String(v))) out[f.key] = String(v);
+    } else if (isFinite(Number(v))) {
+      out[f.key] = Number(v);
+    }
+  }
+  return out;
+}
 // Saved assumptions from the OLD flat model (buildPsf/softCostPct era) are not
 // meaningfully translatable — discard them once, keep everything else.
 // v3: CIL went statutory-style (£/m² floor-area on regional bands, affordable
@@ -13491,7 +13538,7 @@ const SIFT = {
   sort: "viability",   // yield | regen | viability
   country: mmStore.get("siftCountry", "england"),  // england | scotland (sifted separately)
   guidance: mmStore.get("siftGuidance", false),   // show the per-step prose?
-  assumptions: Object.assign({}, VIABILITY_DEFAULTS),
+  assumptions: siteViabilityDefaults(),
   shortlist: new Set(mmStore.get("shortlist", [])),  // pinned station CRSs (persisted)
 };
 
@@ -13505,8 +13552,19 @@ const SIFT = {
   // v1 flat model (buildPsf £/ft², bundled softCostPct) cannot be translated
   // into typology £/m² + explicit fees/finance without inventing numbers, so
   // stale saves are dropped once — criteria, sort and shortlist are kept.
-  if (saved.assumptions && saved.assumptions._v === VIABILITY_DEFAULTS._v)
-    Object.assign(SIFT.assumptions, saved.assumptions);
+  // Only the values a user actually CHANGED from the built-in figures are
+  // applied over the site defaults — so when config.js retunes a default,
+  // returning users pick the new figure up unless they deliberately set
+  // that field themselves. (A user tweak that happens to equal the built-in
+  // default is indistinguishable from "never touched" and yields to the
+  // site default — accepted edge.)
+  if (saved.assumptions && saved.assumptions._v === VIABILITY_DEFAULTS._v) {
+    for (const f of VIAB_SCHEMA) {
+      const v = saved.assumptions[f.key];
+      if (v != null && v !== VIABILITY_DEFAULTS[f.key] && v !== SIFT.assumptions[f.key])
+        SIFT.assumptions[f.key] = v;
+    }
+  }
   if (saved.sort) SIFT.sort = saved.sort;
 })();
 
