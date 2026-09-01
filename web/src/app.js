@@ -14768,6 +14768,37 @@ const DC = {
 
 function dcPersist() { mmStore.set("dcSiftConfig", DC.crit); }
 
+// PostgREST caps every response at 1,000 rows, silently — the national 4 km
+// aggregate is ~18,300 blocks and a z9 viewport can be several thousand
+// cells, so single-shot RPC calls were drawing a random-looking scatter of
+// the first 1,000. Page through with limit/offset instead (4 requests in
+// flight at a time). The explicit `orderBy` columns are ESSENTIAL: without
+// them the function's output order shifts between executions (parallel
+// query workers), and offset pages then overlap and miss rows — measured,
+// not hypothetical. The keyed Map still de-duplicates page boundaries.
+async function dcRpcAll(fn, args, keyOf, orderBy, maxPages = 40) {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const page = 1000;
+  const seen = new Map();
+  let stop = false;
+  for (let batch = 0; batch < maxPages && !stop; batch += 4) {
+    const reqs = [];
+    for (let i = batch; i < Math.min(batch + 4, maxPages); i++) {
+      let q = sb.rpc(fn, args);
+      for (const col of orderBy) q = q.order(col, { ascending: true });
+      reqs.push(q.range(i * page, (i + 1) * page - 1));
+    }
+    const results = await Promise.all(reqs);
+    for (const { data, error } of results) {
+      if (error) { console.error(fn + " failed", error); return seen.size ? [...seen.values()] : null; }
+      for (const r of data || []) seen.set(keyOf(r), r);
+      if (!data || data.length < page) stop = true;
+    }
+  }
+  return [...seen.values()];
+}
+
 // A cell with built_pct = -1 has not been precomputed yet (the grid builds in
 // bands); it renders neutral grey rather than pretending to be red or green.
 function dcPassExpr(c) {
@@ -14831,10 +14862,9 @@ function dcCellFeature(row, sizeM) {
 
 async function dcEnsureLo() {
   if (DC.lo) return DC.lo;
-  const sb = getSupabase();
-  if (!sb) return null;
-  const { data, error } = await sb.rpc("dc_cells_agg", { res_m: 4000 });
-  if (error || !data) { console.error("dc_cells_agg failed", error); return null; }
+  const data = await dcRpcAll("dc_cells_agg", { res_m: 4000 },
+    r => r.e + ":" + r.n, ["e", "n"], 24);
+  if (!data || !data.length) { console.error("dc_cells_agg returned nothing"); return null; }
   DC.lo = { type: "FeatureCollection",
             features: data.map(r => dcCellFeature(r, 4000)) };
   return DC.lo;
@@ -14843,12 +14873,11 @@ async function dcEnsureLo() {
 let _dcHiTimer = null;
 async function dcRefreshHi() {
   if (!DC.active || map.getZoom() < 9) return;
-  const sb = getSupabase();
-  if (!sb) return;
   const b = map.getBounds();
-  const { data, error } = await sb.rpc("dc_cells_bbox", {
-    w: b.getWest(), s: b.getSouth(), e: b.getEast(), n: b.getNorth(), cap: 30000 });
-  if (error || !data || !DC.active) return;
+  const data = await dcRpcAll("dc_cells_bbox", {
+    w: b.getWest(), s: b.getSouth(), e: b.getEast(), n: b.getNorth(), cap: 30000 },
+    r => r.cell_id || (r.lng + ":" + r.lat), ["cell_id"], 30);
+  if (!data || !DC.active) return;
   const src = map.getSource("dc-hi-src");
   if (src) src.setData({ type: "FeatureCollection",
                          features: data.map(r => dcCellFeature(r, 1000)) });
@@ -14907,10 +14936,9 @@ async function dcHeatOverlay(on) {
     return;
   }
   if (!_dcHeatFc) {
-    const sb = getSupabase();
-    if (!sb) return;
-    const { data, error } = await sb.rpc("dc_heat_points");
-    if (error || !data) { console.error("dc_heat_points failed", error); return; }
+    const data = await dcRpcAll("dc_heat_points", {},
+      r => r.lng + ":" + r.lat + ":" + (r.name || ""), ["lng", "lat", "name"], 5);
+    if (!data || !data.length) { console.error("dc_heat_points returned nothing"); return; }
     _dcHeatFc = { type: "FeatureCollection", features: data.map(r => ({
       type: "Feature",
       properties: { status: r.status || "", name: r.name || "", tech: r.tech || "" },
