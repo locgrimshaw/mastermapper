@@ -1155,6 +1155,11 @@ const OVERLAY_TREE = [
     { key: "access", title: "Accessibility scores" },
     { key: "bus", title: "Bus network" },
   ]},
+  // Data-centre layers live in their own branch, hidden until the
+  // "Other data" toggle at the bottom of the sidebar reveals it.
+  { key: "datacentres", title: "Data centres", subs: [
+    { key: "dcdata", title: "Estate, planning & fibre" },
+  ]},
 ];
 const OVERLAY_GROUPS = OVERLAY_TREE.flatMap(t => t.subs);
 
@@ -1270,9 +1275,9 @@ const MAP_OVERLAYS = [
   { key: "planit_rates",        group: "policy", label: "Approval rates (PlanIt)",       color: "#0b7285", dataset: "planit_rates", minZoom: 5 },
   // Politics & data-centre planning history (DC sift phase 3).
   { key: "council_control",     group: "policy", label: "Council control (party)",       color: "#4c6ef5", dataset: "council_control", minZoom: 4 },
-  { key: "planit_dc_rates",     group: "policy", label: "Data-centre decisions (PlanIt)", color: "#0b7285", dataset: "planit_dc_rates", minZoom: 4 },
+  { key: "planit_dc_rates",     group: "dcdata", label: "Data-centre decisions (PlanIt)", color: "#0b7285", dataset: "planit_dc_rates", minZoom: 4 },
   { key: "mp_constituency",     group: "policy", label: "MP by constituency (party)",     color: "#845ef7", dataset: "mp_constituency", minZoom: 4 },
-  { key: "dc_application",      group: "policy", label: "Data-centre applications",       color: "#12b886", dataset: "dc_application", render: "point", minZoom: 4, lim: 4000,
+  { key: "dc_application",      group: "dcdata", label: "Data-centre applications",       color: "#12b886", dataset: "dc_application", render: "point", minZoom: 4, lim: 4000,
     radius: ["interpolate", ["linear"], ["zoom"], 5, 3, 10, 6],
     cap: { color: ["match", ["to-string", ["get", "state"]],
       "Permitted", "#2f9e44", "Rejected", "#c92a2a",
@@ -1280,12 +1285,12 @@ const MAP_OVERLAYS = [
   // The composited estate: built (OSM), built with a live application
   // nearby, and the consented new-build pipeline (large approvals since
   // 2019 away from any built site).
-  { key: "dc_site",             group: "policy", label: "Data-centre estate (status)",    color: "#1971c2", dataset: "dc_site", render: "point", minZoom: 4, lim: 2000,
+  { key: "dc_site",             group: "dcdata", label: "Data-centre estate (status)",    color: "#1971c2", dataset: "dc_site", render: "point", minZoom: 4, lim: 2000,
     radius: ["interpolate", ["linear"], ["zoom"], 5, 3.5, 10, 6.5],
     cap: { color: ["match", ["to-string", ["get", "status"]],
       "built", "#1971c2", "built-live-app", "#7048e8",
       "approved-pipeline", "#e8590c", "#868e96"] } },
-  { key: "dc_tec_demand",       group: "policy", label: "Probable DC-scale demand (TEC ≥50 MW)", color: "#845ef7", dataset: "dc_tec_demand", render: "point", minZoom: 4,
+  { key: "dc_tec_demand",       group: "dcdata", label: "Probable DC-scale demand (TEC ≥50 MW)", color: "#845ef7", dataset: "dc_tec_demand", render: "point", minZoom: 4,
     cap: { mwKey: "mw", color: "#845ef7" } },
   // Universities & students
   { key: "uni_campus", group: "students", label: "Universities & HE providers", color: "#7048e8", dataset: "uni_campus", render: "point", minZoom: 5, icon: "uni" },
@@ -1488,7 +1493,7 @@ const MAP_OVERLAYS = [
   // Site factors
   { key: "alc",                group: "sitefactors", label: "Agricultural land grades (ALC)", color: "#94d82d", dataset: "alc",                minZoom: 7 },
   { key: "water_availability", group: "sitefactors", label: "Water resource availability",    color: "#22b8cf", dataset: "water_availability", minZoom: 6 },
-  { key: "ofcom_fibre",        group: "sitefactors", label: "Full-fibre availability (Ofcom)", color: "#1971c2", dataset: "ofcom_fibre",       minZoom: 5 },
+  { key: "ofcom_fibre",        group: "dcdata", label: "Full-fibre availability (Ofcom)", color: "#1971c2", dataset: "ofcom_fibre",       minZoom: 5 },
   // gridAgg: a continuous 1 km value grid, so it is aggregated to the zoom
   // (grid_in_bbox, migration 0042) rather than row-capped. Capping cut it along
   // a latitude line, because the generic RPC orders by degree-area and a 1 km
@@ -2915,13 +2920,15 @@ function buildLayersPanel() {
         <span>${v.name}</span>
       </label>`).join("");
 
-  const deprivationGroup = `
-    <div class="lt-group" data-group="deprivation">
-      <button type="button" class="lt-head" aria-expanded="true">
+  // Rendered as a sub-section of Plans & policy areas (deprivation is read
+  // as policy context — regeneration need — not as its own branch).
+  const deprivationSub = `
+    <div class="lt-sub" data-group="deprivation">
+      <button type="button" class="lt-head lt-sub-head" aria-expanded="false">
         <span class="lt-title">Deprivation (IMD · SIMD)</span>
         <span class="box-caret" aria-hidden="true">▾</span>
       </button>
-      <div class="lt-body">
+      <div class="lt-body lt-collapsed">
         ${ltRowHTML({ cbId: "imd-show", label: "Deprivation choropleth",
                       swatch: `<span class="lt-ramp">${imdRamp}</span>`,
                       checked: state.imdOn, opacity: state.fillOpacity, opacityKey: "imd",
@@ -2951,22 +2958,16 @@ function buildLayersPanel() {
       </div>
     </div>`;
 
-  // --- House prices: an independent group (never tied to deprivation) ------
+  // --- House prices: rendered inside Market → Prices & sales (kept in its
+  // --- own wrapper so revealPriceGroup() still gates it on tile support) ---
   const priceRamp = PRICE_RAMP.slice(1).map(c => `<i style="background:${c}"></i>`).join("");
-  const priceGroup = `
-    <div class="lt-group" data-group="price" id="lt-group-price" hidden>
-      <button type="button" class="lt-head" aria-expanded="true">
-        <span class="lt-title">House prices</span>
-        <span class="box-caret" aria-hidden="true">▾</span>
-      </button>
-      <div class="lt-body">
-        ${ltRowHTML({ cbId: "price-show", label: "House price choropleth (£/m²)",
-                      swatch: `<span class="lt-ramp">${priceRamp}</span>`,
-                      checked: state.priceOn, opacity: state.priceOpacity, opacityKey: "price",
-                      info: { about: "Typical £ per square metre from actual sale prices, per LSOA. Independent of the deprivation layer — show both and blend with the fade sliders.",
-                              source: "HM Land Registry Price Paid Data (OGL v3)" } })}
-        <p class="hint" style="margin:2px 0 6px">HM Land Registry price paid, per LSOA. Independent of the deprivation layer — show both together and blend with the fade sliders.</p>
-      </div>
+  const priceRows = `
+    <div id="lt-group-price" hidden>
+      ${ltRowHTML({ cbId: "price-show", label: "House price choropleth (£/m²)",
+                    swatch: `<span class="lt-ramp">${priceRamp}</span>`,
+                    checked: state.priceOn, opacity: state.priceOpacity, opacityKey: "price",
+                    info: { about: "Typical £ per square metre from actual sale prices, per LSOA. Independent of the deprivation layer — show both and blend with the fade sliders.",
+                            source: "HM Land Registry Price Paid Data (OGL v3)" } })}
     </div>`;
 
   // --- Overlay-driven groups (Planning & environment · Student housing ·
@@ -3010,6 +3011,7 @@ function buildLayersPanel() {
               <button type="button" class="lt-seg-btn${marketPtype === v ? " active" : ""}"
                       data-ptype="${v}">${v === "all" ? "All" : v === "houses" ? "Houses" : "Flats"}</button>`).join("")}
           </div>`;
+        rows += priceRows;
       }
       // The connectivity layer carries 35 scores per area; a mode x purpose
       // picker above the row beats 35 separate toggles, and switching is a
@@ -3030,6 +3032,9 @@ function buildLayersPanel() {
         ltRowHTML({ dataKey: o.key, label: o.label, color: o.color, statId: `ov-stat-${o.key}`,
                     checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}`,
                     info: LAYER_INFO[o.key] })).join("");
+      // Deprivation rides inside Plans & policy areas as its own collapsed
+      // sub-section (regeneration-need context rather than a top branch).
+      if (g.key === "policy") rows += deprivationSub;
       return `
         <div class="lt-sub">
           <button type="button" class="lt-head lt-sub-head" aria-expanded="true">
@@ -3084,7 +3089,7 @@ function buildLayersPanel() {
       </div>
     </div>`;
 
-  host.innerHTML = deprivationGroup + priceGroup + overlayGroupsHTML + transportGroup;
+  host.innerHTML = overlayGroupsHTML + transportGroup;
 
   // Collapse/expand for groups and sub-groups.
   host.querySelectorAll(".lt-head").forEach(head => {
@@ -15084,8 +15089,32 @@ function wireDcSiftBox() {
   });
 }
 
+// "Other data" reveal: the specialist tools (data-centre sift + its layer
+// branch, PBSA sift) stay hidden until asked for, so the everyday sidebar
+// leads with the residential workflow. Preference persists across visits.
+function wireOtherDataToggle() {
+  const cb = document.getElementById("other-data-toggle");
+  if (!cb) return;
+  const apply = (on) => {
+    for (const id of ["dc-sift-box", "pbsa-box"]) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = !on;
+    }
+    const branch = document.querySelector('#layers-tree .lt-group[data-group="datacentres"]');
+    if (branch) branch.hidden = !on;
+  };
+  const on = !!mmStore.get("otherDataOn", false);
+  cb.checked = on;
+  apply(on);
+  cb.addEventListener("change", () => {
+    mmStore.set("otherDataOn", cb.checked);
+    apply(cb.checked);
+  });
+}
+
 wireDcSiftBox();          // Data-centre sift (bottom box)
 wirePbsaBox();            // PBSA sift (university rail access, box 3)
+wireOtherDataToggle();    // reveals the two above + the DC layers branch
 wirePortfolioBox();       // Portfolio scorer (priority-1 tool)
 
 map.on("load", async () => {

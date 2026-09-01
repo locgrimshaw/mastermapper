@@ -277,7 +277,7 @@
               <label class="dc-check-row"><input type="checkbox" id="dc-greenonly" /> <span>Green only (hide eliminated land)</span></label>
               <label class="pbsa-crit"><span>Opacity</span>
                 <input type="range" id="dc-opacity" min="10" max="90" step="5" value="40" /></label>
-              <p class="hint" id="dc-coverage-note">Substation voltages are OSM-tagged (~20% of substations carry one; 1,729 at ≥132 kV) — treat the power test as indicative. DNO headroom covers NGED, Northern Powergrid and UKPN only. Flood zones and ALC are England-only. Heat networks: DESNZ HNPD (1,495 schemes). Settlements: ONS BUA 2022 (Scotland/Wales populations estimated). Planning/politics layers land in phase 3 (docs/PLAN_DATACENTRE_SIFT.md).</p>
+              <p class="hint" id="dc-coverage-note">Substation voltages are OSM-tagged (~20% of substations carry one; 1,729 at ≥132 kV) — treat the power test as indicative. DNO headroom covers NGED, Northern Powergrid and UKPN only. Flood zones and ALC are England-only. Heat networks: DESNZ HNPD (1,495 schemes). Settlements: ONS BUA 2022 (Scotland/Wales populations estimated). The estate, planning-decision and politics layers live under Data layers → Data centres and Plans &amp; policy areas.</p>
             </div>
           </section>
         </div>
@@ -286,6 +286,16 @@
       <!-- Batch analysis setup + results overlays -->
       <div id="batch-setup" class="batch-setup" hidden></div>
       <div id="batch-results" class="batch-results" hidden></div>
+
+      <!-- Specialist tools stay out of the way by default: this reveals the
+           data-centre sift + layers branch and the PBSA sift. Wired by
+           wireOtherDataToggle() in app.js; preference persists. -->
+      <section class="side-box" id="other-data-box">
+        <label class="other-data-row">
+          <input type="checkbox" id="other-data-toggle" />
+          <span>Other data — data centres &amp; PBSA</span>
+        </label>
+      </section>
 
       <footer>
         <p class="datasource" id="datasource">Loading data…</p>

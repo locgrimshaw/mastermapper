@@ -2742,3 +2742,12 @@ footer {
 .dc-headline b { font-family: var(--font-data); font-size: 15px; color: #2f9e44; }
 .dc-tops { margin-top: 3px; line-height: 1.5; }
 .dc-tops b { font-family: var(--font-data); color: var(--text); }
+
+/* "Other data" reveal at the sidebar's foot (wireOtherDataToggle). */
+#other-data-box { margin-bottom: 4px; }
+.other-data-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; cursor: pointer;
+  font-size: 12.5px; color: var(--ink-dim, inherit);
+}
+.other-data-row input { accent-color: var(--accent, #4c6ef5); }
