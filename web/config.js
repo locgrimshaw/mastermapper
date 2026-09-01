@@ -34,5 +34,15 @@ window.MASTERMAPPER_CONFIG = {
   // (replacing this one). Keys are the schema keys, e.g.:
   //   VIABILITY_DEFAULTS: { profitTargetPct: 18, buildMonths: 30 },
   // Unknown keys and non-numeric values are ignored.
-  VIABILITY_DEFAULTS: {},
+  VIABILITY_DEFAULTS: {
+    "flatMixPct": 20,
+    "profFeesPct": 8,
+    "salesCostPct": 2,
+    "unitSizeFt2": 900,
+    "salesAdjPct": 120,
+    "affordableValue": 60,
+    "affordableIntPct": 45,
+    "salesInflationPct": 1,
+    "debtRatePct": 6.5
+  },
 };
