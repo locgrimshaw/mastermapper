@@ -13527,6 +13527,11 @@ const SIFT = {
   rows: [],
   step: 0,             // current wizard step (index into SIFT_STEPS)
   crit: { requireFrequency: true, requireWellConnected: false, exemptInSettlement: true,
+          // gateMode drives step 1's radio: "nppf" (two-route gate, tierA/B
+          // pickable) · "wc" (strict well-connected set only) · "all" (no
+          // gate). The five underlying flags above stay the predicate's
+          // source of truth; applySiftGateMode() keeps them in step.
+          gateMode: "nppf",
           tierA: true, tierB: true, ineligible: false, minDevHa: 0, minYield: 0,
           maxProtectedPct: 100, deprivedTopPct: 100, minProfitOnCost: -30,
           excludeGreenBelt: false, largestPlotOnly: false,
@@ -13542,12 +13547,40 @@ const SIFT = {
   shortlist: new Set(mmStore.get("shortlist", [])),  // pinned station CRSs (persisted)
 };
 
+// The gate radio's semantics, applied onto the five underlying flags the
+// step-1 predicate actually reads. "nppf" leaves tierA/tierB as the user
+// ticked them; "wc" and "all" open every tier and adjust the service tests.
+function applySiftGateMode(C) {
+  const m = C.gateMode || "nppf";
+  if (m === "wc") {
+    C.tierA = C.tierB = C.ineligible = true;
+    C.exemptInSettlement = false;
+    C.requireFrequency = true; C.requireWellConnected = true;
+  } else if (m === "all") {
+    C.tierA = C.tierB = C.ineligible = true;
+    C.exemptInSettlement = true;
+    C.requireFrequency = false; C.requireWellConnected = false;
+  } else {
+    C.ineligible = false;
+    C.exemptInSettlement = true;
+    C.requireFrequency = true; C.requireWellConnected = false;
+  }
+}
+
 // Restore a previously-saved sift configuration (criteria/assumptions/weights/sort)
 // over the defaults, so a reload lands you where you left off.
 (function restoreSiftConfig() {
   const saved = mmStore.get("siftConfig", null);
   if (!saved) return;
   Object.assign(SIFT.crit, saved.crit || {});
+  // Saves from before the gate radio carry raw flag combinations: map them
+  // to the nearest mode, then normalise so the UI and predicate agree.
+  if (!saved.crit || !saved.crit.gateMode) {
+    const C = SIFT.crit;
+    C.gateMode = (C.requireWellConnected && !C.exemptInSettlement) ? "wc"
+      : (!C.requireFrequency && C.ineligible) ? "all" : "nppf";
+  }
+  applySiftGateMode(SIFT.crit);
   // Assumptions only survive a reload if they speak the current schema. The
   // v1 flat model (buildPsf £/ft², bundled softCostPct) cannot be translated
   // into typology £/m² + explicit fees/finance without inventing numbers, so
@@ -14218,11 +14251,11 @@ const SIFT_STEPS = [
   // same in-settlement / well-connected facts the old step 1 tested, so two
   // steps meant explaining the same concepts twice. The predicate is the AND
   // of both old predicates: nothing passes or fails differently.
-  { key: "connectivity", title: "1 · Station gate — connectivity & tier",
+  { key: "connectivity", title: "1 · Station gate — which stations qualify",
     about: {
-      what: "The entry gate. Every station is classed by the NPPF's two-tier test: Tier A — inside a settlement, where station-adjacent development is a 'default yes'; Tier B — outside a settlement but well-connected (a genuine turn-up-and-go service in an economically significant area), where the NPPF permits Green Belt release (policy GB7(1)(h), subject to the GB8 Golden Rules); anything else is ineligible. The tier also sets the density floor used for dwelling capacity. For a well-connected station that floor is policy S5(2)(c) itself — 35 dph, rising to 45 where the service runs at least twice the well-connected frequency. Tier A in-settlement stations carry no S5(2)(c) minimum, so we apply the same 35 dph baseline as a planning assumption rather than a policy requirement.",
+      what: "The entry gate. The NPPF's station policy is a rules-based pathway — what the Government called 'a default yes for homes within reasonable walking distance of well-connected stations' — with four limbs for land OUTSIDE settlement boundaries: (1) the station sits in a top-80 Travel to Work Area by GVA; (2) it is 'well-connected' — the Annex B service-frequency test; (3) the development is physically well-related to the station or settlement and within reasonable walking distance; (4) it achieves the minimum density. That pathway is our Tier B, and it is where Green Belt release is permitted (policy GB7(1)(h), subject to the GB8 Golden Rules). Land INSIDE a settlement near a station — our Tier A — does not need the pathway: it is acceptable in principle under ordinary policy whatever the timetable, so the gate keeps it by default. Anything else is ineligible. The tier also sets the density floor used for dwelling capacity: policy S5(2)(c)'s 35 dph, rising to 45 at double frequency, for a well-connected station; the same 35 dph applied to in-settlement stations as a planning assumption rather than a policy requirement.",
       source: "NPPF (August 2026), policies S5(1)(h), L3 and GB7(1)(h) — residential development within reasonable walking distance of a well-connected station — with 'well-connected station' defined in Annex B. Service test: at least 4 trains or trams per hour overall, or 2 per hour in any one direction, through the normal weekday daytime timetable. The GVA limb uses a top-80 Travel to Work Area, per the published definition — corrected from the 2024 draft's top 60 in migration 0063, which moved 86 stations up a tier (949 well-connected to 1,035). The Framework fixes the vintage too: 2023 GVA data applies until the day after the 2028 data publishes, then holds for five-year periods. Density floors are the Framework's own minima under policy S5(2)(c) — 35 dph within reasonable walking distance of a well-connected station, 45 where frequency is at least double the Annex B threshold (≥ 8 trains/hour overall or ≥ 4 in one direction). Policy S5(3) requires those minima to be exceeded where possible, so they are a floor on capacity, not a forecast of it. We previously carried 40/50 dph from the pre-2026 Framework, which sized every catchment about 12% above what the policy asks and put us out of step with published analyses of the same policy.",
-      calc: "meets_frequency = sustained trains/trams ≥ 4/hour (or ≥ 2/hour each direction), from the GB rail timetable. well_connected = meets_frequency AND top-80 TTWA by GVA. 'In settlement' is deliberately NOT a point-in-polygon test — a station often sits in the railway gap of a built-up-area polygon, which wrongly flagged dense urban stations (e.g. South Bermondsey) as out-of-settlement. Instead we measure the BUILT-UP FRACTION of the 800 m catchment (OS Open Built-Up Areas): in-settlement when ≥ 40% built-up, or ≥ 20% with built-up land within 100 m. Tier A = in-settlement; Tier B = out-of-settlement AND well-connected; else ineligible. Density floor = 45 dph where sustained frequency is ≥ 8/hour overall or ≥ 4/hour in one direction, else 35 dph for a well-connected or in-settlement station (public.nppf_density_floor, migration 0065)." },
+      calc: "meets_frequency = sustained trains/trams ≥ 4/hour overall (or ≥ 2/hour in any one direction), from the GB rail timetable. well_connected = meets_frequency AND top-80 TTWA by GVA (the Framework states these as separate limbs of the pathway; the conjunction is the same). 'In settlement' is deliberately NOT a point-in-polygon test — a station often sits in the railway gap of a built-up-area polygon, which wrongly flagged dense urban stations (e.g. South Bermondsey) as out-of-settlement. Instead we measure the BUILT-UP FRACTION of the 800 m catchment (OS Open Built-Up Areas): in-settlement when ≥ 40% built-up, or ≥ 20% with built-up land within 100 m. Tier A = in-settlement; Tier B = out-of-settlement AND well-connected; else ineligible. Density floor = 45 dph where sustained frequency is ≥ 8/hour overall or ≥ 4/hour in one direction, else 35 dph for a well-connected or in-settlement station (public.nppf_density_floor, migration 0065). Two deliberate readings to know about: Annex B also admits a station with a 'reasonable prospect' of reaching the frequency through planned upgrades or operator agreement — that limb is speculative and is NOT modelled (timetable only, so our count is the floor of the qualifying set); and 'twice the minimum' for 45 dph is read as ≥ 8/hour overall OR ≥ 4 one way — one published analysis requires both at once, which trims a handful of stations to 35." },
     // The AND of the two former predicates. In-settlement stations are exempt
     // from the service tests by default (the NPPF 'default yes'); the strict
     // toggle applies them everywhere. The tier checkboxes then pick which
@@ -14375,15 +14408,23 @@ function siftStepControlsHTML(key) {
   const A = SIFT.assumptions, C = SIFT.crit;
   const chk = v => v ? " checked" : "";
   switch (key) {
-    case "connectivity":
-      return `<p class="hint">Every station lands in one of two NPPF tiers — or neither. <strong>Tier A · in-settlement</strong>: the catchment is already built-up, so development is a 'default yes' regardless of service level. <strong>Tier B · well-connected, out-of-settlement</strong>: a genuine turn-up-and-go service (≥4 trains/hour, or 2 each way) in a top-80 economic area — where the NPPF permits Green Belt release. Everything else is <strong>ineligible</strong>. The tier also sets the density floor: 35 dph, or 45 where the service runs at least double the well-connected frequency — policy S5(2)(c)'s own minima for a well-connected station, and the same 35 dph baseline applied as an assumption for Tier A. Tick which classes go forward.</p>` +
-        `<label class="dd-row"><input type="checkbox" id="sift-tierA"${chk(C.tierA)}> <span>Tier A · in-settlement ('default yes')</span></label>` +
-        `<label class="dd-row"><input type="checkbox" id="sift-tierB"${chk(C.tierB)}> <span>Tier B · well-connected, out-of-settlement (Green Belt permitted)</span></label>` +
-        `<label class="dd-row"><input type="checkbox" id="sift-inelig"${chk(C.ineligible)}> <span>Include ineligible stations (they still face the service-frequency test)</span></label>` +
-        `<p class="hint" style="margin-top:8px"><strong>Stricter than the NPPF</strong> (optional):</p>` +
-        `<label class="dd-row"><input type="checkbox" id="sc-strict"${chk(!C.exemptInSettlement)}> <span>Apply the service-frequency test inside settlements too</span></label>` +
-        `<label class="dd-row"><input type="checkbox" id="sc-wc"${chk(C.requireWellConnected)}> <span>Require full 'well-connected' status (frequency + top-80 TTWA)</span></label>` +
-        `<p class="hint" style="margin-top:4px">The NPPF treats in-settlement stations as a 'default yes' whatever their timetable — the first toggle removes that exemption. The second demands the full well-connected definition wherever the service tests apply.</p>`;
+    case "connectivity": {
+      const rows = siftCountryRows();
+      const nA = rows.filter(r => r.tier === "A").length;
+      const nB = rows.filter(r => r.tier === "B").length;
+      const nWC = rows.filter(r => r.wellConnected).length;
+      const mode = C.gateMode || "nppf";
+      const dis = mode !== "nppf" ? " disabled" : "";
+      return `<p class="hint">One question: <strong>which stations does national policy back for station-side homes?</strong> Pick a basis — the counts show what each keeps.</p>` +
+        `<label class="dd-row"><input type="radio" name="sift-gate" id="sift-gate-nppf"${chk(mode === "nppf")}> <span><strong>NPPF gate</strong> — the Framework's two routes <span class="hint">(recommended)</span></span></label>` +
+        `<div class="sift-gate-sub">` +
+          `<label class="dd-row"><input type="checkbox" id="sift-tierA"${chk(C.tierA)}${dis}> <span><strong>Inside a settlement</strong> · ${nA.toLocaleString()} <span class="hint">— the catchment is already built-up, so homes are acceptable in principle under ordinary policy, whatever the timetable</span></span></label>` +
+          `<label class="dd-row"><input type="checkbox" id="sift-tierB"${chk(C.tierB)}${dis}> <span><strong>Well-connected, outside a settlement</strong> · ${nB.toLocaleString()} <span class="hint">— the policy's rules-based "default yes": ≥4 trains/hr (or 2 each way) at a top-80 economic area, within a 10-minute walk. Green Belt release is permitted here (GB7), subject to the Golden Rules</span></span></label>` +
+        `</div>` +
+        `<label class="dd-row"><input type="radio" name="sift-gate" id="sift-gate-wc"${chk(mode === "wc")}> <span><strong>Well-connected stations only</strong> · ${nWC.toLocaleString()} <span class="hint">— the strict S5(2)(c) population (frequency + top-80 TTWA) wherever the station sits: the basis the published analyses count</span></span></label>` +
+        `<label class="dd-row"><input type="radio" name="sift-gate" id="sift-gate-all"${chk(mode === "all")}> <span><strong>All stations</strong> · ${rows.length.toLocaleString()} <span class="hint">— no gate, explore everything (density floors still apply per station)</span></span></label>` +
+        `<p class="hint" style="margin-top:6px">Whichever basis you pick, each station's density floor is the policy's own: 35 dph near a well-connected station, 45 where the service runs at least double the threshold.</p>`;
+    }
     case "developable": {
       const custom = C.dphMode === "custom" && Number(C.dphCustom) > 0;
       const nStrategic = siftCountryRows().filter(r => r.strategic).length;
@@ -14441,14 +14482,22 @@ function readSiftControls() {
   const g = id => document.getElementById(id);
   const C = SIFT.crit, A = SIFT.assumptions;
   const numv = (id, d) => { const el = g(id); if (!el) return d; const v = parseFloat(el.value); return isNaN(v) ? d : v; };
-  // Merged step 1: the strict toggle is the INVERSE of the NPPF in-settlement
-  // exemption. requireFrequency stays a stored flag (default true) — no longer
-  // a visible control, but saved configs that disabled it are honoured.
-  if (g("sc-strict")) C.exemptInSettlement = !g("sc-strict").checked;
-  if (g("sc-wc")) C.requireWellConnected = g("sc-wc").checked;
-  if (g("sift-tierA")) C.tierA = g("sift-tierA").checked;
-  if (g("sift-tierB")) C.tierB = g("sift-tierB").checked;
-  if (g("sift-inelig")) C.ineligible = g("sift-inelig").checked;
+  // Step 1: the gate radio sets the five underlying flags via
+  // applySiftGateMode; in NPPF mode the two route checkboxes are live.
+  if (g("sift-gate-nppf")) {
+    C.gateMode = g("sift-gate-wc").checked ? "wc"
+      : g("sift-gate-all").checked ? "all" : "nppf";
+    if (C.gateMode === "nppf") {
+      C.tierA = g("sift-tierA").checked;
+      C.tierB = g("sift-tierB").checked;
+    }
+    applySiftGateMode(C);
+    // Reflect the mode on the sub-checkboxes without a full re-render.
+    const dis = C.gateMode !== "nppf";
+    g("sift-tierA").disabled = dis;
+    g("sift-tierB").disabled = dis;
+    if (dis) { g("sift-tierA").checked = true; g("sift-tierB").checked = true; }
+  }
   if (g("sift-minha")) C.minDevHa = numv("sift-minha", 0);
   if (g("sift-minyield")) C.minYield = numv("sift-minyield", 0);
   if (g("sift-largest")) C.largestPlotOnly = g("sift-largest").checked;

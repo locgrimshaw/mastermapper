@@ -2854,3 +2854,7 @@ footer {
 .dd-pill-accent { border-color: color-mix(in srgb, var(--pill-accent) 40%, var(--ink-line)); }
 .dd-pill-dim .dd-pill-v { color: var(--text-dim); font-weight: 500; font-size: 12px; font-style: italic; }
 .dd-pill-dim .dd-pill-i { opacity: .55; }
+
+/* Step-1 gate: the NPPF-route sub-checkboxes sit indented under the radio. */
+.sift-gate-sub { margin: 0 0 4px 22px; padding-left: 8px; border-left: 2px solid var(--ink-line); }
+.sift-gate-sub .dd-row input[disabled] + span { opacity: .5; }
