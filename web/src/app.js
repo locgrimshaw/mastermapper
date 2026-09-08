@@ -7843,6 +7843,7 @@ async function renderDeepDiveViability() {
   const mc = deep._marketCtx || null;
   const ap = computeAppraisal({
     units, ppm2: deep.ppm2 || null, region: (deep.station && deep.station.region) || null,
+    ladCode: (deep._ctx && deep._ctx.lad_code) || null,
     areaHa: Number(r.developable_ha) || null,
     locationFactor: (mc && mc.factor) || null,
     landValueHa: (mc && mc.landValueHa) || null,
@@ -7861,10 +7862,12 @@ async function renderDeepDiveViability() {
   const ragCls = ap.rag === "viable" ? "sg" : ap.rag === "marginal" ? "sa" : "sr";
   el.innerHTML = `
     <div class="dd-pl-hero"><strong>${ap.profitOnCost.toFixed(1)}%</strong>
-      <span class="dd-dim">profit on cost · ${units.toLocaleString()} homes (${capacityBasisLabel(regime)})</span>
+      <span class="dd-dim">profit on cost · ${units.toLocaleString()} homes (${capacityBasisLabel(regime)}) · ${ap.tenure === "btr" ? "build to rent" : "build to sell"}</span>
       <span class="viab-rag ${ragCls}">${ap.rag}</span></div>
     <div class="dd-pl-rows">
-      <div class="dd-pl-row"><span>GDV</span><span>${money(ap.gdv)}</span></div>
+      <div class="dd-pl-row"><span>${ap.tenure === "btr" ? "GDV (capitalised income)" : "GDV"}</span><span>${money(ap.gdv)}</span></div>
+      ${ap.btr ? `<div class="dd-pl-row"><span>blended market rent</span><span>£${Math.round(ap.btr.adjRent).toLocaleString()}/mo <span class="hint">(ONS ×${((SIFT.assumptions.btrRentAdjPct ?? 105) / 100).toFixed(2)})</span></span></div>
+      <div class="dd-pl-row"><span>net operating income</span><span>${money(ap.btr.noi)}/yr @ ${(ap.btr.niy * 100).toFixed(2)}% NIY</span></div>` : ap.tenure === "btr" ? `<div class="dd-pl-row" style="color:#e8590c"><span>BTR rent data unavailable — priced as build to sell</span><span></span></div>` : ""}
       <div class="dd-pl-row"><span>total cost incl. finance</span><span>${money(ap.totalCost)}</span></div>
       <div class="dd-pl-row"><span>residual land value</span><span>${money(ap.residualLandValue)}</span></div>
       <div class="dd-pl-row"><span>RLV ÷ benchmark land</span><span>${ap.rlvVsBlv == null ? "n/a" : ap.rlvVsBlv.toFixed(2) + "×"}</span></div>
@@ -8034,6 +8037,7 @@ function renderAssemblySummary(notice) {
   const units = homesFor(totHa, totInner, regime);
   const ap = computeAppraisal({
     units, ppm2: deep.ppm2 || null, region: (deep.station && deep.station.region) || null, areaHa: totHa,
+    ladCode: (deep._ctx && deep._ctx.lad_code) || null,
     locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
     landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
     cilAreaPm2: (deep._marketCtx && deep._marketCtx.cilPm2 != null) ? deep._marketCtx.cilPm2 : null,
@@ -8876,7 +8880,8 @@ function viabFieldHTML(f, a) {
       `<select data-viab="${f.key}">` +
       f.choices.map(c => `<option value="${c}"${val === c ? " selected" : ""}>` +
         ({ mhclg: "MHCLG £/ha (published)", perUnit: "£/unit benchmark",
-           euvPlus: "EUV + premium" }[c] || c) + `</option>`).join("") +
+           euvPlus: "EUV + premium",
+           bts: "Build to sell", btr: "Build to rent (capitalised income)" }[c] || c) + `</option>`).join("") +
       `</select></label>`;
   }
   return `<label class="sift-field viab-field"><span>${f.label} <em class="viab-unit">${f.unit}</em>` +
@@ -8927,6 +8932,7 @@ function refreshViabPreview() {
   if (!host || !_viabCtx) return;
   const r = computeAppraisal(
     { units: _viabCtx.units, ppm2: _viabCtx.ppm2, region: _viabCtx.region,
+      ladCode: _viabCtx.ladCode ?? null,
       areaHa: _viabCtx.areaHa, locationFactor: _viabCtx.locationFactor,
       landValueHa: _viabCtx.landValueHa, cilAreaPm2: _viabCtx.cilAreaPm2 ?? null,
       greenBeltShare: _viabCtx.greenBeltShare ?? 0 },
@@ -9036,6 +9042,7 @@ function openCalcAudit(ctx) {
   const a = SIFT.assumptions;
   const r = computeAppraisal(
     { units: ctx.units, ppm2: ctx.ppm2, region: ctx.region, areaHa: ctx.areaHa,
+      ladCode: ctx.ladCode ?? null,
       locationFactor: ctx.locationFactor, landValueHa: ctx.landValueHa,
       cilAreaPm2: ctx.cilAreaPm2 ?? null, greenBeltShare: ctx.greenBeltShare ?? 0 },
     a, { noSens: true });
@@ -9099,6 +9106,15 @@ function calcAuditHTML(ctx, a, r) {
   ]);
 
   const gdv = step("2 · GDV (gross development value)", [
+    t.btr ? row("BTR: blended market rent",
+      `ONS PIPR authority average (semi-detached/flat blend by flat mix) £${N(t.btr.rentMonth, 0)}/mo × ${N(a.btrRentAdjPct ?? 105, 0)}% new-stock adjustment`,
+      "£" + N(t.btr.adjRent, 0) + "/mo") : "",
+    t.btr ? row("BTR: net operating income",
+      `${N(t.units, 0)} homes × £${N(t.btr.adjRent, 0)}/mo × 12 × ${N(t.btr.rentBlend, 3)} affordable blend × (1 − ${N(a.btrGrossToNetPct ?? 25, 0)}% gross-to-net)`,
+      M(t.btr.noi) + "/yr") : "",
+    t.btr ? row("BTR: capitalised at net initial yield",
+      `NOI ÷ ${N(t.btr.niy * 100, 2)}% × ${N(t.infl, 3)} inflation to disposal`,
+      M(r.gdv)) : "",
     row("achieved £/ft²", t.localPsf != null
       ? `£${N(t.localPsf)}/ft² × ${N(a.salesAdjPct ?? 100, 0)}% sales adjustment`
       : `£${N(a.salesPsf, 0)}/ft² fallback × regional multiplier`,
@@ -9663,6 +9679,7 @@ async function _generateSiteReport(mode) {
     const appraisal = computeAppraisal({
       units: subject.units, ppm2: deep.ppm2 || null,
       region: (subject.station && subject.station.region) || null,
+      ladCode: (deep._ctx && deep._ctx.lad_code) || null,
       areaHa: subject.areaHa,
       locationFactor: mc.factor || null,
       landValueHa: mc.landValueHa || null,
@@ -11016,6 +11033,10 @@ const DD_PARTY_COLOR = {
 async function fetchDdContext(station) {
   const sb = getSupabase();
   if (!sb || !station) return;
+  ensureRents().then(() => {   // BTR appraisals need the local rent table
+    if (typeof renderDeepDiveViability === "function" && deep.developableResult)
+      renderDeepDiveViability();
+  });
   try {
     const centre = deep.stationCentre;
     const [ctx, arow] = await Promise.all([
@@ -11317,6 +11338,11 @@ function buildDeepDivePanel(meta) {
           <span class="dd-h">Viability — residual appraisal</span><span class="dd-caret">▾</span>
         </button>
         <div class="dd-block-content">
+          <div class="lt-seg" id="dd-tenure-seg" role="group" aria-label="Tenure model" style="margin:0 0 6px">
+            <span class="lt-seg-label">Model</span>
+            <button type="button" class="lt-seg-btn" data-tenure="bts">Build to sell</button>
+            <button type="button" class="lt-seg-btn" data-tenure="btr">Build to rent</button>
+          </div>
           <div id="dd-viability-summary"><p class="hint">Turn on the developable-land tool above — the appraisal prices its dwelling capacity.</p></div>
           <button type="button" class="ghost" id="dd-viab-vars">Viability variables…</button>
           <button type="button" class="ghost" id="dd-viab-calc">Full calculation…</button>
@@ -11540,6 +11566,7 @@ function buildDeepDivePanel(meta) {
       units: r ? homesFor(Number(r.developable_ha) || 0, Number(r.inner_ha) || 0, regime) : 0,
       ppm2: deep.ppm2 || null,
       region: (deep.station && deep.station.region) || null,
+      ladCode: (deep._ctx && deep._ctx.lad_code) || null,
       areaHa: r ? Number(r.developable_ha) : null,
       locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
       landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
@@ -11558,6 +11585,24 @@ function buildDeepDivePanel(meta) {
   if (cr) cr.addEventListener("click", () => generateSiteReport("catchment"));
   const dv = panel.querySelector("#dd-viab-vars");
   if (dv) dv.addEventListener("click", () => openViabilityModal(ddViabCtx()));
+  const tseg = panel.querySelector("#dd-tenure-seg");
+  if (tseg) {
+    const syncT = () => tseg.querySelectorAll("[data-tenure]").forEach(b =>
+      b.classList.toggle("active", (SIFT.assumptions.tenure || "bts") === b.dataset.tenure));
+    syncT();
+    tseg.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-tenure]");
+      if (!b) return;
+      SIFT.assumptions.tenure = b.dataset.tenure;
+      persistSiftConfig();
+      syncT();
+      ensureRents().then(() => {
+        renderDeepDiveViability();
+        if (typeof renderDdHeadlines === "function") renderDdHeadlines();
+        if (SIFT.loaded) scoreSiftRows();
+      });
+    });
+  }
   const dc = panel.querySelector("#dd-viab-calc");
   if (dc) dc.addEventListener("click", () => openCalcAudit(ddViabCtx()));
 
@@ -13433,6 +13478,14 @@ const VIAB_SCHEMA = [
     tip: "Shared ownership, discounted market sale and other low-cost home ownership. NPPF Annex B sets the floor: discounted market sale is sold at AT LEAST 20% below local market value, so 80% is the ceiling this can realistically take, not a midpoint.", source: "NPPF (Aug 2026) Annex B" },
   { key: "affordableIntPct", group: "revenue", label: "Affordable mix · intermediate", unit: "% of affordable", step: 5, default: 30,
     tip: "Share of the affordable homes that are intermediate tenures rather than rented. The rest are valued at the rented rate. Policy HO5(1)(a)(i) makes the tenure split a plan matter, including a minimum Social Rent proportion — check the local requirement.", source: "LPA policy" },
+  { key: "tenure", group: "revenue", label: "Tenure model", unit: "choice", choices: ["bts", "btr"], default: "bts",
+    tip: "Build to sell prices the homes at the local Land Registry £/m². Build to rent capitalises the net rental income instead: local ONS rent × new-stock adjustment, less gross-to-net, divided by the net initial yield. Costs are identical either way.", source: "model" },
+  { key: "btrRentAdjPct", group: "revenue", label: "BTR rent adjustment", unit: "% of local", step: 5, default: 105,
+    tip: "Applied to the local ONS average rent (PIPR, monthly official statistics, by authority): new single-family rental stock typically lets at a premium to the all-stock average. 100% = parity.", source: "ONS PIPR + operator evidence" },
+  { key: "btrGrossToNetPct", group: "revenue", label: "BTR gross-to-net", unit: "% of gross rent", step: 1, default: 25,
+    tip: "Operating deductions: management, repairs & maintenance, voids, lettings, insurance. Single-family portfolios typically 20–27%; multifamily blocks with amenity 25–32%.", source: "operator accounts / valuer practice" },
+  { key: "btrYieldPct", group: "revenue", label: "BTR net initial yield", unit: "%", step: 0.25, default: 4.75,
+    tip: "The capitalisation rate on stabilised net income. No free national feed exists for transaction yields, so this is an editable assumption — prime single-family ~4.0–4.5%, regional multifamily ~4.5–5.5%. Set per deal or per the client's evidence.", source: "assumption (no open national yield dataset)" },
   { key: "salesInflationPct", group: "revenue", label: "Sales inflation", unit: "%/yr", step: 0.5, default: 0,
     tip: "House price growth assumed across the sales period. Leave 0 for today's-prices appraisal (the defensible default).", source: "assumption" },
   // Finance
@@ -13818,6 +13871,48 @@ function deepGbShare() {
   return r ? gbShareOf(r.green_belt_ha, r.developable_ha) : 0;
 }
 
+// ---- Rental evidence (ONS Price Index of Private Rents) -------------------
+// Accredited official statistics, monthly, per local authority, split by
+// bedrooms and property type (pipr_rents, migration 0075). This is the
+// backable basis the BTR viability mode capitalises — not a scrape.
+let RENTS = null;
+let _rentsPromise = null;
+function ensureRents() {
+  if (_rentsPromise) return _rentsPromise;
+  const sb = getSupabase();
+  if (!sb) return Promise.resolve(null);
+  _rentsPromise = sb.from("pipr_rents")
+    .select("code,name,rent,b1,b2,b3,b4,det,semi,terr,flat,asof")
+    .then(({ data }) => { RENTS = new Map((data || []).map(r => [r.code, r])); return RENTS; })
+    .catch(() => null);
+  return _rentsPromise;
+}
+const REGION_RENT_CODE = {
+  "North East": "E12000001", "North West": "E12000002",
+  "Yorkshire and The Humber": "E12000003", "East Midlands": "E12000004",
+  "West Midlands": "E12000005", "East of England": "E12000006",
+  "London": "E12000007", "South East": "E12000008", "South West": "E12000009",
+  "Scotland": "S92000003", "Wales": "W92000004",
+};
+function rentRowFor(ladCode, region) {
+  if (!RENTS) return null;
+  return (ladCode && RENTS.get(ladCode))
+      || RENTS.get(REGION_RENT_CODE[region] || "")
+      || RENTS.get("E92000001") || null;
+}
+// The scheme's blended market rent £/month: flats at the local flat rent,
+// houses at the semi-detached rent (the single-family rental proxy),
+// weighted by the assumed flat mix.
+function blendedRentMonth(ladCode, region, a) {
+  const r = rentRowFor(ladCode, region);
+  if (!r) return null;
+  const flatFrac = Math.min(1, Math.max(0, (a.flatMixPct || 0) / 100));
+  const houseRent = r.semi ?? r.terr ?? r.rent;
+  const flatRent = r.flat ?? r.rent;
+  if (houseRent == null && flatRent == null) return null;
+  return (flatRent ?? houseRent) * flatFrac + (houseRent ?? flatRent) * (1 - flatFrac);
+}
+
 function computeAppraisal(inputs, a, opts) {
   a = a || SIFT.assumptions;
   opts = opts || {};
@@ -13878,7 +13973,29 @@ function computeAppraisal(inputs, a, opts) {
   const overlap = Math.min(build, Math.max(0, a.salesOverlapMonths ?? 6));
   const midSaleYears = (preCon + build - overlap + sell / 2) / 12;
   const infl = Math.pow(1 + (a.salesInflationPct || 0) / 100, midSaleYears);
-  const gdv = units * unitFt2 * price * blend * infl;
+  let gdv = units * unitFt2 * price * blend * infl;
+  // --- Build-to-rent: capitalised income replaces unit sales ---------------
+  // GDV(BTR) = net operating income / net initial yield, inflated to the
+  // disposal midpoint like sales revenue. Market homes earn the local ONS
+  // PIPR rent (blendedRentMonth: semi-detached for houses, flat rent for
+  // flats, weighted by the flat mix) x a new-stock adjustment; affordable
+  // homes earn the same %-of-market as the sales model. Gross-to-net covers
+  // management, repairs, voids and letting. The COST side is identical -
+  // the difference is who ends up owning the homes.
+  const tenure = a.tenure === "btr" ? "btr" : "bts";
+  const rentMonth = tenure === "btr"
+    ? (inputs.rentMonth ?? blendedRentMonth(inputs.ladCode, inputs.region, a))
+    : null;
+  let btr = null;
+  if (tenure === "btr" && rentMonth > 0) {
+    const adjRent = rentMonth * ((a.btrRentAdjPct ?? 105) / 100);
+    const rentBlend = (1 - affFrac) + affFrac * ((a.affordableValue || 50) / 100);
+    const grossRent = units * adjRent * 12;
+    const noi = grossRent * rentBlend * (1 - (a.btrGrossToNetPct ?? 25) / 100);
+    const niy = Math.max(0.5, a.btrYieldPct ?? 4.75) / 100;
+    gdv = (noi / niy) * infl;
+    btr = { rentMonth, adjRent, grossRent, rentBlend, noi, niy };
+  }
 
   // --- Costs ----------------------------------------------------------------
   const flatFrac = Math.min(1, Math.max(0, (a.flatMixPct || 0) / 100));
@@ -14037,6 +14154,7 @@ function computeAppraisal(inputs, a, opts) {
         buildPm2Flat: (a.buildPm2Flat || 0) * (1 + b / 100),
         salesAdjPct: (a.salesAdjPct || 100) * (1 + s / 100),
         salesPsf: (a.salesPsf || 350) * (1 + s / 100),
+        btrRentAdjPct: (a.btrRentAdjPct ?? 105) * (1 + s / 100),
       });
       const r = computeAppraisal(inputs, aa, { noSens: true });
       return r.profitOnCost;
@@ -14052,6 +14170,7 @@ function computeAppraisal(inputs, a, opts) {
   return {
     profitOnCost: poc, profitOnGdv: pog, rag, score,
     price: Math.round(price), local: localPsf != null,
+    tenure, btr,
     gdv, totalCost, profit, residualLandValue, rlvVsBlv, valueRatio, irr, peakDebt,
     landBasisUsed, landScale: landBasisUsed === "mhclg" ? null : landScale,
     cashflow: { out, inn, equityFlow, months, interest, financeFee },
@@ -14061,6 +14180,7 @@ function computeAppraisal(inputs, a, opts) {
     // so the breakdown a client checks is the arithmetic that actually ran.
     audit: {
       units, unitFt2, unitM2, localPsf, price, blend, midSaleYears, infl,
+      tenure, btr,
       flatFrac, pm2, locFactor,
       affBasePct, affPct, gbShare, gbAffPct, gbApplies, isMajor,
       intFrac, affValPct,
@@ -14094,6 +14214,7 @@ const SENS_STEPS = Array.from({ length: 21 }, (_, i) => i - 10);
 function computeViability(row) {
   const r = computeAppraisal(
     { units: row.effYield ?? (row.yield || 0), ppm2: row.catchmentPpm2, region: row.region,
+      ladCode: row.ladCode || null,
       // The SAME land basis as the station's own deep dive: developable
       // hectares × the authority's published MHCLG £/ha (falling back to the
       // localised £/unit benchmark where the data doesn't cover the station).
@@ -14163,7 +14284,7 @@ async function enterSiftMode() {
   if (!SIFT.loaded) {
     const summary = document.getElementById("sift-summary");
     if (summary) summary.textContent = "Loading station assessments…";
-    await loadSiftData();
+    await Promise.all([loadSiftData(), ensureRents()]);
   }
   SIFT.step = 0;   // start the funnel at the first gate
   renderSift();
@@ -14200,7 +14321,7 @@ async function loadSiftData() {
     for (;;) {
       const { data: page, error } = await sb
         .from("station_assessments")
-        .select("crs, country, tier, in_settlement, density_floor, developable_ha, largest_plot_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, catchment_ppm2, catchment_median_price, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
+        .select("crs, country, tier, in_settlement, lad_code, density_floor, developable_ha, largest_plot_ha, dwelling_yield, constraint_friction, green_belt_ha, soft_cover, benefit_score, regen_score, access_score, housing_score, catchment_imd, catchment_pop, catchment_ppm2, catchment_median_price, stations(name, region, ttwa_name, well_connected, meets_frequency, connectivity_pctile, direct_destinations)")
         .order("dwelling_yield", { ascending: false })
         .range(from, from + PAGE - 1);
       if (error) throw error;
@@ -14212,6 +14333,7 @@ async function loadSiftData() {
     const cilRates = await cilRatesP;
     SIFT.rows = (data || []).map(r => ({
       crs: r.crs, country: r.country || "england", tier: r.tier, inSettlement: !!r.in_settlement, densityFloor: r.density_floor,
+      ladCode: r.lad_code || null,
       landValueHa: landValues.get(r.crs) ?? null,
       cilPm2: cilRates.get(r.crs) ?? null,
       developableHa: Number(r.developable_ha) || 0, yield: r.dwelling_yield || 0,
@@ -14455,7 +14577,15 @@ function siftStepControlsHTML(key) {
         `<label class="sift-field"><span>Show top <b id="sift-depriv-val">${Math.round(C.deprivedTopPct)}%</b> most deprived</span><input type="range" id="sift-depriv" min="5" max="100" step="5" value="${C.deprivedTopPct}"></label>` +
         `<p class="hint" style="margin-top:4px">100% keeps every station; 10% keeps only catchments in the most-deprived national decile.</p>`;
     case "viability":
-      return `<p class="hint"><strong>Viability</strong> runs a full residual appraisal per scheme — GDV from the <strong>local sales value</strong> (catchment-weighted Land Registry £/m² × EPC floor areas within 800 m), against typology build costs on a location index, abnormals, fees, statutory-style policy costs (CIL per m² of net floorspace at the council band with affordable exempt, itemised S106 heads of terms, BNG), an explicit finance line from a monthly cashflow, and land priced at the <strong>published MHCLG £/ha for the station's authority</strong> (the same basis the deep dive uses; localised £/unit fallback where uncovered). Headline levers below; <strong>every</strong> assumption is tweakable in Viability variables.</p>` +
+      return `<div class="lt-seg" id="sift-tenure-seg" role="group" aria-label="Tenure model" style="margin:0 0 8px">
+          <span class="lt-seg-label">Model</span>
+          <button type="button" class="lt-seg-btn${(A.tenure || "bts") !== "btr" ? " active" : ""}" data-tenure="bts">Build to sell</button>
+          <button type="button" class="lt-seg-btn${A.tenure === "btr" ? " active" : ""}" data-tenure="btr">Build to rent</button>
+        </div>` +
+        `<p class="hint" style="margin:-2px 0 8px">${A.tenure === "btr"
+          ? "GDV is the <strong>capitalised net rent</strong>: the station's own authority's average rent (ONS PIPR, monthly official statistics, blended semi-detached/flat by the flat mix) × the BTR rent adjustment, less gross-to-net, ÷ the net initial yield. Rent, deductions and yield are in Viability variables → Revenue."
+          : "GDV prices the homes at the local sales value. Switch to Build to rent to capitalise net rental income instead — the single-family rental lens."}</p>` +
+        `<p class="hint"><strong>Viability</strong> runs a full residual appraisal per scheme — GDV from the <strong>local sales value</strong> (catchment-weighted Land Registry £/m² × EPC floor areas within 800 m), against typology build costs on a location index, abnormals, fees, statutory-style policy costs (CIL per m² of net floorspace at the council band with affordable exempt, itemised S106 heads of terms, BNG), an explicit finance line from a monthly cashflow, and land priced at the <strong>published MHCLG £/ha for the station's authority</strong> (the same basis the deep dive uses; localised £/unit fallback where uncovered). Headline levers below; <strong>every</strong> assumption is tweakable in Viability variables.</p>` +
         siftNumField("v-salesadj", "New-build premium %", A.salesAdjPct, 5,
           "Applied to the local market £/ft² from Land Registry data. 100% = resale parity; new build typically 105–115.") +
         siftNumField("v-buildh", "Build £/m² (houses)", A.buildPm2House, 25,
@@ -14658,6 +14788,13 @@ function renderSiftStep() {
   crit.querySelector("#sift-next").addEventListener("click", () => { if (SIFT.step < last) { SIFT.step++; renderSift(); } });
   crit.querySelectorAll(".sift-step-body input, .sift-step-body select").forEach(i =>
     i.addEventListener("input", () => { readSiftControls(); updateSiftFunnel(); }));
+  crit.querySelectorAll("#sift-tenure-seg [data-tenure]").forEach(b =>
+    b.addEventListener("click", () => {
+      SIFT.assumptions.tenure = b.dataset.tenure;
+      persistSiftConfig();
+      renderSiftStep();          // refresh active states + explainer copy
+      updateSiftFunnel();
+    }));
   const vbtn = crit.querySelector("#viab-vars-btn");
   if (vbtn) vbtn.addEventListener("click", () => {
     // Preview context: the current top sift survivor, so edits show their
@@ -14667,6 +14804,7 @@ function renderSiftStep() {
     openViabilityModal(top ? {
       label: top.name || top.crs,
       units: top.effYield ?? (top.yield || 0), ppm2: top.catchmentPpm2, region: top.region,
+      ladCode: top.ladCode || null,
       areaHa: top.effHa ?? top.developableHa ?? null,
       landValueHa: top.landValueHa ?? null,
       cilAreaPm2: top.cilPm2 ?? null,
