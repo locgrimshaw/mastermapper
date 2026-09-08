@@ -2873,3 +2873,22 @@ footer {
 .dd-app-desc { color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .dd-app-meta { flex: none; font-size: 9.5px; color: var(--text-dim); text-align: right; }
 .dd-g-plots { --g: #0ca678; }
+
+/* Office viability calculator (renderOfficeCalc). */
+.dd-office-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 4px 0 8px; }
+.dd-office-grid label { display: flex; flex-direction: column; gap: 2px; font-size: 10px; color: var(--text-dim); }
+.dd-office-grid input {
+  width: 100%; box-sizing: border-box; padding: 3px 6px; font-size: 11.5px;
+  background: var(--ink-2); color: var(--text);
+  border: 1px solid var(--ink-line); border-radius: 6px;
+}
+.dd-office-stat { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 11.5px; padding: 2px 0; }
+.dd-office-stat b { font-size: 13px; }
+.dd-office-stat.dd-warn b { color: #e03131; }
+.dd-office-stat.dd-ok b { color: #2f9e44; }
+.dd-office-ev { margin: 0 0 8px; }
+.dd-office-ev summary { font-size: 11px; color: var(--text-dim); cursor: pointer; }
+.dd-office-tbl { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-top: 4px; }
+.dd-office-tbl th { text-align: left; color: var(--text-dim); font-weight: 600; }
+.dd-office-tbl th, .dd-office-tbl td { padding: 2px 4px; border-bottom: 1px solid var(--ink-line); }
+.dd-office-tbl td:nth-child(n+2), .dd-office-tbl th:nth-child(n+2) { text-align: right; white-space: nowrap; }

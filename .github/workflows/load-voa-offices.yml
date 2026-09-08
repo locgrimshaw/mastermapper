@@ -1,0 +1,50 @@
+name: Load VOA office rent evidence into Supabase
+
+# Building-level office rent evidence: every office hereditament in the VOA
+# rating list (England & Wales) as the `voa_offices` point dataset — floor
+# area, rateable value and £/m²/yr, geocoded by OS Code-Point Open. Rateable
+# value is the VOA's assessment of open-market rent at the antecedent
+# valuation date (2026 list = April 2024 rents). The builder discovers the
+# newest full-list baseline on the VOA downloads page each run, so the
+# quarterly refresh tracks new epochs (and future revaluations) by itself.
+# Data: Crown copyright VOA / OS, Open Government Licence v3.
+
+on:
+  schedule:
+    # Quarterly (3rd of Jan/Apr/Jul/Oct, 03:15 UTC). The list changes weekly
+    # but materially only at revaluations; quarterly keeps alterations and
+    # new builds flowing through without hammering a 150 MB download.
+    - cron: "15 3 3 1,4,7,10 *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Build the voa_offices import CSV
+        run: python pipeline/build_voa_offices.py
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: voa_offices
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          python supabase/loaders/load_datasets.py

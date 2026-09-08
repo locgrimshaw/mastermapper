@@ -291,3 +291,27 @@ derive entirely in the database. To refresh:
 `dc_application` table, and re-derives the TEC ≥50 MW Demand subset from the
 already-loaded tec_register dataset). Run it after any PlanIt re-sweep or
 tec_register reload so statuses stay in step.
+
+## Rental + office evidence — refresh (loaded 2026-09)
+
+- **pipr_rents** (residential rents by LA — feeds the BTR model): download the
+  latest ONS "Price Index of Private Rents, UK: monthly price statistics"
+  workbook (monthly, accredited official statistics), extract Table 1's latest
+  month per area (overall + bedroom/type splits), and upsert into
+  `public.pipr_rents` (code PK; the 2026-09 session's packed
+  `insert … unnest(string_to_array(...))` pattern fits in a few pastes).
+  Monthly cadence is plenty; the model reads it per LAD with region/England
+  fallbacks.
+- **voa_offices** (building-level office rents — feeds the office calculator
+  and the "Office rents (VOA)" layer): run the **"Load VOA office rent
+  evidence into Supabase"** GitHub Action (also on a quarterly cron). It
+  discovers the newest full-list VOA summary-valuations baseline by itself,
+  geocodes via OS Code-Point Open, and fully replaces the dataset (~350k
+  points). After a revaluation (next: 2029 list) it picks the new list up
+  automatically. The deep dive's `office_rents_near` RPC needs no refresh.
+  NOTE: office **yields** have no open national dataset — the calculator's
+  NIY is an editable assumption; set it from current agency evidence.
+- **he_land** (Homes England Land Hub disposals):
+  `select public.rebuild_he_land();` — server-side pull from HE's public
+  ArcGIS FeatureServer (~98 sites). Refresh quarterly-ish; the Land Hub
+  changes as sites come to market.

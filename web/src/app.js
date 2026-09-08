@@ -1363,6 +1363,12 @@ const MAP_OVERLAYS = [
     cap: { color: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "price"]], 0],
            100000, "#f7b267", 300000, "#ef8354", 500000, "#d64550",
            800000, "#a4243b", 1500000, "#6d1a36"] } },
+  // Office rent evidence: every office in the VOA rating list, coloured by
+  // its £/m²/yr (rateable value ÷ floor area) — teal cheap through violet dear.
+  { key: "voa_offices",  group: "market", label: "Office rents (VOA, £/m²)", color: "#5f3dc4", dataset: "voa_offices", render: "point", minZoom: 13, lim: 6000,
+    radius: ["interpolate", ["linear"], ["zoom"], 12, 2.5, 15, 5, 17, 7],
+    cap: { color: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "pm2"]], 0],
+           60, "#96f2d7", 120, "#38d9a9", 200, "#22b8cf", 300, "#4c6ef5", 450, "#5f3dc4"] } },
   { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5, nameLabel: true },
   // --- Costs, trend & affordability (group market2) ------------------------
   // Price trend as a bilinear SURFACE like the price heatmaps (raw cells read
@@ -1649,6 +1655,7 @@ const LAYER_INFO = {
   la_property:         { about: "Property titles owned by public bodies — councils, parishes, combined authorities, NHS, universities, police/fire and central government — aggregated to postcode points with a title count, coloured by owner type. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — green available, amber restricted, red not available. A proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
   ppd_sales:           { about: "Every registered property sale in the last 12 months as a dot, colour-ramped from amber (~£100k) to deep red (£1.5m+). Street-level price truth beneath the LSOA averages. Positions are postcode-centroid based. Zoom right in — it's dense.", source: "HM Land Registry Price Paid Data © Crown copyright (PPD licence); OS Code-Point Open" },
+  voa_offices:         { about: "Every office in the VOA rating list as a dot, coloured by its rent in £/m²/yr (teal ≈£60 through violet £450+): the building's rateable value — the statutory assessment of its open-market rent at April 2024 — divided by its assessed floor area. Building-level office rent evidence, feeding the office viability calculator in the deep dive. Positions are postcode-centroid based; assessments lag brand-new Grade A space.", source: "VOA 2026 rating list © Crown copyright (OGL v3); OS Code-Point Open" },
   nutrient_neutrality: { about: "Catchments where development must be nutrient-neutral before permission can be granted, because the water draining from them reaches a habitats site already in unfavourable condition. This is the single biggest stalling mechanism in English housing: inside one of these, a scheme needs mitigation secured before consent, and schemes have waited years for it. A site that is otherwise perfect and a site inside a catchment are not the same proposition. 39 catchments, named for the habitats site each drains to. NPPF policy N6 also now offers a second route — an Environmental Delivery Plan with the nature restoration levy paid — but no national register of those exists yet.", source: "MHCLG planning.data.gov.uk / Natural England (OGL v3)" },
   aqma:                { about: "Air Quality Management Areas — places a council has formally declared because air quality objectives are not being met. Development inside one normally needs an air quality assessment and often mitigation, and AQMAs cluster along exactly the corridors where station-adjacent development is most attractive. NPPF policy P3 weighs the effects of pollution on health and living conditions, including cumulative effects and effects off-site.", source: "MHCLG planning.data.gov.uk / DEFRA (OGL v3)" },
   flood_storage:       { about: "Land that stores flood water or is used for flood risk management — a different thing from the flood zones we draw elsewhere. Those show land AT RISK; this shows land doing a job. Policy S4(2)(b) names the whole or partial loss of undeveloped land used for water storage or flood management as one of the circumstances where the benefits of development are likely to be substantially outweighed, unless compensatory provision is made that does not increase flood risk on or off site.", source: "Environment Agency via MHCLG planning.data.gov.uk (OGL v3)" },
@@ -4131,6 +4138,13 @@ function hoverContentForOverlay(def, p) {
                   `£${Math.round(Number(p.ppm2r) / 10.7639).toLocaleString()}/ft² ` +
                   `(${p.m2} m² EPC)`
                 : null, "measured")];
+  } else if (d === "voa_offices") {
+    title = p.pm2 != null ? `£${Number(p.pm2).toLocaleString()}/m²/yr` : "Office";
+    kind = "Office rent — VOA rating list (Apr 2024 levels)";
+    rows = [row(p.name, "address"),
+            row(p.m2 != null ? `${Number(p.m2).toLocaleString()} m²${p.unit ? " " + p.unit : ""}` : null, "floor area"),
+            row(p.rv != null ? `£${Number(p.rv).toLocaleString()}/yr` : null, "rateable value"),
+            row(p.pc, p.ba || "postcode")];
   } else if (d === "build_cost_index") {
     title = p.name || "Local authority";
     kind = "Build cost index — free proxy, not BCIS";
@@ -11059,6 +11073,10 @@ async function fetchDdContext(station) {
       renderDeepDiveViability();
   });
   fetchMajorApps(deep.stationCentre, station.crs).then(renderMajorApps);
+  fetchOfficeRents(deep.stationCentre, station.crs).then(d => {
+    deep._officeRents = d;
+    renderOfficeCalc();
+  });
   try {
     const centre = deep.stationCentre;
     const [ctx, arow] = await Promise.all([
@@ -11155,6 +11173,167 @@ function renderMajorApps(recs) {
     `<div class="dd-app-list">${rows}</div>` +
     (recs.length > 12 ? `<p class="hint" style="margin-top:4px">Showing the 12 most recent of ${recs.length}.</p>` : "") +
     `<p class="hint" style="margin-top:4px">Live from planit.org.uk (council planning registers). Click a row for the application. Locations are the register's own geocoding — the occasional mislocated record does appear, so sanity-check addresses.</p>`;
+}
+
+// ---- Office viability (employment-led option) ------------------------------
+// Rent evidence is BUILDING-LEVEL: office_rents_near pulls the VOA-assessed
+// offices around this site (2026 rating list — the statutory open-market rent
+// assessment of each building at April 2024) and returns the local median
+// £/m² plus the nearest dozen as named comparables, widening 2→25 km until it
+// holds at least five. RVs lag brand-new Grade A space, hence the editable
+// Grade A adjustment on top. Yields have no open national feed (IPF/agency
+// series are licensed), so the NIY stays a clearly-labelled assumption.
+const OFFICE_DEFAULTS = {
+  giaM2: null,      // null → sized from the developable-land result
+  niaPct: 85,       // net:gross for new offices
+  gradeAPct: 115,   // uplift on the VOA median for new Grade A space
+  rentPm2: null,    // null → evidence median × Grade A adjustment
+  niyPct: 6.75,     // net initial yield — assumption, no open feed
+  rentFreeMo: 12,   // incentive, deducted from the capitalised value
+  purchPct: 6.8,    // purchaser's costs
+  buildPm2: 2650,   // office build cost £/m² GIA (shell + Cat A)
+  feesPct: 10, contPct: 5, buildMonths: 24,
+  finRatePct: null, // null → the residential model's debt rate
+  profitPct: 15,    // developer return on cost
+};
+function officeAssumptions() {
+  const saved = mmStore.get("officeCalc", {}) || {};
+  const a = { ...OFFICE_DEFAULTS };
+  for (const k in saved)
+    if (k in a && saved[k] != null && saved[k] !== "") a[k] = saved[k];
+  return a;
+}
+
+const _officeRentsCache = new Map();
+async function fetchOfficeRents(centre, crs) {
+  if (!centre) return null;
+  if (crs && _officeRentsCache.has(crs)) return _officeRentsCache.get(crs);
+  const sb = getSupabase();
+  if (!sb) return null;
+  try {
+    const { data, error } = await sb.rpc("office_rents_near",
+      { p_lat: centre[1], p_lng: centre[0] });
+    if (error) throw error;
+    if (crs) _officeRentsCache.set(crs, data);
+    return data;
+  } catch (e) { console.error("office_rents_near failed", e); return null; }
+}
+
+function officeGiaDefault() {
+  const r = deep.developableResult;
+  const ha = r ? Number(r.developable_ha) || 0 : 0;
+  // Business-park intensity: ~35% coverage over 2–3 storeys ≈ 8,000 m² GIA
+  // per ha, capped so a big rural catchment doesn't propose a Canary Wharf.
+  // A starting size only — edit it.
+  if (ha > 0) return Math.max(1000, Math.min(40000, Math.round(ha * 80) * 100));
+  return 5000;
+}
+
+function computeOffice(a, ev) {
+  const gia = Number(a.giaM2) > 0 ? Number(a.giaM2) : officeGiaDefault();
+  const nia = gia * (a.niaPct / 100);
+  const auto = ev && ev.med_pm2 ? Math.round(ev.med_pm2 * (a.gradeAPct / 100)) : null;
+  const rent = Number(a.rentPm2) > 0 ? Number(a.rentPm2) : auto;
+  if (!rent) return null;
+  const income = nia * rent;
+  const niy = Math.max(2, Number(a.niyPct) || 6.75) / 100;
+  const grossCV = income / niy;
+  const netCV = (grossCV - income * (a.rentFreeMo / 12)) / (1 + a.purchPct / 100);
+  const build = gia * a.buildPm2;
+  const fees = build * (a.feesPct / 100);
+  const cont = build * (a.contPct / 100);
+  const finRate = (Number(a.finRatePct) > 0 ? Number(a.finRatePct)
+    : (siteViabilityDefaults().debtRatePct ?? 6.5)) / 100;
+  const finance = (build + fees + cont) * finRate * (a.buildMonths / 12) / 2;
+  const cost = build + fees + cont + finance;
+  const profit = cost * (a.profitPct / 100);
+  const rlv = netCV - cost - profit;
+  return { gia, nia, rent, auto, income, niy, grossCV, netCV,
+           build, fees, cont, finance, cost, profit, rlv };
+}
+
+function officeOutHTML(o, a) {
+  if (!o) return `<p class="hint">No rent evidence reached and no rent entered —
+    type a rent £/m² above to run the appraisal.</p>`;
+  const money = v => (v < 0 ? "−" : "") + fmtMoneyShort(Math.abs(v));
+  const line = (v, cap, cls) =>
+    `<div class="dd-office-stat${cls ? " " + cls : ""}"><span>${cap}</span><b>${v}</b></div>`;
+  return line(money(o.netCV), "Capital value (net of incentives + purchaser's costs)")
+    + line(money(o.cost), "Development cost, excluding land")
+    + line(money(o.rlv), `Residual land value @ ${a.profitPct}% profit on cost`,
+           o.rlv >= 0 ? "dd-ok" : "dd-warn")
+    + `<p class="hint" style="margin:6px 0 0">${Math.round(o.gia).toLocaleString()} m² GIA
+      → ${Math.round(o.nia).toLocaleString()} m² NIA × £${o.rent.toLocaleString()}/m²
+      = ${fmtMoneyShort(o.income)}/yr, capitalised @ ${(o.niy * 100).toFixed(2)}% NIY.
+      Costs: build ${fmtMoneyShort(o.build)} + fees ${fmtMoneyShort(o.fees)}
+      + contingency ${fmtMoneyShort(o.cont)} + finance ${fmtMoneyShort(o.finance)}.</p>`;
+}
+
+function renderOfficeCalc() {
+  const el = document.getElementById("dd-office");
+  if (!el) return;
+  const ev = deep._officeRents;
+  const a = officeAssumptions();
+  const auto = ev && ev.med_pm2 ? Math.round(ev.med_pm2 * (a.gradeAPct / 100)) : null;
+
+  const evLine = ev && ev.n
+    ? `<p class="hint" style="margin:0 0 6px"><b>£${Number(ev.med_pm2).toLocaleString()}/m²/yr</b>
+        median across <b>${Number(ev.n).toLocaleString()}</b> VOA-assessed offices within
+        ${ev.km} km (IQR £${Number(ev.p25).toLocaleString()}–£${Number(ev.p75).toLocaleString()}).
+        Statutory rent assessments at April 2024 (2026 rating list) — they lag new
+        Grade A space, hence the adjustable uplift below.</p>`
+    : `<p class="hint" style="margin:0 0 6px">Office rent evidence hasn't loaded
+        (the VOA dataset may still be importing) — enter a rent £/m² by hand below.</p>`;
+
+  const evRows = ev && ev.rows && ev.rows.length ? `
+    <details class="dd-office-ev"><summary>Nearest office comparables (${ev.rows.length})</summary>
+      <table class="dd-office-tbl"><tr><th>Address</th><th>m²</th><th>£/m²</th><th>dist</th></tr>
+      ${ev.rows.map(r => `<tr><td>${escapeSift(r.addr || r.pc || "")}</td>
+        <td>${Number(r.m2).toLocaleString()}</td><td>£${Number(r.pm2).toLocaleString()}</td>
+        <td>${r.dist_m >= 1000 ? (r.dist_m / 1000).toFixed(1) + " km" : r.dist_m + " m"}</td></tr>`).join("")}
+      </table></details>` : "";
+
+  const F = (k, label, ph) => `<label><span>${label}</span>
+    <input type="number" step="any" data-k="${k}" value="${a[k] ?? ""}"
+      ${ph != null ? `placeholder="${ph}"` : ""}></label>`;
+
+  el.innerHTML = evLine + evRows + `
+    <div class="dd-office-grid">
+      ${F("giaM2", "GIA m²", officeGiaDefault())}
+      ${F("niaPct", "NIA %")}
+      ${F("rentPm2", "Rent £/m²", auto ?? "")}
+      ${F("gradeAPct", "Grade A adj %")}
+      ${F("niyPct", "NIY %")}
+      ${F("rentFreeMo", "Rent free (mo)")}
+      ${F("purchPct", "Purch. costs %")}
+      ${F("buildPm2", "Build £/m²")}
+      ${F("feesPct", "Fees %")}
+      ${F("contPct", "Contingency %")}
+      ${F("buildMonths", "Build (mo)")}
+      ${F("profitPct", "Profit on cost %")}
+    </div>
+    <div id="dd-office-out">${officeOutHTML(computeOffice(a, ev), a)}</div>
+    <p class="hint" style="margin-top:6px">Assumptions persist in this browser.
+      NIY has no open national data feed — set it from current agency evidence.
+      <button type="button" class="ghost" id="dd-office-reset" style="margin-left:4px">Reset</button></p>`;
+
+  const update = () => {
+    const saved = {};
+    el.querySelectorAll("input[data-k]").forEach(i => {
+      const v = parseFloat(i.value);
+      if (isFinite(v)) saved[i.dataset.k] = v;
+    });
+    mmStore.set("officeCalc", saved);
+    const b = officeAssumptions();
+    const out = document.getElementById("dd-office-out");
+    if (out) out.innerHTML = officeOutHTML(computeOffice(b, ev), b);
+  };
+  el.querySelectorAll("input[data-k]").forEach(i => i.addEventListener("input", update));
+  const reset = el.querySelector("#dd-office-reset");
+  if (reset) reset.addEventListener("click", () => {
+    mmStore.set("officeCalc", {});
+    renderOfficeCalc();
+  });
 }
 
 const DD_PARTY_SHORT = {
@@ -11468,6 +11647,14 @@ function buildDeepDivePanel(meta) {
           <button type="button" class="ghost" id="dd-viab-vars">Viability variables…</button>
           <button type="button" class="ghost" id="dd-viab-calc">Full calculation…</button>
           <button type="button" class="plot-mode-btn" id="dd-catchment-report">Full report…</button>
+        </div>
+      </section>
+      <section class="dd-block collapsed" data-section="office">
+        <button class="dd-block-head" type="button" aria-expanded="false">
+          <span class="dd-h">Office viability — income capitalisation</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="dd-block-content">
+          <div id="dd-office"><p class="hint">Loading office rent evidence…</p></div>
         </div>
       </section>`)
       + ddGroup("need", "Need · deprivation", "")
