@@ -2928,3 +2928,20 @@ footer {
 .ovp2 .ovp-k { color: var(--text-dim); }
 .ovp2 .ovp-v { color: var(--text); }
 .ovp2 .ovp-note { color: var(--text-dim); }
+
+/* Agent-consensus rent card tiers (agentRentsCardHTML). */
+.ar-tier { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ink-line); }
+.ar-tier-head { display: flex; align-items: baseline; gap: 8px; }
+.ar-tier-label { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); flex: 1; }
+.ar-tier-avg { font-size: 15px; font-weight: 800; color: var(--text); }
+.ar-tier-avg small { font-size: 10px; font-weight: 600; color: var(--text-dim); }
+.ar-tier-m2 { font-size: 10px; color: var(--text-dim); }
+.ar-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.ar-chip {
+  font-size: 9.5px; line-height: 1.5; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #e8590c 30%, var(--ink-line));
+  background: color-mix(in srgb, #e8590c 7%, var(--ink-2));
+  color: var(--text); white-space: nowrap;
+}
+.ar-chip b { font-weight: 700; }
+.ar-chip i { font-style: normal; color: var(--text-dim); margin-left: 3px; font-size: 8.5px; }

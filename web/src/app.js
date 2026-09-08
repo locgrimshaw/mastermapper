@@ -1369,6 +1369,14 @@ const MAP_OVERLAYS = [
     radius: ["interpolate", ["linear"], ["zoom"], 12, 2.5, 15, 5, 17, 7],
     cap: { color: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "pm2"]], 0],
            60, "#96f2d7", 120, "#38d9a9", 200, "#22b8cf", 300, "#4c6ef5", 450, "#5f3dc4"] } },
+  // Agent-consensus headline rents: hand-curated quarterly from the agents'
+  // own public research (Savills, KF, CBRE, C&W, JLL, AY, ...), London at
+  // submarket level + regional centres. Complements voa_offices: this is what
+  // agents QUOTE today, that is what the VOA ASSESSED at Apr 2024.
+  { key: "agent_rents",  group: "market", label: "Headline office rents (agent consensus)", color: "#e8590c", dataset: "agent_office_rents", render: "point", minZoom: 4, lim: 600,
+    radius: ["interpolate", ["linear"], ["zoom"], 5, 4.5, 10, 7, 14, 10],
+    cap: { color: ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "prime_avg"]], 0],
+           20, "#ffd8a8", 35, "#ffa94d", 55, "#f76707", 90, "#e8590c", 150, "#a61e4d"] } },
   { key: "lad_boundary", group: "market", label: "Local authority boundaries", color: "#868e96", dataset: "lad_boundary", render: "line", minZoom: 5, nameLabel: true },
   // --- Costs, trend & affordability (group market2) ------------------------
   // Price trend as a bilinear SURFACE like the price heatmaps (raw cells read
@@ -1655,6 +1663,7 @@ const LAYER_INFO = {
   la_property:         { about: "Property titles owned by public bodies — councils, parishes, combined authorities, NHS, universities, police/fire and central government — aggregated to postcode points with a title count, coloured by owner type. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — green available, amber restricted, red not available. A proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
   ppd_sales:           { about: "Every registered property sale in the last 12 months as a dot, colour-ramped from amber (~£100k) to deep red (£1.5m+). Street-level price truth beneath the LSOA averages. Positions are postcode-centroid based. Zoom right in — it's dense.", source: "HM Land Registry Price Paid Data © Crown copyright (PPD licence); OS Code-Point Open" },
+  agent_rents:         { about: "What the market is quoting: prime, mid-tier and secondary office rents (£/ft²/yr) for London submarkets and regional centres, drawn from the property agents' own published research (Savills, Knight Frank, CBRE, Cushman & Wakefield, JLL, Avison Young, Colliers, LSH, Carter Jonas, Bidwells…). Tap a dot for every agent's figure, its date, and the consensus average per tier. Hand-curated quarterly — a benchmark reading, not a transaction record; pairs with the VOA layer's building-level statutory assessments.", source: "Named agents' public research publications, attributed per figure" },
   voa_offices:         { about: "Every office in the VOA rating list as a dot, coloured by its rent in £/m²/yr (teal ≈£60 through violet £450+): the building's rateable value — the statutory assessment of its open-market rent at April 2024 — divided by its assessed floor area (the card quotes £/ft² too, as agents do). Building-level office rent evidence, feeding the office viability calculator in the deep dive. Positions are postcode-centroid based; assessments lag brand-new Grade A space.", source: "VOA 2026 rating list © Crown copyright (OGL v3); OS Code-Point Open" },
   nutrient_neutrality: { about: "Catchments where development must be nutrient-neutral before permission can be granted, because the water draining from them reaches a habitats site already in unfavourable condition. This is the single biggest stalling mechanism in English housing: inside one of these, a scheme needs mitigation secured before consent, and schemes have waited years for it. A site that is otherwise perfect and a site inside a catchment are not the same proposition. 39 catchments, named for the habitats site each drains to. NPPF policy N6 also now offers a second route — an Environmental Delivery Plan with the nature restoration levy paid — but no national register of those exists yet.", source: "MHCLG planning.data.gov.uk / Natural England (OGL v3)" },
   aqma:                { about: "Air Quality Management Areas — places a council has formally declared because air quality objectives are not being met. Development inside one normally needs an air quality assessment and often mitigation, and AQMAs cluster along exactly the corridors where station-adjacent development is most attractive. NPPF policy P3 weighs the effects of pollution on health and living conditions, including cumulative effects and effects off-site.", source: "MHCLG planning.data.gov.uk / DEFRA (OGL v3)" },
@@ -2625,8 +2634,49 @@ function renderOverlay(key, def, fc) {
 // central handleMapTap dispatcher (NOT per-layer click handlers, which would
 // double-fire alongside the LSOA panel). Pins a card with EVERY attribute the
 // feature carries (voltage, operator, headroom, queued MW, ...).
+// Parse a map-feature property that may arrive as a JSON string (MapLibre
+// stringifies nested objects in feature.properties) or already an object.
+function _featObj(v) {
+  if (v == null) return null;
+  if (typeof v === "object") return v;
+  try { return JSON.parse(v); } catch (_) { return null; }
+}
+
+// The agent-consensus rent card: three tiers, each with its consensus £/ft²
+// headline and a chip for every agent figure behind it (who, how much, when).
+function agentRentsCardHTML(p) {
+  const TIERS = [["prime", "Prime"], ["mid", "Mid-tier"], ["low", "Secondary"]];
+  const agents = new Set();
+  const blocks = TIERS.map(([k, label]) => {
+    const t = _featObj(p[k]);
+    if (!t || !Array.isArray(t.vals) || !t.vals.length) return "";
+    t.vals.forEach(v => agents.add(v.a));
+    const chips = t.vals.map(v =>
+      `<span class="ar-chip">${_esc(v.a)} <b>£${Number(v.v).toLocaleString()}</b>` +
+      (v.p ? `<i>${_esc(v.p)}</i>` : "") + `</span>`).join("");
+    return `<div class="ar-tier">
+      <div class="ar-tier-head"><span class="ar-tier-label">${label}</span>
+        <span class="ar-tier-avg">£${Number(t.avg).toFixed(2)}<small>/ft²</small></span>
+        <span class="ar-tier-m2">£${Math.round(Number(t.avg) * 10.7639).toLocaleString()}/m²</span></div>
+      <div class="ar-chips">${chips}</div></div>`;
+  }).join("");
+  return `<div class="ovp ovp2" style="--ov:#e8590c">` +
+    `<div class="ovp-kind"><span class="ovp-dot"></span>Agent headline office rents · £/ft²/yr</div>` +
+    `<div class="ovp-title">${_esc(p.name || "")}</div>` +
+    (p.region ? `<div class="ovp-sub">${_esc(p.region)}</div>` : "") +
+    blocks +
+    `<p class="ovp-note">Consensus = average of ${agents.size} agent${agents.size === 1 ? "'s" : "s'"} published
+     figures; chips show each source and period. Curated quarterly from public agent research —
+     today's quoting tone, beside the VOA layer's statutory Apr 2024 assessments.</p></div>`;
+}
+
 function openOverlayCard(key, p, lngLat) {
   hoverCardHide();
+  if (key === "agent_rents") {
+    openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, lngLat,
+      agentRentsCardHTML(p));
+    return;
+  }
   if (key === "uni_campus") {
     _uniPanelCtx = { p, lng: lngLat.lng, lat: lngLat.lat };
     openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, lngLat,
@@ -4165,7 +4215,14 @@ function hoverContentForOverlay(def, p) {
             row(p.m2 != null ? `${Number(p.m2).toLocaleString()} m²${p.unit ? " " + p.unit : ""}` : null, "floor area"),
             row(p.rv != null ? `£${Number(p.rv).toLocaleString()}/yr` : null, "rateable value"),
             row(p.pc, p.ba || "postcode")];
-  } else if (d === "build_cost_index") {
+  } else if (d === "agent_office_rents") {
+    const tier = k => { const t = _featObj(p[k]); return t && t.avg != null ? t : null; };
+    const pr = tier("prime"), mi = tier("mid"), lo = tier("low");
+    title = pr ? `£${Number(pr.avg).toFixed(2)}/ft² prime` : (p.name || "Office market");
+    kind = `${p.name || ""} — agent headline rents`;
+    const fmtT = t => t ? `£${Number(t.avg).toFixed(2)}/ft² (${t.vals.length} agent${t.vals.length === 1 ? "" : "s"})` : null;
+    rows = [row(fmtT(mi), "mid-tier"), row(fmtT(lo), "secondary"),
+            row("tap for every agent's figure", "consensus detail")];
     title = p.name || "Local authority";
     kind = "Build cost index — free proxy, not BCIS";
     rows = [row(p.factor != null ? `${Number(p.factor).toFixed(2)}× national` : null,

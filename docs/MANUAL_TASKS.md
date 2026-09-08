@@ -315,3 +315,18 @@ tec_register reload so statuses stay in step.
   `select public.rebuild_he_land();` — server-side pull from HE's public
   ArcGIS FeatureServer (~98 sites). Refresh quarterly-ish; the Land Hub
   changes as sites come to market.
+
+## Agent headline office rents — quarterly re-curation (loaded 2026-09)
+
+The `agent_office_rents` layer (prime / mid / secondary £/ft² by market with
+per-agent attribution) is hand-curated from the agents' own public research —
+there is no feed. Quarterly:
+1. Pull the latest editions: Avison Young "Big Nine", Knight Frank M25/London,
+   Savills City + West End Market Watch, C&W MarketBeats, CBRE Figures,
+   Carter Jonas rent guides, LSH OMR, Bidwells (Ox/Cam), JLL, Colliers.
+2. Update the figures in `data/agent_office_rents_raw.json` (one row per
+   agent × zone × tier, with publication + period + URL).
+3. `python pipeline/build_agent_rents.py` → rebuilds
+   `data/agent_office_rents.json` (merges zones, computes consensus averages).
+4. Commit + push, then:
+   `select public.load_agent_office_rents('https://raw.githubusercontent.com/locgrimshaw/mastermapper/main/data/agent_office_rents.json');`
