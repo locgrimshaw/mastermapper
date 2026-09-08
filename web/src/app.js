@@ -1655,7 +1655,7 @@ const LAYER_INFO = {
   la_property:         { about: "Property titles owned by public bodies — councils, parishes, combined authorities, NHS, universities, police/fire and central government — aggregated to postcode points with a title count, coloured by owner type. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — green available, amber restricted, red not available. A proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
   ppd_sales:           { about: "Every registered property sale in the last 12 months as a dot, colour-ramped from amber (~£100k) to deep red (£1.5m+). Street-level price truth beneath the LSOA averages. Positions are postcode-centroid based. Zoom right in — it's dense.", source: "HM Land Registry Price Paid Data © Crown copyright (PPD licence); OS Code-Point Open" },
-  voa_offices:         { about: "Every office in the VOA rating list as a dot, coloured by its rent in £/m²/yr (teal ≈£60 through violet £450+): the building's rateable value — the statutory assessment of its open-market rent at April 2024 — divided by its assessed floor area. Building-level office rent evidence, feeding the office viability calculator in the deep dive. Positions are postcode-centroid based; assessments lag brand-new Grade A space.", source: "VOA 2026 rating list © Crown copyright (OGL v3); OS Code-Point Open" },
+  voa_offices:         { about: "Every office in the VOA rating list as a dot, coloured by its rent in £/m²/yr (teal ≈£60 through violet £450+): the building's rateable value — the statutory assessment of its open-market rent at April 2024 — divided by its assessed floor area (the card quotes £/ft² too, as agents do). Building-level office rent evidence, feeding the office viability calculator in the deep dive. Positions are postcode-centroid based; assessments lag brand-new Grade A space.", source: "VOA 2026 rating list © Crown copyright (OGL v3); OS Code-Point Open" },
   nutrient_neutrality: { about: "Catchments where development must be nutrient-neutral before permission can be granted, because the water draining from them reaches a habitats site already in unfavourable condition. This is the single biggest stalling mechanism in English housing: inside one of these, a scheme needs mitigation secured before consent, and schemes have waited years for it. A site that is otherwise perfect and a site inside a catchment are not the same proposition. 39 catchments, named for the habitats site each drains to. NPPF policy N6 also now offers a second route — an Environmental Delivery Plan with the nature restoration levy paid — but no national register of those exists yet.", source: "MHCLG planning.data.gov.uk / Natural England (OGL v3)" },
   aqma:                { about: "Air Quality Management Areas — places a council has formally declared because air quality objectives are not being met. Development inside one normally needs an air quality assessment and often mitigation, and AQMAs cluster along exactly the corridors where station-adjacent development is most attractive. NPPF policy P3 weighs the effects of pollution on health and living conditions, including cumulative effects and effects off-site.", source: "MHCLG planning.data.gov.uk / DEFRA (OGL v3)" },
   flood_storage:       { about: "Land that stores flood water or is used for flood risk management — a different thing from the flood zones we draw elsewhere. Those show land AT RISK; this shows land doing a job. Policy S4(2)(b) names the whole or partial loss of undeveloped land used for water storage or flood management as one of the circumstances where the benefits of development are likely to be substantially outweighed, unless compensatory provision is made that does not increase flood risk on or off site.", source: "Environment Agency via MHCLG planning.data.gov.uk (OGL v3)" },
@@ -4156,8 +4156,11 @@ function hoverContentForOverlay(def, p) {
                   `(${p.m2} m² EPC)`
                 : null, "measured")];
   } else if (d === "voa_offices") {
-    title = p.pm2 != null ? `£${Number(p.pm2).toLocaleString()}/m²/yr` : "Office";
-    kind = "Office rent — VOA rating list (Apr 2024 levels)";
+    // Office agents quote per sq ft, valuers per m² — headline both.
+    title = p.pm2 != null
+      ? `£${(Number(p.pm2) / 10.7639).toFixed(2)}/ft² · £${Number(p.pm2).toLocaleString()}/m²`
+      : "Office";
+    kind = "Office rent /yr — VOA rating list (Apr 2024 levels)";
     rows = [row(p.name, "address"),
             row(p.m2 != null ? `${Number(p.m2).toLocaleString()} m²${p.unit ? " " + p.unit : ""}` : null, "floor area"),
             row(p.rv != null ? `£${Number(p.rv).toLocaleString()}/yr` : null, "rateable value"),
@@ -11279,9 +11282,13 @@ function computeOffice(a, ev) {
            build, fees, cont, finance, cost, profit, rlv };
 }
 
+// Office rents are quoted per sq ft by agents and per m² by valuers/VOA —
+// show both wherever a rent appears. 1 m² = 10.7639 ft².
+function officePsf(pm2) { return "£" + (Number(pm2) / 10.7639).toFixed(2) + "/ft²"; }
+
 function officeOutHTML(o, a) {
   if (!o) return `<p class="hint">No rent evidence reached and no rent entered —
-    type a rent £/m² above to run the appraisal.</p>`;
+    type a rent above (either unit) to run the appraisal.</p>`;
   const money = v => (v < 0 ? "−" : "") + fmtMoneyShort(Math.abs(v));
   const line = (v, cap, cls) =>
     `<div class="dd-office-stat${cls ? " " + cls : ""}"><span>${cap}</span><b>${v}</b></div>`;
@@ -11291,6 +11298,7 @@ function officeOutHTML(o, a) {
            o.rlv >= 0 ? "dd-ok" : "dd-warn")
     + `<p class="hint" style="margin:6px 0 0">${Math.round(o.gia).toLocaleString()} m² GIA
       → ${Math.round(o.nia).toLocaleString()} m² NIA × £${o.rent.toLocaleString()}/m²
+      (${officePsf(o.rent)})
       = ${fmtMoneyShort(o.income)}/yr, capitalised @ ${(o.niy * 100).toFixed(2)}% NIY.
       Costs: build ${fmtMoneyShort(o.build)} + fees ${fmtMoneyShort(o.fees)}
       + contingency ${fmtMoneyShort(o.cont)} + finance ${fmtMoneyShort(o.finance)}.</p>`;
@@ -11304,19 +11312,21 @@ function renderOfficeCalc() {
   const auto = ev && ev.med_pm2 ? Math.round(ev.med_pm2 * (a.gradeAPct / 100)) : null;
 
   const evLine = ev && ev.n
-    ? `<p class="hint" style="margin:0 0 6px"><b>£${Number(ev.med_pm2).toLocaleString()}/m²/yr</b>
+    ? `<p class="hint" style="margin:0 0 6px"><b>${officePsf(ev.med_pm2)}
+        (£${Number(ev.med_pm2).toLocaleString()}/m²)</b> a year —
         median across <b>${Number(ev.n).toLocaleString()}</b> VOA-assessed offices within
-        ${ev.km} km (IQR £${Number(ev.p25).toLocaleString()}–£${Number(ev.p75).toLocaleString()}).
+        ${ev.km} km (IQR £${Number(ev.p25).toLocaleString()}–£${Number(ev.p75).toLocaleString()}/m²).
         Statutory rent assessments at April 2024 (2026 rating list) — they lag new
         Grade A space, hence the adjustable uplift below.</p>`
     : `<p class="hint" style="margin:0 0 6px">Office rent evidence hasn't loaded
-        (the VOA dataset may still be importing) — enter a rent £/m² by hand below.</p>`;
+        (the VOA dataset may still be importing) — enter a rent by hand below.</p>`;
 
   const evRows = ev && ev.rows && ev.rows.length ? `
     <details class="dd-office-ev"><summary>Nearest office comparables (${ev.rows.length})</summary>
-      <table class="dd-office-tbl"><tr><th>Address</th><th>m²</th><th>£/m²</th><th>dist</th></tr>
+      <table class="dd-office-tbl"><tr><th>Address</th><th>m²</th><th>£/ft²</th><th>£/m²</th><th>dist</th></tr>
       ${ev.rows.map(r => `<tr><td>${escapeSift(r.addr || r.pc || "")}</td>
-        <td>${Number(r.m2).toLocaleString()}</td><td>£${Number(r.pm2).toLocaleString()}</td>
+        <td>${Number(r.m2).toLocaleString()}</td>
+        <td>${(Number(r.pm2) / 10.7639).toFixed(2)}</td><td>£${Number(r.pm2).toLocaleString()}</td>
         <td>${r.dist_m >= 1000 ? (r.dist_m / 1000).toFixed(1) + " km" : r.dist_m + " m"}</td></tr>`).join("")}
       </table></details>` : "";
 
@@ -11329,6 +11339,10 @@ function renderOfficeCalc() {
       ${F("giaM2", "GIA m²", officeGiaDefault())}
       ${F("niaPct", "NIA %")}
       ${F("rentPm2", "Rent £/m²", auto ?? "")}
+      <label><span>Rent £/ft²</span>
+        <input type="number" step="any" id="dd-office-psf"
+          value="${Number(a.rentPm2) > 0 ? (a.rentPm2 / 10.7639).toFixed(2) : ""}"
+          placeholder="${auto ? (auto / 10.7639).toFixed(2) : ""}"></label>
       ${F("gradeAPct", "Grade A adj %")}
       ${F("niyPct", "NIY %")}
       ${F("rentFreeMo", "Rent free (mo)")}
@@ -11355,7 +11369,27 @@ function renderOfficeCalc() {
     const out = document.getElementById("dd-office-out");
     if (out) out.innerHTML = officeOutHTML(computeOffice(b, ev), b);
   };
-  el.querySelectorAll("input[data-k]").forEach(i => i.addEventListener("input", update));
+  el.querySelectorAll("input[data-k]").forEach(i => i.addEventListener("input", () => {
+    // Keep the £/ft² twin in step when the £/m² rent changes (agents quote
+    // psf, the model stores per m²) — unless the user is typing in it.
+    if (i.dataset.k === "rentPm2") {
+      const psfEl = el.querySelector("#dd-office-psf");
+      if (psfEl && document.activeElement !== psfEl) {
+        const v = parseFloat(i.value);
+        psfEl.value = isFinite(v) && v > 0 ? (v / 10.7639).toFixed(2) : "";
+      }
+    }
+    update();
+  }));
+  const psfEl = el.querySelector("#dd-office-psf");
+  if (psfEl) psfEl.addEventListener("input", () => {
+    const v = parseFloat(psfEl.value);
+    const pm2El = el.querySelector('input[data-k="rentPm2"]');
+    if (pm2El) {
+      pm2El.value = isFinite(v) && v > 0 ? String(Math.round(v * 10.7639)) : "";
+      update();
+    }
+  });
   const reset = el.querySelector("#dd-office-reset");
   if (reset) reset.addEventListener("click", () => {
     mmStore.set("officeCalc", {});
