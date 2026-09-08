@@ -2945,3 +2945,76 @@ footer {
 }
 .ar-chip b { font-weight: 700; }
 .ar-chip i { font-style: normal; color: var(--text-dim); margin-left: 3px; font-size: 8.5px; }
+
+/* Compile-plots modal + generative layout tool. Both are full-screen overlay
+   popups on the MAIN screen, spawned from the dive's assembly basket. */
+#compile-modal, #lg-modal {
+  position: fixed; inset: 0; z-index: 240;
+  background: rgba(10, 14, 20, 0.55); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+#compile-modal[hidden], #lg-modal[hidden] { display: none; }
+.cm-card, .lg-card {
+  background: var(--ink-1, var(--ink-2)); color: var(--text);
+  border: 1px solid var(--ink-line); border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+  max-height: 94vh; overflow: auto; display: flex; flex-direction: column;
+}
+.cm-card { width: min(980px, 96vw); }
+.lg-card { width: min(1240px, 97vw); }
+.cm-head, .lg-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 14px 18px 8px; border-bottom: 1px solid var(--ink-line);
+}
+.cm-head h3, .lg-head h3 { margin: 2px 0 0; font-size: 17px; }
+.cm-kicker { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+.cm-body { display: grid; grid-template-columns: 480px 1fr; gap: 14px; padding: 14px 18px 18px; }
+.cm-plan svg { width: 100%; height: auto; background: var(--ink-2); border: 1px solid var(--ink-line); border-radius: 10px; }
+.cm-plan .cm-lbl { font: 700 11px var(--font-ui); fill: #1c4022; text-anchor: middle; }
+.cm-plan .cm-scale { font: 10px var(--font-ui); fill: var(--text-dim); }
+.cm-plan-rows { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 10.5px; color: var(--text-dim); }
+.cm-dials { display: flex; gap: 10px; margin-bottom: 10px; }
+.cm-dials label { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-dim); }
+.cm-dials label small { font-weight: 400; }
+.cm-dials input {
+  padding: 6px 8px; font-size: 15px; font-weight: 700;
+  background: var(--ink-2); color: var(--text);
+  border: 1px solid var(--ink-line); border-radius: 8px; width: 100%; box-sizing: border-box;
+}
+.cm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.cm-cell { border: 1px solid var(--ink-line); background: var(--ink-2); border-radius: 9px; padding: 7px 9px; }
+.cm-cell b { display: block; font-size: 15px; }
+.cm-cell span { font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); }
+.cm-cell.cm-sg b { color: #2f9e44; } .cm-cell.cm-sa b { color: #e8590c; } .cm-cell.cm-sr b { color: #e03131; }
+
+.lg-body { display: grid; grid-template-columns: 200px 1fr 460px; gap: 12px; padding: 12px 16px 16px; min-height: 540px; }
+.lg-controls { display: flex; flex-direction: column; gap: 9px; font-size: 11px; }
+.lg-controls label { display: flex; flex-direction: column; gap: 2px; color: var(--text-dim); }
+.lg-controls label b { color: var(--text); }
+.lg-controls select {
+  padding: 5px 6px; background: var(--ink-2); color: var(--text);
+  border: 1px solid var(--ink-line); border-radius: 7px; font-size: 11.5px;
+}
+.lg-controls input[type=range] { width: 100%; }
+.lg-gen { font-size: 11px; color: var(--text-dim); }
+.lg-note { font-size: 9.5px; line-height: 1.45; color: var(--text-dim); margin: 4px 0 0; }
+.lg-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; align-content: start; }
+.lg-cell {
+  border: 1px solid var(--ink-line); border-radius: 8px; overflow: hidden;
+  cursor: pointer; background: var(--ink-2); position: relative;
+}
+.lg-cell svg { display: block; width: 100%; height: auto; }
+.lg-cell span {
+  position: absolute; left: 4px; bottom: 3px; font-size: 9px; font-weight: 700;
+  background: rgba(255,255,255,0.82); color: #212529; border-radius: 5px; padding: 0 4px;
+}
+.lg-cell.lg-top { outline: 2px solid #4c6ef5; }
+.lg-best svg { width: 100%; height: auto; background: var(--ink-2); border: 1px solid var(--ink-line); border-radius: 10px; }
+.lg-best .cm-grid { margin-top: 8px; grid-template-columns: repeat(4, 1fr); }
+.lg-mix { font-size: 11px; color: var(--text-dim); margin: 6px 0 0; }
+.lg-legend { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 8px; font-size: 10px; color: var(--text-dim); }
+.lg-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 3px; vertical-align: -1px; }
+@media (max-width: 1100px) {
+  .cm-body { grid-template-columns: 1fr; }
+  .lg-body { grid-template-columns: 1fr; }
+}

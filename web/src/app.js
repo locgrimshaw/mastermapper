@@ -5007,6 +5007,9 @@ function tapDeepDiveLayers(point, box, nearest, coarse) {
     const hits = q(id);
     if (hits) {
       const ll = map.unproject([point.x, point.y]);
+      // Parcel-mode assembly: the developable/blocker polygons sit above the
+      // parcel tiles, so let the tap fall through them to reach the parcels.
+      if (deep.assembly.active && deep.assembly.mode === "parcels") continue;
       if (id === "developable-blockers") {
         // In assemble mode a blocker click is dead space, not a popup — the
         // user is mid-selection and a modal interruption loses their flow.
@@ -5135,6 +5138,13 @@ function wireInteractions() {
       try { hits = map.queryRenderedFeatures(box, { layers: ["parcel-fill"] }); } catch (_) {}
       if (hits && hits.length) {
         const p = hits[0].properties || {};
+        // Parcel-mode assembly: taps pick parcels for the site instead of
+        // opening the inspect popup.
+        if (deep.assembly && deep.assembly.active && deep.assembly.mode === "parcels") {
+          toggleAssemblyParcel(p);
+          setDrawer(false);
+          return true;
+        }
         const pid = p.INSPIREID ?? p.inspireid ?? "?";
         hoverCardHide();
         openClickPopup({ closeButton: true, maxWidth: "300px", offset: 10 },
@@ -5761,8 +5771,12 @@ const deep = {
   _plots: null,             // per-plot features for click-to-analyse
   _innerCircle: null,       // cached inner-ring circle (turf polygon)
   // Land assembler: multi-select of developable plots. ids are INDICES into
-  // _plots (ephemeral — cleared whenever the plots are recomputed).
-  assembly: { active: false, ids: new Set(), name: "" },
+  // _plots (ephemeral — cleared whenever the plots are recomputed). mode
+  // "parcels" instead selects HMLR INSPIRE parcels by INSPIREID — the point is
+  // to pick the few key parcels worth negotiating for, not every edge sliver
+  // a developable zone happens to touch; those survive dev-config changes.
+  assembly: { active: false, ids: new Set(), name: "", mode: "zones",
+              parcels: new Map() },
 };
 
 // ---- Workstream 3: shortlist, triad, synthesis, comparison, export --------
@@ -8132,10 +8146,87 @@ function assemblyPlots() {
     .filter(Boolean);
 }
 
+// ---- Parcel-mode assembly ---------------------------------------------------
+// Selection is by INSPIREID against the parcel vector tiles. A parcel can be
+// split across tiles, so the stored geometry is the UNION of every tile piece
+// carrying that id — good enough for area/plan work (tile clipping introduces
+// nothing a buffer join doesn't heal at these scales).
+function _turfUnion(a, b) {
+  if (!window.turf) return a;
+  try { const r = turf.union(turf.featureCollection([a, b])); if (r) return r; } catch (_) {}
+  try { return turf.union(a, b) || a; } catch (_) { return a; }
+}
+
+function asmParcelKey(p) {
+  const v = p && (p.INSPIREID ?? p.inspireid);
+  return v == null ? null : String(v);
+}
+
+function ensureAsmParcelLayers() {
+  if (map.getSource("asm-parcels")) return;
+  map.addSource("asm-parcels", { type: "geojson",
+    data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({ id: "asm-parcels-fill", type: "fill", source: "asm-parcels",
+    paint: { "fill-color": "#f59f00", "fill-opacity": 0.28 } });
+  map.addLayer({ id: "asm-parcels-line", type: "line", source: "asm-parcels",
+    paint: { "line-color": "#e8590c", "line-width": 2.2 } });
+}
+
+function syncAsmParcelLayer() {
+  ensureAsmParcelLayers();
+  const src = map.getSource("asm-parcels");
+  if (src) src.setData({ type: "FeatureCollection",
+    features: [...deep.assembly.parcels.values()].map(v => v.feat) });
+}
+
+function toggleAssemblyParcel(props) {
+  const key = asmParcelKey(props);
+  if (key == null) return;
+  const sel = deep.assembly.parcels;
+  if (sel.has(key)) {
+    sel.delete(key);
+  } else {
+    let pieces = [];
+    try {
+      pieces = map.querySourceFeatures("parcels", { sourceLayer: "parcels" })
+        .filter(f => asmParcelKey(f.properties) === key);
+    } catch (_) {}
+    if (!pieces.length) return;
+    let feat = null;
+    for (const p of pieces) {
+      const f = { type: "Feature", properties: {},
+                  geometry: JSON.parse(JSON.stringify(p.geometry)) };
+      feat = feat ? _turfUnion(feat, f) : f;
+    }
+    if (!feat) return;
+    feat.properties = { inspire: key };
+    let areaHa = 0;
+    try { areaHa = turf.area(feat) / 1e4; } catch (_) {}
+    sel.set(key, { key, feat, areaHa });
+  }
+  syncAsmParcelLayer();
+  renderAssemblySummary();
+}
+
+// The site currently in the basket, as labelled features — whichever mode.
+function assemblySiteFeatures() {
+  if (deep.assembly.mode === "parcels")
+    return [...deep.assembly.parcels.values()].map((v, i) => ({
+      type: "Feature",
+      properties: { label: "P" + (i + 1), ref: "INSPIRE " + v.key, area_ha: v.areaHa },
+      geometry: v.feat.geometry }));
+  return assemblyPlots().map((p, i) => ({
+    type: "Feature",
+    properties: { label: "P" + (i + 1), ref: "Zone " + (p.properties.plot + 1),
+                  area_ha: p.properties.area_ha || 0 },
+    geometry: p.geometry }));
+}
+
 // Owned-div render of the basket (#dd-assembly-summary).
 function renderAssemblySummary(notice) {
   const el = document.getElementById("dd-assembly-summary");
   if (!el) return;
+  if (deep.assembly.mode === "parcels") { renderParcelAssemblySummary(el, notice); return; }
   const plots = assemblyPlots();
   const regime = activeDevelopableRegime();
   if (!plots.length) {
@@ -8174,7 +8265,8 @@ function renderAssemblySummary(notice) {
     <input type="text" id="dd-assembly-name" placeholder="Site name for the report…"
       value="${escapeSift(deep.assembly.name || "")}" maxlength="80" />
     <div class="asm-actions">
-      <button type="button" id="dd-assembly-report" class="plot-mode-btn">Generate site report</button>
+      <button type="button" id="dd-assembly-compile" class="plot-mode-btn">Compile plots →</button>
+      <button type="button" class="ghost" id="dd-assembly-report">Full site report…</button>
       <button type="button" class="ghost" id="dd-assembly-clear">Clear</button>
     </div>`;
   el.querySelectorAll(".asm-remove").forEach(b => b.addEventListener("click", () => {
@@ -8190,6 +8282,200 @@ function renderAssemblySummary(notice) {
     renderAssemblySummary();
   });
   el.querySelector("#dd-assembly-report")?.addEventListener("click", () => generateSiteReport("assembly"));
+  el.querySelector("#dd-assembly-compile")?.addEventListener("click", openCompileModal);
+}
+
+// Parcel-mode basket: the parcels picked off the INSPIRE tiles. There is no
+// per-parcel capacity read (a parcel is ownership, not developability) — the
+// numbers happen in the compile view, where net developable % and density are
+// explicit dials.
+function renderParcelAssemblySummary(el, notice) {
+  const sel = [...deep.assembly.parcels.values()];
+  if (!sel.length) {
+    el.innerHTML = `<p class="hint">${notice ? escapeSift(notice) + " " : ""}` +
+      (deep.assembly.active
+        ? "Click parcels on the map to add them (outlines stream in from zoom 13)."
+        : "Press Assemble, then click the parcels you actually want to take forward.") + `</p>`;
+    return;
+  }
+  const totHa = sel.reduce((s, v) => s + (v.areaHa || 0), 0);
+  const rows = sel.map(v => `
+    <div class="dd-pl-row"><span>INSPIRE ${escapeSift(v.key)} · ${(v.areaHa || 0).toFixed(2)} ha</span>
+      <span><button type="button" class="asm-remove" data-key="${escapeSift(v.key)}" title="Remove">×</button></span></div>`).join("");
+  el.innerHTML = `
+    ${notice ? `<p class="hint">${escapeSift(notice)}</p>` : ""}
+    <div class="dd-pl-rows">${rows}</div>
+    <div class="dd-pl-hero" style="margin-top:6px"><strong>${totHa.toFixed(2)} ha</strong>
+      <span class="dd-dim">${sel.length} parcel${sel.length === 1 ? "" : "s"} · registered boundaries</span></div>
+    <input type="text" id="dd-assembly-name" placeholder="Site name…"
+      value="${escapeSift(deep.assembly.name || "")}" maxlength="80" />
+    <div class="asm-actions">
+      <button type="button" id="dd-assembly-compile" class="plot-mode-btn">Compile plots →</button>
+      <button type="button" class="ghost" id="dd-assembly-clear">Clear</button>
+    </div>`;
+  el.querySelectorAll(".asm-remove").forEach(b => b.addEventListener("click", () => {
+    deep.assembly.parcels.delete(b.dataset.key);
+    syncAsmParcelLayer();
+    renderAssemblySummary();
+  }));
+  const nameInp = el.querySelector("#dd-assembly-name");
+  if (nameInp) nameInp.addEventListener("input", () => { deep.assembly.name = nameInp.value; });
+  el.querySelector("#dd-assembly-clear")?.addEventListener("click", () => {
+    deep.assembly.parcels.clear();
+    syncAsmParcelLayer();
+    renderAssemblySummary();
+  });
+  el.querySelector("#dd-assembly-compile")?.addEventListener("click", openCompileModal);
+}
+
+// ---- Compile plots: the assembled site as one appraisal ---------------------
+// A modal on the main screen: the plots drawn to scale on the left, the full
+// residual appraisal on the right, driven by two explicit dials — density
+// (dwellings per net hectare) and net developable area % (gross-to-net for
+// roads, drainage, awkward corners). Zones arrive nearly net (the tool already
+// erased blockers), parcels are gross ownership boundaries — hence different
+// defaults. From here the generative layout tool takes over.
+const _compileState = { density: 35, netPct: null };
+
+function _sitePlanSVG(feats, w, h) {
+  const pts = [];
+  for (const f of feats) {
+    const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates]
+      : f.geometry.type === "MultiPolygon" ? f.geometry.coordinates : [];
+    for (const rings of polys) for (const ring of rings) for (const c of ring) pts.push(c);
+  }
+  if (!pts.length) return "<svg></svg>";
+  const lat0 = pts.reduce((s, c) => s + c[1], 0) / pts.length;
+  const kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 110540;
+  const xs = pts.map(c => c[0] * kx), ys = pts.map(c => c[1] * ky);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const pad = 24;
+  const sc = Math.min((w - 2 * pad) / Math.max(1, maxX - minX),
+                      (h - 2 * pad) / Math.max(1, maxY - minY));
+  const X = lng => pad + (lng * kx - minX) * sc;
+  const Y = lat => h - pad - (lat * ky - minY) * sc;
+  let out = "";
+  feats.forEach((f, i) => {
+    const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates]
+      : f.geometry.coordinates;
+    let d = "";
+    for (const rings of polys)
+      for (const ring of rings)
+        d += "M" + ring.map(c => `${X(c[0]).toFixed(1)},${Y(c[1]).toFixed(1)}`).join("L") + "Z";
+    out += `<path d="${d}" fill="rgba(47,158,68,0.18)" stroke="#2f9e44" stroke-width="1.6" fill-rule="evenodd"/>`;
+    try {
+      const c = turf.pointOnFeature(f).geometry.coordinates;
+      out += `<text x="${X(c[0]).toFixed(1)}" y="${Y(c[1]).toFixed(1)}" class="cm-lbl">${_esc(f.properties.label || "P" + (i + 1))}</text>`;
+    } catch (_) {}
+  });
+  // 100 m scale bar.
+  const bar = 100 * sc;
+  out += `<line x1="${pad}" y1="${h - 8}" x2="${pad + bar}" y2="${h - 8}" stroke="currentColor" stroke-width="2"/>
+    <text x="${pad + bar + 6}" y="${h - 5}" class="cm-scale">100 m</text>
+    <text x="${w - 16}" y="${pad}" class="cm-scale">N ↑</text>`;
+  return `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">${out}</svg>`;
+}
+
+function openCompileModal() {
+  const feats = assemblySiteFeatures();
+  if (!feats.length) return;
+  const totHa = feats.reduce((s, f) => s + (Number(f.properties.area_ha) || 0), 0);
+  if (_compileState.netPct == null)
+    _compileState.netPct = deep.assembly.mode === "parcels" ? 75 : 90;
+  let m = document.getElementById("compile-modal");
+  if (!m) {
+    m = document.createElement("div");
+    m.id = "compile-modal";
+    document.body.appendChild(m);
+  }
+  const name = deep.assembly.name ||
+    ((deep.station ? deep.station.name + " — " : "") + "assembled site");
+  m.innerHTML = `
+    <div class="cm-card">
+      <div class="cm-head">
+        <div><span class="cm-kicker">Compiled site · ${feats.length} plot${feats.length === 1 ? "" : "s"} · ${totHa.toFixed(2)} ha gross</span>
+          <h3>${escapeSift(name)}</h3></div>
+        <button type="button" class="dd-close" id="cm-close" aria-label="Close">×</button>
+      </div>
+      <div class="cm-body">
+        <div class="cm-plan">${_sitePlanSVG(feats, 460, 430)}
+          <div class="cm-plan-rows">${feats.map(f => `<span>${_esc(f.properties.label)} · ${_esc(f.properties.ref || "")} · ${(Number(f.properties.area_ha) || 0).toFixed(2)} ha</span>`).join("")}</div>
+        </div>
+        <div class="cm-side">
+          <div class="cm-dials">
+            <label><span>Density <small>dw/net ha</small></span>
+              <input type="number" id="cm-density" min="5" max="400" step="1" value="${_compileState.density}"></label>
+            <label><span>Net developable <small>% of gross</small></span>
+              <input type="number" id="cm-netpct" min="20" max="100" step="1" value="${_compileState.netPct}"></label>
+          </div>
+          <div id="cm-out"></div>
+          <div class="asm-actions" style="margin-top:10px">
+            <button type="button" id="cm-layout" class="plot-mode-btn">Generative layout →</button>
+          </div>
+          <p class="hint" style="margin-top:6px">Appraisal uses the sift's viability
+            variables (tenure ${SIFT.assumptions && SIFT.assumptions.tenure === "btr" ? "build-to-rent" : "build-to-sell"})
+            and this catchment's sales evidence. The layout tool tests real road-and-plot
+            arrangements against these numbers.</p>
+        </div>
+      </div>
+    </div>`;
+  const recompute = () => {
+    _compileState.density = Math.max(5, Math.min(400, Number(m.querySelector("#cm-density").value) || 35));
+    _compileState.netPct = Math.max(20, Math.min(100, Number(m.querySelector("#cm-netpct").value) || 75));
+    const netHa = totHa * _compileState.netPct / 100;
+    const units = Math.max(0, Math.round(netHa * _compileState.density));
+    const ap = computeAppraisal({
+      units, ppm2: deep.ppm2 || null,
+      region: (deep.station && deep.station.region) || null, areaHa: netHa,
+      ladCode: (deep._ctx && deep._ctx.lad_code) || null,
+      locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
+      landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
+      cilAreaPm2: (deep._marketCtx && deep._marketCtx.cilPm2 != null) ? deep._marketCtx.cilPm2 : null,
+      greenBeltShare: deepGbShare(),
+    }, SIFT.assumptions, { noSens: true });
+    const money = v => (v < 0 ? "−" : "") + fmtMoneyShort(Math.abs(v));
+    const ragCls = ap.rag === "viable" ? "sg" : ap.rag === "marginal" ? "sa" : "sr";
+    const cell = (v, l, cls) => `<div class="cm-cell${cls ? " " + cls : ""}"><b>${v}</b><span>${l}</span></div>`;
+    m.querySelector("#cm-out").innerHTML =
+      `<div class="cm-grid">`
+      + cell(units.toLocaleString(), "dwellings")
+      + cell(netHa.toFixed(2) + " ha", "net developable")
+      + cell(_compileState.density + "/ha", "density (net)")
+      + cell((totHa > 0 ? (units / totHa).toFixed(0) : "—") + "/ha", "density (gross)")
+      + cell(ap.gdv ? money(ap.gdv) : "—", "GDV")
+      + cell(ap.totalCost ? money(ap.totalCost) : "—", "total cost")
+      + cell(ap.profitOnCost != null ? ap.profitOnCost.toFixed(1) + "%" : "—",
+             "profit on cost", "cm-" + ragCls)
+      + cell(ap.residualLandValue != null ? money(ap.residualLandValue) : "—", "residual land value")
+      + `</div>`
+      + (ap.price ? `<p class="hint" style="margin:6px 0 0">Sales basis £${Math.round(ap.price).toLocaleString()}/ft²${ap.local ? " (local evidence)" : " (regional)"} · affordable and policy costs per the viability variables.</p>` : "");
+  };
+  m.querySelector("#cm-density").addEventListener("input", recompute);
+  m.querySelector("#cm-netpct").addEventListener("input", recompute);
+  m.querySelector("#cm-close").addEventListener("click", () => { m.hidden = true; });
+  m.addEventListener("click", e => { if (e.target === m) m.hidden = true; });
+  m.querySelector("#cm-layout").addEventListener("click", async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true; b.textContent = "Loading layout engine…";
+    try {
+      const mod = await import("./layoutgen.js?v=ws130");
+      let site = feats[0];
+      for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
+      mod.openLayoutGen({
+        site, siteHa: totHa, name,
+        density: _compileState.density, netPct: _compileState.netPct,
+        ppm2: deep.ppm2 || null,
+        assumptions: SIFT.assumptions || {},
+      });
+      b.disabled = false; b.textContent = "Generative layout →";
+    } catch (err) {
+      console.error("layoutgen load failed", err);
+      b.textContent = "Layout engine failed to load";
+    }
+  });
+  recompute();
+  m.hidden = false;
 }
 
 // Gate-3 read-out for the developable summary: the hard designations are already
@@ -11722,16 +12008,6 @@ function buildDeepDivePanel(meta) {
           <div id="dd-constraints-detail"><p class="hint">Constraint coverage loads with the station assessment.</p></div>
         </div>
       </section>
-      <section class="dd-block collapsed" data-section="assembly">
-        <button class="dd-block-head" type="button" aria-expanded="false">
-          <span class="dd-h">Site assembly</span><span class="dd-caret">▾</span>
-        </button>
-        <div class="dd-block-content">
-          <p class="hint">Group several developable plots into one site, appraise the whole, and export a structured site report with a map extract.</p>
-          <button type="button" id="dd-assemble-toggle" class="plot-mode-btn">▶ Assemble a site</button>
-          <div id="dd-assembly-summary"></div>
-        </div>
-      </section>
       <section class="dd-synthesis" id="dd-synthesis"></section>`)
       + ddGroup("plots", "Plots & ownership", `
         <p class="hint">Who owns the land around the developable zones. Parcel outlines are HMLR INSPIRE (every registered title's index polygon); public ownership is CCOD matched to those parcels (best-quality first — published coordinates/UPRNs, then postcode-centroid joins); Homes England's Land Hub shows the agency's own sites coming to market.</p>
@@ -11748,7 +12024,26 @@ function buildDeepDivePanel(meta) {
           <input type="checkbox" class="enable" id="dd-heland-show" />
           <span class="dd-label"><strong>Homes England land</strong> <span class="hint">(Land Hub disposals)</span></span>
         </label>
-        <div id="dd-publicland-summary"></div>`)
+        <div id="dd-publicland-summary"></div>
+        <section class="dd-block collapsed" data-section="assembly">
+          <button class="dd-block-head" type="button" aria-expanded="false">
+            <span class="dd-h">Site assembly</span><span class="dd-caret">▾</span>
+          </button>
+          <div class="dd-block-content">
+            <p class="hint">Group land into one site, appraise it, and take it into the
+              layout tool. Two ways in: the green <b>developable zones</b> the tool
+              identified, or the registered <b>land parcels</b> themselves (HMLR
+              INSPIRE) — pick the few key parcels worth negotiating for and skip
+              the awkward edge slivers.</p>
+            <div class="lt-seg" id="dd-asm-mode" role="group" aria-label="Assemble from" style="margin:0 0 6px">
+              <span class="lt-seg-label">From</span>
+              <button type="button" class="lt-seg-btn" data-m="zones">Developable zones</button>
+              <button type="button" class="lt-seg-btn" data-m="parcels">Land parcels</button>
+            </div>
+            <button type="button" id="dd-assemble-toggle" class="plot-mode-btn">▶ Assemble a site</button>
+            <div id="dd-assembly-summary"></div>
+          </div>
+        </section>`)
       + ddGroup("connectivity", "Connectivity", `
         <div id="dd-connectivity-detail"></div>`)
       + ddGroup("market", "Market · viability", `
@@ -11977,12 +12272,34 @@ function buildDeepDivePanel(meta) {
   // there is deliberately only one assumption set.
   const at = panel.querySelector("#dd-assemble-toggle");
   if (at) at.addEventListener("click", () => {
-    if (!deep.developableVisible || !deep.developableResult) {
-      renderAssemblySummary("Turn on the developable-land tool first — the plots are what you assemble.");
+    if (deep.assembly.mode === "zones" && (!deep.developableVisible || !deep.developableResult)) {
+      renderAssemblySummary("Turn on the developable-land tool first — its zones are what you assemble. (Or switch to Land parcels.)");
       return;
     }
     setAssembleMode(!deep.assembly.active);
   });
+  const asmSeg = panel.querySelector("#dd-asm-mode");
+  if (asmSeg) {
+    const paint = () => asmSeg.querySelectorAll(".lt-seg-btn").forEach(b =>
+      b.classList.toggle("active", b.dataset.m === deep.assembly.mode));
+    paint();
+    asmSeg.querySelectorAll(".lt-seg-btn").forEach(b => b.addEventListener("click", () => {
+      deep.assembly.mode = b.dataset.m;
+      paint();
+      if (deep.assembly.mode === "parcels") {
+        // Parcel picking needs the parcel outlines on screen (tiles from z13).
+        setParcelsVisible(true);
+        const cb = document.getElementById("dd-parcels-show");
+        if (cb) cb.checked = true;
+        const cb2 = document.getElementById("parcels-show");
+        if (cb2) cb2.checked = true;
+        if (map.getZoom() < 13.4 && deep.stationCentre)
+          map.easeTo({ center: deep.stationCentre, zoom: 13.6 });
+      }
+      renderAssemblySummary();
+      renderDeepDiveLegend();
+    }));
+  }
   // One context builder for both viability buttons — variables and the full
   // calculation audit must describe the same scheme or the audit lies.
   const ddViabCtx = () => {
