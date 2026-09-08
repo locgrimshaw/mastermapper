@@ -1,0 +1,3397 @@
+[
+ {
+  "zone": "Aberdeen",
+  "lng": -2.098,
+  "lat": 57.148,
+  "region": "Scotland",
+  "prime": {
+   "avg": 32.5,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 32.5,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Savills",
+     "v": 32.5,
+     "p": "Q1 2026",
+     "src": "Market in Minutes: Aberdeen offices"
+    },
+    {
+     "a": "Ryden",
+     "v": 32.5,
+     "p": "early 2026",
+     "src": "91st Scottish Property Review"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 30.0,
+   "vals": [
+    {
+     "a": "Ryden",
+     "v": 30.0,
+     "p": "2025",
+     "src": "91st Scottish Property Review (West End)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Aldgate & Whitechapel",
+  "lng": -0.066,
+  "lat": 51.515,
+  "region": "London — City fringe",
+  "prime": {
+   "avg": 55.83,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 57.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 57.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 52.5,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 57.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 57.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £55.00-£60.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 36.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 36.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £35.00-£37.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Barking & Dagenham",
+  "lng": 0.115,
+  "lat": 51.535,
+  "region": "London — East",
+  "prime": {
+   "avg": 22.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 22.5,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Basildon",
+  "lng": 0.489,
+  "lat": 51.572,
+  "region": "Essex",
+  "prime": {
+   "avg": 23.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 23.5,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "low": {
+   "avg": 18.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 18.0,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Basingstoke",
+  "lng": -1.088,
+  "lat": 51.263,
+  "region": "Hampshire",
+  "prime": {
+   "avg": 38.0,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 38.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Bath",
+  "lng": -2.36,
+  "lat": 51.382,
+  "region": "South West",
+  "prime": {
+   "avg": 40.0,
+   "vals": [
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 40.0,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    },
+    {
+     "a": "Alder King",
+     "v": 40.0,
+     "p": "2025",
+     "src": "Market Monitor 2026"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Battersea & Nine Elms",
+  "lng": -0.135,
+  "lat": 51.48,
+  "region": "London — South",
+  "prime": {
+   "avg": 65.0,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 75.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £55-£75, high end)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 65.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 60.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 60.0,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 62.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 62.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £57.50-£67.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 47.62,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 55.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £55-£75, low end)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 40.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £37.50-£43.00, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Belfast",
+  "lng": -5.928,
+  "lat": 54.597,
+  "region": "Northern Ireland",
+  "prime": {
+   "avg": 26.0,
+   "vals": [
+    {
+     "a": "CBRE NI",
+     "v": 26.5,
+     "p": "Q1 2026",
+     "src": "NI Commercial Property Market Report (via Business Eye)"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 25.5,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Birmingham",
+  "lng": -1.899,
+  "lat": 52.48,
+  "region": "Midlands",
+  "prime": {
+   "avg": 52.0,
+   "vals": [
+    {
+     "a": "Avison Young",
+     "v": 52.0,
+     "p": "Q2 2026",
+     "src": "The Big Nine"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 52.0,
+     "p": "Q2 2026",
+     "src": "UK Regional Offices MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 52.0,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Savills",
+     "v": 52.0,
+     "p": "H1 2026",
+     "src": "Market in Minutes: Regional Office Market Overview"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 52.0,
+     "p": "Q4 2025",
+     "src": "Regional Office Report 2025/26"
+    },
+    {
+     "a": "CBRE",
+     "v": 52.0,
+     "p": "H1 2026",
+     "src": "UK Office Market Outlook Midyear Review"
+    },
+    {
+     "a": "JLL",
+     "v": 52.0,
+     "p": "end-2025",
+     "src": "Big Six research (via Property Week)"
+    },
+    {
+     "a": "BNP Paribas RE",
+     "v": 52.0,
+     "p": "Q1 2026",
+     "src": "UK Big 10 Regional Office Market Report"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Bloomsbury",
+  "lng": -0.127,
+  "lat": 51.52,
+  "region": "London — Midtown",
+  "prime": {
+   "avg": 90.0,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 92.5,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 90.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 87.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 88.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 88.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £82.50-£95.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 56.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 56.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £50.00-£62.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Bracknell",
+  "lng": -0.752,
+  "lat": 51.416,
+  "region": "Thames Valley",
+  "prime": {
+   "avg": 31.5,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 31.5,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Braintree",
+  "lng": 0.55,
+  "lat": 51.878,
+  "region": "Essex",
+  "prime": {
+   "avg": 18.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 18.0,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "low": {
+   "avg": 14.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 14.0,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Brentwood",
+  "lng": 0.305,
+  "lat": 51.621,
+  "region": "Essex",
+  "prime": {
+   "avg": 28.5,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 29.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    },
+    {
+     "a": "Glenny",
+     "v": 28.0,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "low": {
+   "avg": 23.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 23.0,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Brighton",
+  "lng": -0.141,
+  "lat": 50.827,
+  "region": "Sussex",
+  "prime": {
+   "avg": 44.83,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 47.5,
+     "p": "Year-end 2025",
+     "src": "SEGLO Leading Markets"
+    },
+    {
+     "a": "Vail Williams",
+     "v": 44.0,
+     "p": "2025",
+     "src": "Brighton Commercial Property Market Update 2026"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 43.0,
+     "p": "Q2 2026",
+     "src": "UK Regional Offices MarketBeat"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Bristol",
+  "lng": -2.593,
+  "lat": 51.453,
+  "region": "South West",
+  "prime": {
+   "avg": 51.75,
+   "vals": [
+    {
+     "a": "Avison Young",
+     "v": 52.0,
+     "p": "Q2 2026",
+     "src": "The Big Nine"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 52.0,
+     "p": "Q2 2026",
+     "src": "UK Regional Offices MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 52.0,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Savills",
+     "v": 52.0,
+     "p": "H1 2026",
+     "src": "Market in Minutes: Regional Office Market Overview"
+    },
+    {
+     "a": "Alder King",
+     "v": 52.0,
+     "p": "end 2025",
+     "src": "Market Monitor 2026"
+    },
+    {
+     "a": "JLL",
+     "v": 52.0,
+     "p": "end-2025",
+     "src": "Big Six research (via Property Week)"
+    },
+    {
+     "a": "BNP Paribas RE",
+     "v": 52.0,
+     "p": "Q1 2026",
+     "src": "UK Big 10 Regional Office Market Report"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 50.0,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Bristol (out of town)",
+  "lng": -2.574,
+  "lat": 51.524,
+  "region": "South West",
+  "prime": {
+   "avg": 27.25,
+   "vals": [
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 27.5,
+     "p": "2025",
+     "src": "Regional Office Report 2025/26 (out of town)"
+    },
+    {
+     "a": "Alder King",
+     "v": 27.0,
+     "p": "2025",
+     "src": "Market Monitor 2026 (out of town)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Bromley",
+  "lng": 0.017,
+  "lat": 51.405,
+  "region": "London — South East",
+  "prime": {
+   "avg": 28.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 28.5,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Camberley",
+  "lng": -0.744,
+  "lat": 51.338,
+  "region": "Surrey",
+  "prime": {
+   "avg": 28.5,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 28.5,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Cambridge",
+  "lng": 0.121,
+  "lat": 52.205,
+  "region": "Cambridge",
+  "prime": {
+   "avg": 68.75,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 75.0,
+     "p": "Q2 2026",
+     "src": "South East & Greater London Offices"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 62.5,
+     "p": "Q4 2025",
+     "src": "UK Regional Offices MarketBeat"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Canary Wharf",
+  "lng": -0.019,
+  "lat": 51.505,
+  "region": "London — East",
+  "prime": {
+   "avg": 61.88,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 65.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £40-£65, high end)"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 62.5,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 62.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 57.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 53.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 53.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £47.50-£60.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 35.62,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 40.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £40-£65, low end)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 31.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £27.50-£35.00, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Cardiff",
+  "lng": -3.176,
+  "lat": 51.481,
+  "region": "Wales",
+  "prime": {
+   "avg": 31.75,
+   "vals": [
+    {
+     "a": "Avison Young",
+     "v": 33.5,
+     "p": "Q2 2026",
+     "src": "The Big Nine"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 33.5,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 30.0,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    },
+    {
+     "a": "Alder King",
+     "v": 30.0,
+     "p": "2025",
+     "src": "Market Monitor 2026"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Chatham Maritime",
+  "lng": 0.527,
+  "lat": 51.4,
+  "region": "Kent",
+  "mid": {
+   "avg": 22.5,
+   "vals": [
+    {
+     "a": "Caxtons",
+     "v": 22.5,
+     "p": "2025",
+     "src": "Kent Property Market Report 2025-26 (quoting)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Chelmsford",
+  "lng": 0.47,
+  "lat": 51.735,
+  "region": "Essex",
+  "prime": {
+   "avg": 29.0,
+   "vals": [
+    {
+     "a": "Fenn Wright",
+     "v": 30.0,
+     "p": "2024",
+     "src": "Commercial Property Market Overview 2025"
+    },
+    {
+     "a": "Glenny",
+     "v": 28.0,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "low": {
+   "avg": 23.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 23.0,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Chelsea",
+  "lng": -0.169,
+  "lat": 51.49,
+  "region": "London — West End",
+  "mid": {
+   "avg": 100.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 100.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £85.00-£115.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 56.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 56.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £50.00-£62.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Chertsey",
+  "lng": -0.508,
+  "lat": 51.39,
+  "region": "Surrey",
+  "prime": {
+   "avg": 36.5,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 36.5,
+     "p": "2024",
+     "src": "Office Market Report 2024"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Chiswick",
+  "lng": -0.257,
+  "lat": 51.492,
+  "region": "London — West",
+  "prime": {
+   "avg": 54.0,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 54.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 51.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 51.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £48.50-£55.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 35.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 35.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £32.50-£37.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "City Core",
+  "lng": -0.086,
+  "lat": 51.5145,
+  "region": "London — City",
+  "prime": {
+   "avg": 102.19,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 135.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £70-£135, high end)"
+    },
+    {
+     "a": "Savills",
+     "v": 116.73,
+     "p": "H1 2026",
+     "src": "Central London Office Market Q2 2026 (prime)"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 102.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Colliers",
+     "v": 97.5,
+     "p": "Q4 2025",
+     "src": "London Offices Snapshot Jan 2026"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 95.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "JLL",
+     "v": 95.0,
+     "p": "Q2 2026",
+     "src": "Central London Office Market Dynamics"
+    },
+    {
+     "a": "BNP Paribas RE",
+     "v": 95.0,
+     "p": "Q2 2026",
+     "src": "Central London Office Market Update"
+    },
+    {
+     "a": "CBRE",
+     "v": 93.0,
+     "p": "end-2026 forecast",
+     "src": "UK Office Outlook 2026 (year-end forecast)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 90.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 84.98,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 93.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £82.50-£105.00, midpoint)"
+    },
+    {
+     "a": "Savills",
+     "v": 76.21,
+     "p": "H1 2026",
+     "src": "Central London Office Market Q2 2026 (avg Grade A)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 56.05,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 70.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £70-£135, low end)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 52.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £47.50-£57.50, midpoint)"
+    },
+    {
+     "a": "Savills",
+     "v": 45.66,
+     "p": "H1 2026",
+     "src": "Central London Office Market Q2 2026 (avg Grade B)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "City Secondary (Blackfriars / Aldgate)",
+  "lng": -0.095,
+  "lat": 51.512,
+  "region": "London — City",
+  "prime": {
+   "avg": 77.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 77.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 80.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 80.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £72.50-£88.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 47.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 47.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £42.50-£52.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Clerkenwell & Farringdon",
+  "lng": -0.105,
+  "lat": 51.521,
+  "region": "London — City fringe",
+  "prime": {
+   "avg": 92.5,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 92.5,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 92.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 92.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 86.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 86.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £80.00-£92.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 56.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 56.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £50.00-£62.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Colchester",
+  "lng": 0.901,
+  "lat": 51.889,
+  "region": "Essex",
+  "prime": {
+   "avg": 24.0,
+   "vals": [
+    {
+     "a": "Fenn Wright",
+     "v": 24.0,
+     "p": "2024",
+     "src": "Commercial Property Market Overview 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Covent Garden & Strand",
+  "lng": -0.122,
+  "lat": 51.512,
+  "region": "London — Midtown",
+  "prime": {
+   "avg": 94.17,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 100.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 92.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 90.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 88.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 88.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £80.00-£97.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 60.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 60.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £55.00-£65.00, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Crawley & Gatwick",
+  "lng": -0.187,
+  "lat": 51.112,
+  "region": "Sussex",
+  "prime": {
+   "avg": 37.25,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 37.5,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    },
+    {
+     "a": "Hurst Warne",
+     "v": 37.0,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Croydon",
+  "lng": -0.1,
+  "lat": 51.373,
+  "region": "London — South",
+  "prime": {
+   "avg": 40.0,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 40.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Dartford",
+  "lng": 0.219,
+  "lat": 51.446,
+  "region": "Kent",
+  "prime": {
+   "avg": 24.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 25.0,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 23.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 18.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 18.0,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Derby",
+  "lng": -1.475,
+  "lat": 52.921,
+  "region": "Midlands",
+  "prime": {
+   "avg": 17.0,
+   "vals": [
+    {
+     "a": "Innes England",
+     "v": 17.0,
+     "p": "2025",
+     "src": "Market Insite 2026"
+    }
+   ]
+  },
+  "low": {
+   "avg": 11.0,
+   "vals": [
+    {
+     "a": "Innes England",
+     "v": 11.0,
+     "p": "2025",
+     "src": "Market Insite 2026"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Ealing",
+  "lng": -0.302,
+  "lat": 51.513,
+  "region": "London — West",
+  "mid": {
+   "avg": 51.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 51.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £47.50-£55.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 33.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 33.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £29.50-£36.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Edinburgh",
+  "lng": -3.197,
+  "lat": 55.952,
+  "region": "Scotland",
+  "prime": {
+   "avg": 47.67,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 49.5,
+     "p": "Q2 2026",
+     "src": "UK Regional Offices MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 49.5,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Savills",
+     "v": 48.0,
+     "p": "Q4 2025",
+     "src": "Market in Minutes: Edinburgh offices"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 46.5,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    },
+    {
+     "a": "Ryden",
+     "v": 46.5,
+     "p": "early 2026",
+     "src": "91st Scottish Property Review"
+    },
+    {
+     "a": "Avison Young",
+     "v": 46.0,
+     "p": "Q2 2026",
+     "src": "The Big Nine"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Enfield",
+  "lng": -0.082,
+  "lat": 51.652,
+  "region": "London — North",
+  "prime": {
+   "avg": 28.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 28.5,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "low": {
+   "avg": 21.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 21.5,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Euston",
+  "lng": -0.132,
+  "lat": 51.526,
+  "region": "London — West End",
+  "prime": {
+   "avg": 100.0,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 100.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 87.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 87.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £79.50-£95.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 52.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 52.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £47.50-£57.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Exeter",
+  "lng": -3.532,
+  "lat": 50.723,
+  "region": "South West",
+  "prime": {
+   "avg": 23.5,
+   "vals": [
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 23.5,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Farnborough",
+  "lng": -0.753,
+  "lat": 51.294,
+  "region": "Hampshire",
+  "prime": {
+   "avg": 34.5,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 34.5,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Fitzrovia",
+  "lng": -0.138,
+  "lat": 51.518,
+  "region": "London — West End",
+  "prime": {
+   "avg": 105.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 107.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 102.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 115.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 115.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £95.00-£135.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 66.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 66.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £57.50-£75.00, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Fleet",
+  "lng": -0.843,
+  "lat": 51.28,
+  "region": "Hampshire",
+  "prime": {
+   "avg": 18.0,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 18.0,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Glasgow",
+  "lng": -4.258,
+  "lat": 55.861,
+  "region": "Scotland",
+  "prime": {
+   "avg": 41.5,
+   "vals": [
+    {
+     "a": "Avison Young",
+     "v": 41.5,
+     "p": "Q2 2026",
+     "src": "The Big Nine"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 41.5,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Savills",
+     "v": 41.5,
+     "p": "Q1 2026",
+     "src": "Market in Minutes: Glasgow offices"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 41.5,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    },
+    {
+     "a": "Ryden",
+     "v": 41.5,
+     "p": "early 2026",
+     "src": "91st Scottish Property Review"
+    },
+    {
+     "a": "JLL",
+     "v": 41.5,
+     "p": "end-2025",
+     "src": "Big Six research (via Property Week)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Gloucester",
+  "lng": -2.245,
+  "lat": 51.865,
+  "region": "South West",
+  "prime": {
+   "avg": 30.0,
+   "vals": [
+    {
+     "a": "Alder King",
+     "v": 30.0,
+     "p": "2025",
+     "src": "Market Monitor 2026"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Greenwich",
+  "lng": 0.005,
+  "lat": 51.48,
+  "region": "London — South East",
+  "prime": {
+   "avg": 32.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 32.5,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Guildford",
+  "lng": -0.574,
+  "lat": 51.236,
+  "region": "Surrey",
+  "prime": {
+   "avg": 48.75,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 50.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    },
+    {
+     "a": "Hurst Warne",
+     "v": 47.5,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Hammersmith",
+  "lng": -0.223,
+  "lat": 51.493,
+  "region": "London — West",
+  "prime": {
+   "avg": 56.62,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 65.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £45-£65, high end)"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 59.0,
+     "p": "Year-end 2025",
+     "src": "SEGLO Leading Markets"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 55.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 47.5,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 54.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 54.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £49.50-£58.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 41.25,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 45.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £45-£65, low end)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 37.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £32.50-£42.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Harlow",
+  "lng": 0.093,
+  "lat": 51.772,
+  "region": "Essex",
+  "prime": {
+   "avg": 17.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 17.5,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "low": {
+   "avg": 12.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 12.5,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Heathrow & Stockley Park",
+  "lng": -0.446,
+  "lat": 51.487,
+  "region": "M25 West",
+  "prime": {
+   "avg": 36.0,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 36.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Hoddesdon & Cheshunt",
+  "lng": -0.015,
+  "lat": 51.76,
+  "region": "Hertfordshire",
+  "prime": {
+   "avg": 17.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 17.5,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Hook",
+  "lng": -0.964,
+  "lat": 51.279,
+  "region": "Hampshire",
+  "prime": {
+   "avg": 22.0,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 22.0,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Ipswich",
+  "lng": 1.155,
+  "lat": 52.057,
+  "region": "East of England",
+  "prime": {
+   "avg": 20.0,
+   "vals": [
+    {
+     "a": "Fenn Wright",
+     "v": 20.0,
+     "p": "2024",
+     "src": "Commercial Property Market Overview 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Kensington & South Kensington",
+  "lng": -0.176,
+  "lat": 51.496,
+  "region": "London — West End",
+  "prime": {
+   "avg": 92.5,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 92.5,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 97.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 97.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £80.00-£115.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 51.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 51.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £45.00-£57.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "King's Cross",
+  "lng": -0.124,
+  "lat": 51.531,
+  "region": "London — Midtown",
+  "prime": {
+   "avg": 100.0,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 110.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 97.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 92.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 90.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 90.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £82.50-£97.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 52.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 52.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £47.50-£57.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Knightsbridge",
+  "lng": -0.163,
+  "lat": 51.5,
+  "region": "London — West End",
+  "prime": {
+   "avg": 105.83,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 110.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 105.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 102.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 103.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 103.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £92.50-£115.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 67.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 67.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £62.50-£72.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Leatherhead",
+  "lng": -0.33,
+  "lat": 51.295,
+  "region": "Surrey",
+  "prime": {
+   "avg": 28.5,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 28.5,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Leeds",
+  "lng": -1.548,
+  "lat": 53.797,
+  "region": "Yorkshire",
+  "prime": {
+   "avg": 48.17,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 52.5,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Colliers",
+     "v": 52.5,
+     "p": "Q2 2026",
+     "src": "Regional Office Snapshot (via Place Yorkshire)"
+    },
+    {
+     "a": "Avison Young",
+     "v": 46.0,
+     "p": "Q2 2026",
+     "src": "The Big Nine"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 46.0,
+     "p": "Q2 2026",
+     "src": "UK Regional Offices MarketBeat"
+    },
+    {
+     "a": "Savills",
+     "v": 46.0,
+     "p": "Q1 2026",
+     "src": "Market in Minutes: Leeds offices"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 46.0,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Leicester",
+  "lng": -1.132,
+  "lat": 52.635,
+  "region": "Midlands",
+  "prime": {
+   "avg": 22.0,
+   "vals": [
+    {
+     "a": "Innes England",
+     "v": 22.0,
+     "p": "2025",
+     "src": "Market Insite 2026"
+    }
+   ]
+  },
+  "low": {
+   "avg": 14.0,
+   "vals": [
+    {
+     "a": "Innes England",
+     "v": 14.0,
+     "p": "2025",
+     "src": "Market Insite 2026"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Liverpool",
+  "lng": -2.989,
+  "lat": 53.406,
+  "region": "North West",
+  "prime": {
+   "avg": 29.5,
+   "vals": [
+    {
+     "a": "Avison Young",
+     "v": 29.5,
+     "p": "Q2 2026",
+     "src": "The Big Nine"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Maidenhead",
+  "lng": -0.72,
+  "lat": 51.522,
+  "region": "Thames Valley",
+  "prime": {
+   "avg": 61.25,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 62.5,
+     "p": "Q2 2026",
+     "src": "South East & Greater London Offices"
+    },
+    {
+     "a": "Savills",
+     "v": 60.0,
+     "p": "Q1 2026",
+     "src": "MiM Greater London & South East Offices"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 48.5,
+   "vals": [
+    {
+     "a": "Savills",
+     "v": 48.5,
+     "p": "Q2 2026",
+     "src": "MiM Greater London & South East Offices"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Maidstone",
+  "lng": 0.523,
+  "lat": 51.272,
+  "region": "Kent",
+  "prime": {
+   "avg": 25.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 25.0,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "low": {
+   "avg": 20.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 20.0,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Manchester",
+  "lng": -2.244,
+  "lat": 53.48,
+  "region": "North West",
+  "prime": {
+   "avg": 47.5,
+   "vals": [
+    {
+     "a": "Avison Young",
+     "v": 48.0,
+     "p": "Q2 2026",
+     "src": "The Big Nine"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 48.0,
+     "p": "Q2 2026",
+     "src": "UK Regional Offices MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 48.0,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Savills",
+     "v": 48.0,
+     "p": "H1 2026",
+     "src": "Market in Minutes: Manchester offices"
+    },
+    {
+     "a": "CBRE",
+     "v": 48.0,
+     "p": "H1 2026",
+     "src": "UK Office Market Outlook Midyear Review"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 45.0,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Marylebone",
+  "lng": -0.152,
+  "lat": 51.5185,
+  "region": "London — West End",
+  "prime": {
+   "avg": 115.0,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 115.0,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 115.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 118.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 118.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £97.50-£140.00, midpoint; upper floors £150-£180)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 71.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 71.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £65.00-£77.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Mayfair & St James's",
+  "lng": -0.1445,
+  "lat": 51.5085,
+  "region": "London — West End",
+  "prime": {
+   "avg": 198.0,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 250.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £100-£250, high end)"
+    },
+    {
+     "a": "CBRE",
+     "v": 200.0,
+     "p": "end-2026 forecast",
+     "src": "UK Office Outlook 2026 (year-end forecast)"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 185.0,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 180.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 175.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 182.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 182.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £155.00-£210.00, midpoint; upper floors £220-£250)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 92.5,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 100.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £100-£250, low end)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 85.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £80.00-£90.00, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Midtown / Holborn",
+  "lng": -0.115,
+  "lat": 51.517,
+  "region": "London — Midtown",
+  "prime": {
+   "avg": 94.5,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 125.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £65-£125, high end)"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 90.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "BNP Paribas RE",
+     "v": 87.5,
+     "p": "Q2 2026",
+     "src": "Central London Office Market Update"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 85.0,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 85.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 85.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 85.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £77.50-£92.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 59.38,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 65.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £65-£125, low end)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 53.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £47.50-£60.00, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Milton Keynes",
+  "lng": -0.759,
+  "lat": 52.041,
+  "region": "M1 South",
+  "prime": {
+   "avg": 39.0,
+   "vals": [
+    {
+     "a": "Bidwells",
+     "v": 39.0,
+     "p": "2025",
+     "src": "M1 South Offices & Labs Databook"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 28.5,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 28.5,
+     "p": "Q3 2025",
+     "src": "SEGLO key transactions (Witan Gate House, achieved)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Newcastle",
+  "lng": -1.613,
+  "lat": 54.973,
+  "region": "North East",
+  "prime": {
+   "avg": 32.0,
+   "vals": [
+    {
+     "a": "Avison Young",
+     "v": 32.0,
+     "p": "Q2 2026",
+     "src": "The Big Nine"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 32.0,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 32.0,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "North of Oxford Street",
+  "lng": -0.147,
+  "lat": 51.5165,
+  "region": "London — West End",
+  "prime": {
+   "avg": 130.0,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 130.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Norwich",
+  "lng": 1.297,
+  "lat": 52.63,
+  "region": "East of England",
+  "prime": {
+   "avg": 21.5,
+   "vals": [
+    {
+     "a": "Bidwells",
+     "v": 21.5,
+     "p": "H1 2026",
+     "src": "Norfolk & Suffolk Offices & Labs Databook"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Nottingham",
+  "lng": -1.146,
+  "lat": 52.952,
+  "region": "Midlands",
+  "prime": {
+   "avg": 24.5,
+   "vals": [
+    {
+     "a": "Innes England",
+     "v": 24.5,
+     "p": "2025",
+     "src": "Market Insite 2026"
+    }
+   ]
+  },
+  "low": {
+   "avg": 15.0,
+   "vals": [
+    {
+     "a": "Innes England",
+     "v": 15.0,
+     "p": "2025",
+     "src": "Market Insite 2026"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Olympia",
+  "lng": -0.21,
+  "lat": 51.496,
+  "region": "London — West",
+  "mid": {
+   "avg": 68.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 68.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £57.50-£80.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 37.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 37.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £35.00-£40.00, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Oxford",
+  "lng": -1.257,
+  "lat": 51.752,
+  "region": "Oxford",
+  "prime": {
+   "avg": 67.75,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 72.5,
+     "p": "Q2 2026",
+     "src": "South East & Greater London Offices"
+    },
+    {
+     "a": "Bidwells",
+     "v": 63.0,
+     "p": "H1 2025",
+     "src": "Oxford Offices & Labs Databook"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Paddington",
+  "lng": -0.176,
+  "lat": 51.516,
+  "region": "London — West End",
+  "prime": {
+   "avg": 88.33,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 95.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 85.0,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 85.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 83.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 83.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £77.50-£90.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 51.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 51.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £45.00-£57.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Portsmouth",
+  "lng": -1.091,
+  "lat": 50.805,
+  "region": "South Coast",
+  "prime": {
+   "avg": 27.5,
+   "vals": [
+    {
+     "a": "Vail Williams",
+     "v": 27.5,
+     "p": "H1 2025",
+     "src": "VW Insider South Coast"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 25.0,
+   "vals": [
+    {
+     "a": "Vail Williams",
+     "v": 25.0,
+     "p": "H2 2025",
+     "src": "VW Insider South Coast (Grade A tone)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Reading",
+  "lng": -0.971,
+  "lat": 51.455,
+  "region": "Thames Valley",
+  "prime": {
+   "avg": 58.0,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 58.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 49.5,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 49.5,
+     "p": "Q3 2025",
+     "src": "SEGLO key transactions (One Station Hill, achieved)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Redhill",
+  "lng": -0.169,
+  "lat": 51.24,
+  "region": "Surrey",
+  "prime": {
+   "avg": 31.5,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 31.5,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Reigate",
+  "lng": -0.206,
+  "lat": 51.237,
+  "region": "Surrey",
+  "prime": {
+   "avg": 28.0,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 28.0,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Rest of Docklands / Crossharbour",
+  "lng": -0.021,
+  "lat": 51.495,
+  "region": "London — East",
+  "prime": {
+   "avg": 32.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 35.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 32.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 30.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 36.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 36.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £32.50-£39.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 25.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 25.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £22.50-£27.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Richmond",
+  "lng": -0.301,
+  "lat": 51.461,
+  "region": "London — South West",
+  "prime": {
+   "avg": 64.5,
+   "vals": [
+    {
+     "a": "Savills",
+     "v": 64.5,
+     "p": "2025",
+     "src": "MiM Greater London & South East Offices"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Romford",
+  "lng": 0.182,
+  "lat": 51.576,
+  "region": "London — East",
+  "prime": {
+   "avg": 21.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 21.5,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "low": {
+   "avg": 17.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 17.5,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Royal Docks",
+  "lng": 0.03,
+  "lat": 51.508,
+  "region": "London — East",
+  "prime": {
+   "avg": 30.0,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 30.0,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Sheffield",
+  "lng": -1.468,
+  "lat": 53.379,
+  "region": "Yorkshire",
+  "prime": {
+   "avg": 31.0,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 31.0,
+     "p": "Q2 2026",
+     "src": "UK Cities Office Market Report"
+    },
+    {
+     "a": "Lambert Smith Hampton",
+     "v": 31.0,
+     "p": "Q3 2025",
+     "src": "Regional Offices Report 2025/26"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Shoreditch",
+  "lng": -0.078,
+  "lat": 51.524,
+  "region": "London — City fringe",
+  "prime": {
+   "avg": 76.25,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 80.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 72.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 72.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 72.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £67.50-£77.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 45.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 45.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £40.00-£50.00, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Slough",
+  "lng": -0.591,
+  "lat": 51.511,
+  "region": "Thames Valley",
+  "prime": {
+   "avg": 34.5,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 34.5,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Soho & Leicester Square",
+  "lng": -0.132,
+  "lat": 51.5135,
+  "region": "London — West End",
+  "prime": {
+   "avg": 110.0,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 122.5,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 107.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 100.0,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 103.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 103.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £92.50-£115.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 61.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 61.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £55.00-£67.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Solent Business Park",
+  "lng": -1.243,
+  "lat": 50.885,
+  "region": "South Coast",
+  "mid": {
+   "avg": 23.5,
+   "vals": [
+    {
+     "a": "Vail Williams",
+     "v": 23.5,
+     "p": "H2 2025",
+     "src": "VW Insider South Coast (Grade A tone)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "South West London (Wimbledon)",
+  "lng": -0.206,
+  "lat": 51.421,
+  "region": "London — South West",
+  "prime": {
+   "avg": 62.5,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 62.5,
+     "p": "Year-end 2025",
+     "src": "SEGLO Leading Markets"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Southampton",
+  "lng": -1.404,
+  "lat": 50.906,
+  "region": "South Coast",
+  "prime": {
+   "avg": 30.0,
+   "vals": [
+    {
+     "a": "CBRE",
+     "v": 30.0,
+     "p": "Q2 2025",
+     "src": "Southampton market figures (via Insider Media)"
+    },
+    {
+     "a": "Vail Williams",
+     "v": 30.0,
+     "p": "H1 2025",
+     "src": "VW Insider South Coast"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Southbank",
+  "lng": -0.104,
+  "lat": 51.505,
+  "region": "London — Southbank",
+  "prime": {
+   "avg": 91.5,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 105.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £60-£105, high end)"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 90.0,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 87.5,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 87.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "BNP Paribas RE",
+     "v": 87.5,
+     "p": "Q2 2026",
+     "src": "Central London Office Market Update"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 83.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 83.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £75.00-£92.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 56.75,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 60.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £60-£105, low end)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 53.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £47.50-£59.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Spitalfields",
+  "lng": -0.075,
+  "lat": 51.519,
+  "region": "London — City fringe",
+  "prime": {
+   "avg": 77.5,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 77.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 80.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 80.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £72.50-£87.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "St Albans",
+  "lng": -0.336,
+  "lat": 51.752,
+  "region": "Hertfordshire",
+  "prime": {
+   "avg": 43.0,
+   "vals": [
+    {
+     "a": "Savills",
+     "v": 44.0,
+     "p": "2025",
+     "src": "MiM Greater London & South East Offices"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 42.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 43.0,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 43.0,
+     "p": "Q3 2025",
+     "src": "SEGLO key transactions (CT2, achieved)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Staines",
+  "lng": -0.513,
+  "lat": 51.434,
+  "region": "M25 West",
+  "prime": {
+   "avg": 37.5,
+   "vals": [
+    {
+     "a": "Vail Williams",
+     "v": 40.0,
+     "p": "Nov 2025",
+     "src": "Staines market article"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 36.5,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    },
+    {
+     "a": "Hurst Warne",
+     "v": 36.0,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 35.5,
+   "vals": [
+    {
+     "a": "Vail Williams",
+     "v": 35.5,
+     "p": "Nov 2025",
+     "src": "Staines market article (average)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Stratford",
+  "lng": -0.004,
+  "lat": 51.543,
+  "region": "London — East",
+  "prime": {
+   "avg": 45.7,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 48.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 47.5,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 47.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "SHB Real Estate",
+     "v": 45.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £35-£45, high end)"
+    },
+    {
+     "a": "Glenny",
+     "v": 40.0,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 48.75,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 48.75,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £45.00-£52.50, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 27.0,
+   "vals": [
+    {
+     "a": "SHB Real Estate",
+     "v": 35.0,
+     "p": "Q1 2026",
+     "src": "Q1 2026 London Office Rents (Grade A unfitted £35-£45, low end)"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 26.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £22.50-£29.50, midpoint)"
+    },
+    {
+     "a": "Glenny",
+     "v": 20.0,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Swindon",
+  "lng": -1.785,
+  "lat": 51.561,
+  "region": "South West",
+  "prime": {
+   "avg": 23.0,
+   "vals": [
+    {
+     "a": "Alder King",
+     "v": 23.0,
+     "p": "2025",
+     "src": "Market Monitor 2026 (town centre)"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 21.5,
+   "vals": [
+    {
+     "a": "Alder King",
+     "v": 21.5,
+     "p": "2025",
+     "src": "Market Monitor 2026 (out of town)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Uxbridge",
+  "lng": -0.478,
+  "lat": 51.546,
+  "region": "M25 West",
+  "prime": {
+   "avg": 36.5,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 36.5,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Victoria & Westminster",
+  "lng": -0.138,
+  "lat": 51.497,
+  "region": "London — West End",
+  "prime": {
+   "avg": 95.83,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 97.5,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Cushman & Wakefield",
+     "v": 95.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 95.0,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 95.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 95.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £80.00-£110.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 51.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 51.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £45.00-£57.50, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Watford",
+  "lng": -0.396,
+  "lat": 51.657,
+  "region": "Hertfordshire",
+  "prime": {
+   "avg": 45.0,
+   "vals": [
+    {
+     "a": "Knight Frank",
+     "v": 45.0,
+     "p": "Q3 2025",
+     "src": "South East & Greater London Offices (Prime Rents map)"
+    },
+    {
+     "a": "Savills",
+     "v": 45.0,
+     "p": "2025",
+     "src": "MiM Greater London & South East Offices"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Welwyn Garden City",
+  "lng": -0.193,
+  "lat": 51.801,
+  "region": "Hertfordshire",
+  "prime": {
+   "avg": 23.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 23.5,
+     "p": "Q3 2025",
+     "src": "Office Databook"
+    }
+   ]
+  },
+  "low": {
+   "avg": 16.5,
+   "vals": [
+    {
+     "a": "Glenny",
+     "v": 16.5,
+     "p": "Q3 2025",
+     "src": "Office Databook (secondary)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "West End (overall)",
+  "lng": -0.14,
+  "lat": 51.512,
+  "region": "London — West End",
+  "prime": {
+   "avg": 181.7,
+   "vals": [
+    {
+     "a": "JLL",
+     "v": 190.0,
+     "p": "Q2 2026",
+     "src": "Central London Office Market Dynamics"
+    },
+    {
+     "a": "BNP Paribas RE",
+     "v": 180.0,
+     "p": "Q2 2026",
+     "src": "Central London Office Market Update"
+    },
+    {
+     "a": "Savills",
+     "v": 175.1,
+     "p": "H1 2026",
+     "src": "Central London Office Market Q2 2026 (avg prime H1)"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 106.17,
+   "vals": [
+    {
+     "a": "Savills",
+     "v": 106.17,
+     "p": "H1 2026",
+     "src": "Central London Office Market Q2 2026 (avg Grade A)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Weybridge",
+  "lng": -0.453,
+  "lat": 51.372,
+  "region": "Surrey",
+  "prime": {
+   "avg": 38.0,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 38.0,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "White City",
+  "lng": -0.225,
+  "lat": 51.512,
+  "region": "London — West",
+  "prime": {
+   "avg": 59.17,
+   "vals": [
+    {
+     "a": "Cushman & Wakefield",
+     "v": 60.0,
+     "p": "Q2 2026",
+     "src": "Central London Office MarketBeat"
+    },
+    {
+     "a": "Carter Jonas",
+     "v": 60.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents"
+    },
+    {
+     "a": "Knight Frank",
+     "v": 57.5,
+     "p": "Q2 2026",
+     "src": "London Office Market Report"
+    }
+   ]
+  },
+  "mid": {
+   "avg": 60.0,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 60.0,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade A £55.00-£65.00, midpoint)"
+    }
+   ]
+  },
+  "low": {
+   "avg": 36.25,
+   "vals": [
+    {
+     "a": "Carter Jonas",
+     "v": 36.25,
+     "p": "Q1 2026",
+     "src": "Guide to London Office Rents (Grade B £32.50-£40.00, midpoint)"
+    }
+   ]
+  }
+ },
+ {
+  "zone": "Woking",
+  "lng": -0.558,
+  "lat": 51.319,
+  "region": "Surrey",
+  "prime": {
+   "avg": 40.5,
+   "vals": [
+    {
+     "a": "Hurst Warne",
+     "v": 40.5,
+     "p": "2025",
+     "src": "Office Market Report 2025"
+    }
+   ]
+  }
+ }
+]

@@ -1,0 +1,2911 @@
+{
+ "figures": [
+  {
+   "zone": "Mayfair & St James's",
+   "tier": "prime",
+   "rent_psf": 175.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Soho",
+   "tier": "prime",
+   "rent_psf": 122.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Covent Garden",
+   "tier": "prime",
+   "rent_psf": 100.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "North of Oxford Street",
+   "tier": "prime",
+   "rent_psf": 130.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Euston & Marylebone",
+   "tier": "prime",
+   "rent_psf": 100.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Bloomsbury",
+   "tier": "prime",
+   "rent_psf": 92.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "King's Cross",
+   "tier": "prime",
+   "rent_psf": 110.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Midtown",
+   "tier": "prime",
+   "rent_psf": 90.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Clerkenwell",
+   "tier": "prime",
+   "rent_psf": 92.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Shoreditch",
+   "tier": "prime",
+   "rent_psf": 80.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "City Core",
+   "tier": "prime",
+   "rent_psf": 95.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Aldgate & Whitechapel",
+   "tier": "prime",
+   "rent_psf": 52.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Paddington",
+   "tier": "prime",
+   "rent_psf": 95.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Knightsbridge",
+   "tier": "prime",
+   "rent_psf": 110.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Kensington",
+   "tier": "prime",
+   "rent_psf": 92.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "White City",
+   "tier": "prime",
+   "rent_psf": 60.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Hammersmith",
+   "tier": "prime",
+   "rent_psf": 47.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Victoria",
+   "tier": "prime",
+   "rent_psf": 95.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Southbank",
+   "tier": "prime",
+   "rent_psf": 87.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "VNEB (Vauxhall Nine Elms Battersea)",
+   "tier": "prime",
+   "rent_psf": 60.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Canary Wharf",
+   "tier": "prime",
+   "rent_psf": 62.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Docklands",
+   "tier": "prime",
+   "rent_psf": 30.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "Stratford",
+   "tier": "prime",
+   "rent_psf": 47.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "Central London Office MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/central-london-office-marketbeat-q2-2026-low-res.pdf"
+  },
+  {
+   "zone": "West End Core (Mayfair, St James's)",
+   "tier": "prime",
+   "rent_psf": 185.0,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Euston / King's Cross",
+   "tier": "prime",
+   "rent_psf": 97.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Midtown",
+   "tier": "prime",
+   "rent_psf": 85.0,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Bloomsbury",
+   "tier": "prime",
+   "rent_psf": 87.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Marylebone",
+   "tier": "prime",
+   "rent_psf": 115.0,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Fitzrovia",
+   "tier": "prime",
+   "rent_psf": 102.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Soho",
+   "tier": "prime",
+   "rent_psf": 100.0,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Strand / Covent Garden",
+   "tier": "prime",
+   "rent_psf": 92.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Paddington",
+   "tier": "prime",
+   "rent_psf": 85.0,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "White City",
+   "tier": "prime",
+   "rent_psf": 57.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Knightsbridge/Chelsea",
+   "tier": "prime",
+   "rent_psf": 102.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Victoria",
+   "tier": "prime",
+   "rent_psf": 95.0,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Vauxhall/Battersea",
+   "tier": "prime",
+   "rent_psf": 60.0,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Clerkenwell/Farringdon",
+   "tier": "prime",
+   "rent_psf": 92.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "City Core",
+   "tier": "prime",
+   "rent_psf": 102.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Aldgate/Whitechapel",
+   "tier": "prime",
+   "rent_psf": 57.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Southbank Core",
+   "tier": "prime",
+   "rent_psf": 90.0,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Canary Wharf",
+   "tier": "prime",
+   "rent_psf": 62.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Rest of Docklands",
+   "tier": "prime",
+   "rent_psf": 32.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "Stratford",
+   "tier": "prime",
+   "rent_psf": 48.5,
+   "agent": "Knight Frank",
+   "publication": "London Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/lomr/lomr-q2-2026_final.pdf"
+  },
+  {
+   "zone": "City of London Prime - Bank, Leadenhall Street",
+   "tier": "prime",
+   "rent_psf": 90.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City of London Secondary - Blackfriars, Aldgate",
+   "tier": "prime",
+   "rent_psf": 77.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe North - Shoreditch, Clerkenwell",
+   "tier": "prime",
+   "rent_psf": 72.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe North West - Farringdon, Smithfield",
+   "tier": "prime",
+   "rent_psf": 92.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe East - Aldgate East",
+   "tier": "prime",
+   "rent_psf": 57.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe East - Spitalfields",
+   "tier": "prime",
+   "rent_psf": 77.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "South Bank - Southwark, London Bridge",
+   "tier": "prime",
+   "rent_psf": 87.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "East London - Canary Wharf",
+   "tier": "prime",
+   "rent_psf": 57.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "East London - Crossharbour",
+   "tier": "prime",
+   "rent_psf": 35.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "East London - Stratford",
+   "tier": "prime",
+   "rent_psf": 47.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown West - Bloomsbury",
+   "tier": "prime",
+   "rent_psf": 90.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown East - Holborn",
+   "tier": "prime",
+   "rent_psf": 85.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown North - King's Cross",
+   "tier": "prime",
+   "rent_psf": 92.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown South - Covent Garden",
+   "tier": "prime",
+   "rent_psf": 90.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End Central - Mayfair, St James's",
+   "tier": "prime",
+   "rent_psf": 180.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End North West - Marylebone",
+   "tier": "prime",
+   "rent_psf": 115.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End North East - Fitzrovia",
+   "tier": "prime",
+   "rent_psf": 107.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End South - Victoria, Westminster",
+   "tier": "prime",
+   "rent_psf": 97.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End South West - Knightsbridge",
+   "tier": "prime",
+   "rent_psf": 105.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End West - Paddington",
+   "tier": "prime",
+   "rent_psf": 85.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End East - Soho",
+   "tier": "prime",
+   "rent_psf": 107.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West London - Hammersmith",
+   "tier": "prime",
+   "rent_psf": 55.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West London - White City, Shepherds Bush",
+   "tier": "prime",
+   "rent_psf": 60.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "South West London - Battersea, Nine Elms",
+   "tier": "prime",
+   "rent_psf": 65.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Prime - Bank, Leadenhall Street",
+   "tier": "mid",
+   "rent_psf": 93.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £82.50-£105.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Prime - Bank, Leadenhall Street",
+   "tier": "low",
+   "rent_psf": 52.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £47.50-£57.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Secondary - Blackfriars, Aldgate",
+   "tier": "mid",
+   "rent_psf": 80.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £72.50-£88.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Secondary - Blackfriars, Aldgate",
+   "tier": "low",
+   "rent_psf": 47.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £42.50-£52.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe North - Shoreditch, Clerkenwell",
+   "tier": "mid",
+   "rent_psf": 72.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £67.50-£77.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe North - Shoreditch, Clerkenwell",
+   "tier": "low",
+   "rent_psf": 45.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £40.00-£50.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe North West - Farringdon, Smithfield",
+   "tier": "mid",
+   "rent_psf": 86.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £80.00-£92.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe North West - Farringdon, Smithfield",
+   "tier": "low",
+   "rent_psf": 56.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £50.00-£62.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe East - Spitalfields",
+   "tier": "mid",
+   "rent_psf": 80.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £72.50-£87.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe East - Aldgate East, Wapping",
+   "tier": "mid",
+   "rent_psf": 57.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £55.00-£60.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "City Fringe East - Aldgate East, Wapping",
+   "tier": "low",
+   "rent_psf": 36.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £35.00-£37.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "South Bank - Waterloo, Southwark, London Bridge",
+   "tier": "mid",
+   "rent_psf": 83.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £75.00-£92.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "South Bank - Waterloo, Southwark, London Bridge",
+   "tier": "low",
+   "rent_psf": 53.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £47.50-£59.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Docklands Prime - Canary Wharf & Wood Wharf",
+   "tier": "mid",
+   "rent_psf": 53.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £47.50-£60.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Docklands Prime - Canary Wharf & Wood Wharf",
+   "tier": "low",
+   "rent_psf": 31.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £27.50-£35.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Docklands Secondary - Crossharbour",
+   "tier": "mid",
+   "rent_psf": 36.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £32.50-£39.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Docklands Secondary - Crossharbour",
+   "tier": "low",
+   "rent_psf": 25.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £22.50-£27.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Stratford",
+   "tier": "mid",
+   "rent_psf": 48.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £45.00-£52.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Stratford",
+   "tier": "low",
+   "rent_psf": 26.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £22.50-£29.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End Central - Mayfair, St James's",
+   "tier": "mid",
+   "rent_psf": 182.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £155.00-£210.00, midpoint; upper floors £220-£250)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End Central - Mayfair, St James's",
+   "tier": "low",
+   "rent_psf": 85.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £80.00-£90.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End North - Euston",
+   "tier": "mid",
+   "rent_psf": 87.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £79.50-£95.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End North - Euston",
+   "tier": "low",
+   "rent_psf": 52.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £47.50-£57.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End North East - Fitzrovia",
+   "tier": "mid",
+   "rent_psf": 115.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £95.00-£135.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End North East - Fitzrovia",
+   "tier": "low",
+   "rent_psf": 66.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £57.50-£75.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End North West - Marylebone",
+   "tier": "mid",
+   "rent_psf": 118.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £97.50-£140.00, midpoint; upper floors £150-£180)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End North West - Marylebone",
+   "tier": "low",
+   "rent_psf": 71.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £65.00-£77.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End South - Victoria, Westminster, Haymarket",
+   "tier": "mid",
+   "rent_psf": 95.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £80.00-£110.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End South - Victoria, Westminster, Haymarket",
+   "tier": "low",
+   "rent_psf": 51.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £45.00-£57.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End South West - Knightsbridge",
+   "tier": "mid",
+   "rent_psf": 103.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £92.50-£115.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End South West - Knightsbridge",
+   "tier": "low",
+   "rent_psf": 67.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £62.50-£72.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End East - Soho, Regent Street, Leicester Square",
+   "tier": "mid",
+   "rent_psf": 103.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £92.50-£115.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End East - Soho, Regent Street, Leicester Square",
+   "tier": "low",
+   "rent_psf": 61.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £55.00-£67.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End West - Paddington",
+   "tier": "mid",
+   "rent_psf": 83.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £77.50-£90.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End West - Paddington",
+   "tier": "low",
+   "rent_psf": 51.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £45.00-£57.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown North - King's Cross",
+   "tier": "mid",
+   "rent_psf": 90.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £82.50-£97.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown North - King's Cross",
+   "tier": "low",
+   "rent_psf": 52.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £47.50-£57.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown South - Covent Garden, Strand",
+   "tier": "mid",
+   "rent_psf": 88.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £80.00-£97.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown South - Covent Garden, Strand",
+   "tier": "low",
+   "rent_psf": 60.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £55.00-£65.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown East - Holborn",
+   "tier": "mid",
+   "rent_psf": 85.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £77.50-£92.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown East - Holborn",
+   "tier": "low",
+   "rent_psf": 53.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £47.50-£60.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown West - Bloomsbury",
+   "tier": "mid",
+   "rent_psf": 88.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £82.50-£95.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Midtown West - Bloomsbury",
+   "tier": "low",
+   "rent_psf": 56.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £50.00-£62.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Chelsea",
+   "tier": "mid",
+   "rent_psf": 100.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £85.00-£115.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Chelsea",
+   "tier": "low",
+   "rent_psf": 56.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £50.00-£62.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Battersea, Nine Elms, Vauxhall",
+   "tier": "mid",
+   "rent_psf": 62.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £57.50-£67.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Battersea, Nine Elms, Vauxhall",
+   "tier": "low",
+   "rent_psf": 40.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £37.50-£43.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "South Kensington",
+   "tier": "mid",
+   "rent_psf": 97.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £80.00-£115.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "South Kensington",
+   "tier": "low",
+   "rent_psf": 51.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £45.00-£57.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Olympia",
+   "tier": "mid",
+   "rent_psf": 68.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £57.50-£80.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Olympia",
+   "tier": "low",
+   "rent_psf": 37.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £35.00-£40.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Hammersmith",
+   "tier": "mid",
+   "rent_psf": 54.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £49.50-£58.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Hammersmith",
+   "tier": "low",
+   "rent_psf": 37.5,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £32.50-£42.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "White City",
+   "tier": "mid",
+   "rent_psf": 60.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £55.00-£65.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "White City",
+   "tier": "low",
+   "rent_psf": 36.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £32.50-£40.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Chiswick",
+   "tier": "mid",
+   "rent_psf": 51.75,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £48.50-£55.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Chiswick",
+   "tier": "low",
+   "rent_psf": 35.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £32.50-£37.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Ealing",
+   "tier": "mid",
+   "rent_psf": 51.25,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade A £47.50-£55.00, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "Ealing",
+   "tier": "low",
+   "rent_psf": 33.0,
+   "agent": "Carter Jonas",
+   "publication": "Guide to London Office Rents (Grade B £29.50-£36.50, midpoint)",
+   "period": "Q1 2026",
+   "url": "https://assets.ctfassets.net/2u48p9m6vmwh/nCIVNrupqwRduHBocjR1v/9d32cddd516034c8a3c84292afd26715/Guide_To_London_Office_Rents___Rent_Free_Periods___Market_Trends_-_Q1_2026.pdf"
+  },
+  {
+   "zone": "West End",
+   "tier": "prime",
+   "rent_psf": 183.38,
+   "agent": "Savills",
+   "publication": "Central London Office Market Watch (avg achieved prime)",
+   "period": "May 2026 YTD",
+   "url": "https://www.savills.co.uk/research_articles/229130/392507-0"
+  },
+  {
+   "zone": "City",
+   "tier": "prime",
+   "rent_psf": 135.0,
+   "agent": "Savills",
+   "publication": "Central London Office Market Watch (avg achieved prime YTD)",
+   "period": "May 2026 YTD",
+   "url": "https://www.savills.co.uk/research_articles/229130/392507-0"
+  },
+  {
+   "zone": "West End",
+   "tier": "mid",
+   "rent_psf": 103.91,
+   "agent": "Savills",
+   "publication": "Central London Office Market Watch (avg Grade A)",
+   "period": "May 2026",
+   "url": "https://www.savills.co.uk/research_articles/229130/392507-0"
+  },
+  {
+   "zone": "City",
+   "tier": "mid",
+   "rent_psf": 79.65,
+   "agent": "Savills",
+   "publication": "Central London Office Market Watch (avg Grade A)",
+   "period": "May 2026",
+   "url": "https://www.savills.co.uk/research_articles/229130/392507-0"
+  },
+  {
+   "zone": "West End",
+   "tier": "prime",
+   "rent_psf": 175.1,
+   "agent": "Savills",
+   "publication": "Central London Office Market Q2 2026 (avg prime H1)",
+   "period": "H1 2026",
+   "url": "https://pdf.euro.savills.co.uk/uk/office-reports/central-london-q2-2026-report.pdf"
+  },
+  {
+   "zone": "City",
+   "tier": "prime",
+   "rent_psf": 116.73,
+   "agent": "Savills",
+   "publication": "Central London Office Market Q2 2026 (prime)",
+   "period": "H1 2026",
+   "url": "https://pdf.euro.savills.co.uk/uk/office-reports/central-london-q2-2026-report.pdf"
+  },
+  {
+   "zone": "West End",
+   "tier": "mid",
+   "rent_psf": 106.17,
+   "agent": "Savills",
+   "publication": "Central London Office Market Q2 2026 (avg Grade A)",
+   "period": "H1 2026",
+   "url": "https://pdf.euro.savills.co.uk/uk/office-reports/central-london-q2-2026-report.pdf"
+  },
+  {
+   "zone": "City",
+   "tier": "mid",
+   "rent_psf": 76.21,
+   "agent": "Savills",
+   "publication": "Central London Office Market Q2 2026 (avg Grade A)",
+   "period": "H1 2026",
+   "url": "https://pdf.euro.savills.co.uk/uk/office-reports/central-london-q2-2026-report.pdf"
+  },
+  {
+   "zone": "City",
+   "tier": "low",
+   "rent_psf": 45.66,
+   "agent": "Savills",
+   "publication": "Central London Office Market Q2 2026 (avg Grade B)",
+   "period": "H1 2026",
+   "url": "https://pdf.euro.savills.co.uk/uk/office-reports/central-london-q2-2026-report.pdf"
+  },
+  {
+   "zone": "West End",
+   "tier": "prime",
+   "rent_psf": 190.0,
+   "agent": "JLL",
+   "publication": "Central London Office Market Dynamics",
+   "period": "Q2 2026",
+   "url": "https://www.jll.com/en-uk/insights/market-dynamics/central-london-office"
+  },
+  {
+   "zone": "City",
+   "tier": "prime",
+   "rent_psf": 95.0,
+   "agent": "JLL",
+   "publication": "Central London Office Market Dynamics",
+   "period": "Q2 2026",
+   "url": "https://www.jll.com/en-uk/insights/market-dynamics/central-london-office"
+  },
+  {
+   "zone": "West End",
+   "tier": "prime",
+   "rent_psf": 180.0,
+   "agent": "BNP Paribas RE",
+   "publication": "Central London Office Market Update",
+   "period": "Q2 2026",
+   "url": "https://www.realestate.bnpparibas.co.uk/sites/default/files/2026-08/Q22026CentralLondonMarketUpdate.pdf"
+  },
+  {
+   "zone": "City",
+   "tier": "prime",
+   "rent_psf": 95.0,
+   "agent": "BNP Paribas RE",
+   "publication": "Central London Office Market Update",
+   "period": "Q2 2026",
+   "url": "https://www.realestate.bnpparibas.co.uk/sites/default/files/2026-08/Q22026CentralLondonMarketUpdate.pdf"
+  },
+  {
+   "zone": "Midtown",
+   "tier": "prime",
+   "rent_psf": 87.5,
+   "agent": "BNP Paribas RE",
+   "publication": "Central London Office Market Update",
+   "period": "Q2 2026",
+   "url": "https://www.realestate.bnpparibas.co.uk/sites/default/files/2026-08/Q22026CentralLondonMarketUpdate.pdf"
+  },
+  {
+   "zone": "Southbank",
+   "tier": "prime",
+   "rent_psf": 87.5,
+   "agent": "BNP Paribas RE",
+   "publication": "Central London Office Market Update",
+   "period": "Q2 2026",
+   "url": "https://www.realestate.bnpparibas.co.uk/sites/default/files/2026-08/Q22026CentralLondonMarketUpdate.pdf"
+  },
+  {
+   "zone": "City",
+   "tier": "prime",
+   "rent_psf": 97.5,
+   "agent": "Colliers",
+   "publication": "London Offices Snapshot Jan 2026",
+   "period": "Q4 2025",
+   "url": "https://www.colliers.com/-/media/files/emea/uk/publications/service-lines/london-offices/2026/london-offices-snapshot--jan-2026.ashx?sc_lang=en-gb"
+  },
+  {
+   "zone": "City Core",
+   "tier": "prime",
+   "rent_psf": 93.0,
+   "agent": "CBRE",
+   "publication": "UK Office Outlook 2026 (year-end forecast)",
+   "period": "end-2026 forecast",
+   "url": "https://www.cbre.co.uk/insights/books/uk-real-estate-market-outlook-2026/offices"
+  },
+  {
+   "zone": "West End Core",
+   "tier": "prime",
+   "rent_psf": 200.0,
+   "agent": "CBRE",
+   "publication": "UK Office Outlook 2026 (year-end forecast)",
+   "period": "end-2026 forecast",
+   "url": "https://www.cbre.co.uk/insights/books/uk-real-estate-market-outlook-2026/offices"
+  },
+  {
+   "zone": "West End Core - Mayfair & St James's",
+   "tier": "prime",
+   "rent_psf": 250.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £100-£250, high end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "West End Core - Mayfair & St James's",
+   "tier": "low",
+   "rent_psf": 100.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £100-£250, low end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "City Core - City of London, Clerkenwell, Farringdon",
+   "tier": "prime",
+   "rent_psf": 135.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £70-£135, high end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "City Core - City of London, Clerkenwell, Farringdon",
+   "tier": "low",
+   "rent_psf": 70.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £70-£135, low end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Southbank",
+   "tier": "prime",
+   "rent_psf": 105.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £60-£105, high end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Southbank",
+   "tier": "low",
+   "rent_psf": 60.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £60-£105, low end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Eastern Fringe - Stratford & Dalston",
+   "tier": "prime",
+   "rent_psf": 45.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £35-£45, high end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Eastern Fringe - Stratford & Dalston",
+   "tier": "low",
+   "rent_psf": 35.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £35-£45, low end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Docklands Prime - Canary Wharf",
+   "tier": "prime",
+   "rent_psf": 65.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £40-£65, high end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Docklands Prime - Canary Wharf",
+   "tier": "low",
+   "rent_psf": 40.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £40-£65, low end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Midtown - Holborn, Bloomsbury, King's Cross",
+   "tier": "prime",
+   "rent_psf": 125.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £65-£125, high end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Midtown - Holborn, Bloomsbury, King's Cross",
+   "tier": "low",
+   "rent_psf": 65.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £65-£125, low end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Vauxhall/Battersea",
+   "tier": "prime",
+   "rent_psf": 75.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £55-£75, high end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Vauxhall/Battersea",
+   "tier": "low",
+   "rent_psf": 55.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £55-£75, low end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Hammersmith",
+   "tier": "prime",
+   "rent_psf": 65.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £45-£65, high end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Hammersmith",
+   "tier": "low",
+   "rent_psf": 45.0,
+   "agent": "SHB Real Estate",
+   "publication": "Q1 2026 London Office Rents (Grade A unfitted £45-£65, low end)",
+   "period": "Q1 2026",
+   "url": "https://shbre.co.uk/insights/q1-2026-london-office-rents-business-rates"
+  },
+  {
+   "zone": "Manchester",
+   "tier": "prime",
+   "rent_psf": 48.0,
+   "agent": "Avison Young",
+   "publication": "The Big Nine",
+   "period": "Q2 2026",
+   "url": "https://www.avisonyoung.co.uk/the-big-nine/manchester"
+  },
+  {
+   "zone": "Birmingham",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Avison Young",
+   "publication": "The Big Nine",
+   "period": "Q2 2026",
+   "url": "https://www.avisonyoung.co.uk/the-big-nine/birmingham"
+  },
+  {
+   "zone": "Leeds",
+   "tier": "prime",
+   "rent_psf": 46.0,
+   "agent": "Avison Young",
+   "publication": "The Big Nine",
+   "period": "Q2 2026",
+   "url": "https://www.avisonyoung.co.uk/the-big-nine/leeds"
+  },
+  {
+   "zone": "Bristol",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Avison Young",
+   "publication": "The Big Nine",
+   "period": "Q2 2026",
+   "url": "https://www.avisonyoung.co.uk/the-big-nine/bristol"
+  },
+  {
+   "zone": "Glasgow",
+   "tier": "prime",
+   "rent_psf": 41.5,
+   "agent": "Avison Young",
+   "publication": "The Big Nine",
+   "period": "Q2 2026",
+   "url": "https://www.avisonyoung.co.uk/the-big-nine/glasgow"
+  },
+  {
+   "zone": "Edinburgh",
+   "tier": "prime",
+   "rent_psf": 46.0,
+   "agent": "Avison Young",
+   "publication": "The Big Nine",
+   "period": "Q2 2026",
+   "url": "https://www.avisonyoung.co.uk/the-big-nine/edinburgh"
+  },
+  {
+   "zone": "Cardiff",
+   "tier": "prime",
+   "rent_psf": 33.5,
+   "agent": "Avison Young",
+   "publication": "The Big Nine",
+   "period": "Q2 2026",
+   "url": "https://www.avisonyoung.co.uk/the-big-nine/cardiff"
+  },
+  {
+   "zone": "Newcastle",
+   "tier": "prime",
+   "rent_psf": 32.0,
+   "agent": "Avison Young",
+   "publication": "The Big Nine",
+   "period": "Q2 2026",
+   "url": "https://www.avisonyoung.co.uk/the-big-nine/newcastle"
+  },
+  {
+   "zone": "Liverpool",
+   "tier": "prime",
+   "rent_psf": 29.5,
+   "agent": "Avison Young",
+   "publication": "The Big Nine",
+   "period": "Q2 2026",
+   "url": "https://www.avisonyoung.co.uk/the-big-nine/liverpool"
+  },
+  {
+   "zone": "Birmingham",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "UK Regional Offices MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/uk_regional_offices_marketbeat_q2_2026.pdf"
+  },
+  {
+   "zone": "Bristol",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "UK Regional Offices MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/uk_regional_offices_marketbeat_q2_2026.pdf"
+  },
+  {
+   "zone": "Edinburgh",
+   "tier": "prime",
+   "rent_psf": 49.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "UK Regional Offices MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/uk_regional_offices_marketbeat_q2_2026.pdf"
+  },
+  {
+   "zone": "Leeds",
+   "tier": "prime",
+   "rent_psf": 46.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "UK Regional Offices MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/uk_regional_offices_marketbeat_q2_2026.pdf"
+  },
+  {
+   "zone": "Manchester",
+   "tier": "prime",
+   "rent_psf": 48.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "UK Regional Offices MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/uk_regional_offices_marketbeat_q2_2026.pdf"
+  },
+  {
+   "zone": "Brighton",
+   "tier": "prime",
+   "rent_psf": 43.0,
+   "agent": "Cushman & Wakefield",
+   "publication": "UK Regional Offices MarketBeat",
+   "period": "Q2 2026",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2026/q2/emea/uk_regional_offices_marketbeat_q2_2026.pdf"
+  },
+  {
+   "zone": "Aberdeen",
+   "tier": "prime",
+   "rent_psf": 32.5,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Birmingham",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Bristol",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Cardiff",
+   "tier": "prime",
+   "rent_psf": 33.5,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Edinburgh",
+   "tier": "prime",
+   "rent_psf": 49.5,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Glasgow",
+   "tier": "prime",
+   "rent_psf": 41.5,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Leeds",
+   "tier": "prime",
+   "rent_psf": 52.5,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Manchester",
+   "tier": "prime",
+   "rent_psf": 48.0,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Newcastle",
+   "tier": "prime",
+   "rent_psf": 32.0,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Sheffield",
+   "tier": "prime",
+   "rent_psf": 31.0,
+   "agent": "Knight Frank",
+   "publication": "UK Cities Office Market Report",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/uk-cities/ukcities_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Birmingham",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Savills",
+   "publication": "Market in Minutes: Regional Office Market Overview",
+   "period": "H1 2026",
+   "url": "https://www.savills.us/research_articles/256536/393807-0"
+  },
+  {
+   "zone": "Bristol",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Savills",
+   "publication": "Market in Minutes: Regional Office Market Overview",
+   "period": "H1 2026",
+   "url": "https://www.savills.us/research_articles/256536/393807-0"
+  },
+  {
+   "zone": "Manchester",
+   "tier": "prime",
+   "rent_psf": 48.0,
+   "agent": "Savills",
+   "publication": "Market in Minutes: Manchester offices",
+   "period": "H1 2026",
+   "url": "https://www.savills.co.uk/research_articles/229130/393186-0/market-in-minutes--manchester-occupational-office-data-h1-2026"
+  },
+  {
+   "zone": "Leeds",
+   "tier": "prime",
+   "rent_psf": 46.0,
+   "agent": "Savills",
+   "publication": "Market in Minutes: Leeds offices",
+   "period": "Q1 2026",
+   "url": "https://www.savills.co.uk/research_articles/229130/390885-0"
+  },
+  {
+   "zone": "Glasgow",
+   "tier": "prime",
+   "rent_psf": 41.5,
+   "agent": "Savills",
+   "publication": "Market in Minutes: Glasgow offices",
+   "period": "Q1 2026",
+   "url": "https://www.savills.co.uk/research_articles/229130/390867-0"
+  },
+  {
+   "zone": "Aberdeen",
+   "tier": "prime",
+   "rent_psf": 32.5,
+   "agent": "Savills",
+   "publication": "Market in Minutes: Aberdeen offices",
+   "period": "Q1 2026",
+   "url": "https://www.savills.co.uk/research_articles/229130/390410-0"
+  },
+  {
+   "zone": "Edinburgh",
+   "tier": "prime",
+   "rent_psf": 48.0,
+   "agent": "Savills",
+   "publication": "Market in Minutes: Edinburgh offices",
+   "period": "Q4 2025",
+   "url": "https://www.savills.co.uk/research_articles/229130/388073-0"
+  },
+  {
+   "zone": "Birmingham",
+   "tier": "prime",
+   "rent_psf": 46.5,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Manchester",
+   "tier": "prime",
+   "rent_psf": 45.0,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Leeds",
+   "tier": "prime",
+   "rent_psf": 46.0,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Bristol",
+   "tier": "prime",
+   "rent_psf": 50.0,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Cardiff",
+   "tier": "prime",
+   "rent_psf": 30.0,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Bath",
+   "tier": "prime",
+   "rent_psf": 40.0,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Exeter",
+   "tier": "prime",
+   "rent_psf": 23.5,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Newcastle",
+   "tier": "prime",
+   "rent_psf": 32.0,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Sheffield",
+   "tier": "prime",
+   "rent_psf": 31.0,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Glasgow",
+   "tier": "prime",
+   "rent_psf": 41.5,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Edinburgh",
+   "tier": "prime",
+   "rent_psf": 46.5,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Belfast",
+   "tier": "prime",
+   "rent_psf": 25.5,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Offices Report 2025/26",
+   "period": "Q3 2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Glasgow",
+   "tier": "prime",
+   "rent_psf": 41.5,
+   "agent": "Ryden",
+   "publication": "91st Scottish Property Review",
+   "period": "early 2026",
+   "url": "https://www.ryden.co.uk/media/Ryden-Scottish-Property-Review-2026.pdf"
+  },
+  {
+   "zone": "Edinburgh",
+   "tier": "prime",
+   "rent_psf": 46.5,
+   "agent": "Ryden",
+   "publication": "91st Scottish Property Review",
+   "period": "early 2026",
+   "url": "https://www.ryden.co.uk/media/Ryden-Scottish-Property-Review-2026.pdf"
+  },
+  {
+   "zone": "Aberdeen",
+   "tier": "prime",
+   "rent_psf": 32.5,
+   "agent": "Ryden",
+   "publication": "91st Scottish Property Review",
+   "period": "early 2026",
+   "url": "https://www.ryden.co.uk/media/Ryden-Scottish-Property-Review-2026.pdf"
+  },
+  {
+   "zone": "Aberdeen",
+   "tier": "mid",
+   "rent_psf": 30.0,
+   "agent": "Ryden",
+   "publication": "91st Scottish Property Review (West End)",
+   "period": "2025",
+   "url": "https://www.ryden.co.uk/media/Ryden-Scottish-Property-Review-2026.pdf"
+  },
+  {
+   "zone": "Bristol",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Alder King",
+   "publication": "Market Monitor 2026",
+   "period": "end 2025",
+   "url": "https://www.alderking.com/wp-content/uploads/2026/02/Alder-King-Annual-Report-2026-DIGITAL-FINAL.pdf"
+  },
+  {
+   "zone": "Cardiff",
+   "tier": "prime",
+   "rent_psf": 30.0,
+   "agent": "Alder King",
+   "publication": "Market Monitor 2026",
+   "period": "2025",
+   "url": "https://www.alderking.com/wp-content/uploads/2026/02/Alder-King-Annual-Report-2026-DIGITAL-FINAL.pdf"
+  },
+  {
+   "zone": "Gloucester",
+   "tier": "prime",
+   "rent_psf": 30.0,
+   "agent": "Alder King",
+   "publication": "Market Monitor 2026",
+   "period": "2025",
+   "url": "https://www.alderking.com/wp-content/uploads/2026/02/Alder-King-Annual-Report-2026-DIGITAL-FINAL.pdf"
+  },
+  {
+   "zone": "Bath",
+   "tier": "prime",
+   "rent_psf": 40.0,
+   "agent": "Alder King",
+   "publication": "Market Monitor 2026",
+   "period": "2025",
+   "url": "https://www.alderking.com/wp-content/uploads/2026/02/Alder-King-Annual-Report-2026-DIGITAL-FINAL.pdf"
+  },
+  {
+   "zone": "Nottingham",
+   "tier": "prime",
+   "rent_psf": 24.5,
+   "agent": "Innes England",
+   "publication": "Market Insite 2026",
+   "period": "2025",
+   "url": "https://innes-england.com/wp-content/uploads/2026/02/Market-Insite-Brochure-2026.pdf"
+  },
+  {
+   "zone": "Nottingham",
+   "tier": "low",
+   "rent_psf": 15.0,
+   "agent": "Innes England",
+   "publication": "Market Insite 2026",
+   "period": "2025",
+   "url": "https://innes-england.com/wp-content/uploads/2026/02/Market-Insite-Brochure-2026.pdf"
+  },
+  {
+   "zone": "Leicester",
+   "tier": "prime",
+   "rent_psf": 22.0,
+   "agent": "Innes England",
+   "publication": "Market Insite 2026",
+   "period": "2025",
+   "url": "https://innes-england.com/wp-content/uploads/2026/02/Market-Insite-Brochure-2026.pdf"
+  },
+  {
+   "zone": "Leicester",
+   "tier": "low",
+   "rent_psf": 14.0,
+   "agent": "Innes England",
+   "publication": "Market Insite 2026",
+   "period": "2025",
+   "url": "https://innes-england.com/wp-content/uploads/2026/02/Market-Insite-Brochure-2026.pdf"
+  },
+  {
+   "zone": "Derby",
+   "tier": "prime",
+   "rent_psf": 17.0,
+   "agent": "Innes England",
+   "publication": "Market Insite 2026",
+   "period": "2025",
+   "url": "https://innes-england.com/wp-content/uploads/2026/02/Market-Insite-Brochure-2026.pdf"
+  },
+  {
+   "zone": "Derby",
+   "tier": "low",
+   "rent_psf": 11.0,
+   "agent": "Innes England",
+   "publication": "Market Insite 2026",
+   "period": "2025",
+   "url": "https://innes-england.com/wp-content/uploads/2026/02/Market-Insite-Brochure-2026.pdf"
+  },
+  {
+   "zone": "Belfast",
+   "tier": "prime",
+   "rent_psf": 26.5,
+   "agent": "CBRE NI",
+   "publication": "NI Commercial Property Market Report (via Business Eye)",
+   "period": "Q1 2026",
+   "url": "https://www.businesseye.co.uk/news/cbre-reports-cautious-start-to-2026-for-commercial-property-market/"
+  },
+  {
+   "zone": "Southampton",
+   "tier": "prime",
+   "rent_psf": 30.0,
+   "agent": "CBRE",
+   "publication": "Southampton market figures (via Insider Media)",
+   "period": "Q2 2025",
+   "url": "https://www.insidermedia.com/news/south-east/southampton-office-take-up-bounces-back-after-slow-start-to-2025-cbre"
+  },
+  {
+   "zone": "Birmingham",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "CBRE",
+   "publication": "UK Office Market Outlook Midyear Review",
+   "period": "H1 2026",
+   "url": "https://www.cbre.co.uk/insights/books/uk-real-estate-market-outlook-midyear-review-2026/office"
+  },
+  {
+   "zone": "Manchester",
+   "tier": "prime",
+   "rent_psf": 48.0,
+   "agent": "CBRE",
+   "publication": "UK Office Market Outlook Midyear Review",
+   "period": "H1 2026",
+   "url": "https://www.cbre.co.uk/insights/books/uk-real-estate-market-outlook-midyear-review-2026/office"
+  },
+  {
+   "zone": "Glasgow",
+   "tier": "prime",
+   "rent_psf": 41.5,
+   "agent": "JLL",
+   "publication": "Big Six research (via Property Week)",
+   "period": "end-2025",
+   "url": "https://www.propertyweek.com/news/big-six-regional-office-markets-to-rebound-as-demand-rises-jll-predicts"
+  },
+  {
+   "zone": "Bristol",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "JLL",
+   "publication": "Big Six research (via Property Week)",
+   "period": "end-2025",
+   "url": "https://www.propertyweek.com/news/big-six-regional-office-markets-to-rebound-as-demand-rises-jll-predicts"
+  },
+  {
+   "zone": "Birmingham",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "JLL",
+   "publication": "Big Six research (via Property Week)",
+   "period": "end-2025",
+   "url": "https://www.propertyweek.com/news/big-six-regional-office-markets-to-rebound-as-demand-rises-jll-predicts"
+  },
+  {
+   "zone": "Leeds",
+   "tier": "prime",
+   "rent_psf": 52.5,
+   "agent": "Colliers",
+   "publication": "Regional Office Snapshot (via Place Yorkshire)",
+   "period": "Q2 2026",
+   "url": "https://www.placeyorkshire.co.uk/leeds-office-take-up-surges-as-grade-a-shortage-pushes-rents-to-record-52-50-per-sq-ft/"
+  },
+  {
+   "zone": "Birmingham",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "BNP Paribas RE",
+   "publication": "UK Big 10 Regional Office Market Report",
+   "period": "Q1 2026",
+   "url": "https://www.realestate.bnpparibas.co.uk/sites/default/files/2026-05/UKBig10OfficeMarketReportQ12026.pdf"
+  },
+  {
+   "zone": "Bristol",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "BNP Paribas RE",
+   "publication": "UK Big 10 Regional Office Market Report",
+   "period": "Q1 2026",
+   "url": "https://www.realestate.bnpparibas.co.uk/sites/default/files/2026-05/UKBig10OfficeMarketReportQ12026.pdf"
+  },
+  {
+   "zone": "Norwich",
+   "tier": "prime",
+   "rent_psf": 21.5,
+   "agent": "Bidwells",
+   "publication": "Norfolk & Suffolk Offices & Labs Databook",
+   "period": "H1 2026",
+   "url": "https://www.bidwells.co.uk/insights-reports-events/norfolk-suffolk-databook-offices-labs-august-2026/"
+  },
+  {
+   "zone": "Brighton",
+   "tier": "prime",
+   "rent_psf": 44.0,
+   "agent": "Vail Williams",
+   "publication": "Brighton Commercial Property Market Update 2026",
+   "period": "2025",
+   "url": "https://www.vailwilliams.com/brighton-commercial-property-market-update-2026/"
+  },
+  {
+   "zone": "Cambridge (town centre)",
+   "tier": "prime",
+   "rent_psf": 75.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/seglo/seglo_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Oxford (town centre)",
+   "tier": "prime",
+   "rent_psf": 72.5,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/seglo/seglo_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Maidenhead (town centre)",
+   "tier": "prime",
+   "rent_psf": 62.5,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices",
+   "period": "Q2 2026",
+   "url": "https://www.knightfrank.co.uk/site-assets/research/report-pdfs/seglo/seglo_q2-2026_final.pdf"
+  },
+  {
+   "zone": "Reading",
+   "tier": "prime",
+   "rent_psf": 58.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Maidenhead",
+   "tier": "prime",
+   "rent_psf": 60.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Slough",
+   "tier": "prime",
+   "rent_psf": 34.5,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Uxbridge",
+   "tier": "prime",
+   "rent_psf": 36.5,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Staines",
+   "tier": "prime",
+   "rent_psf": 36.5,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Bracknell",
+   "tier": "prime",
+   "rent_psf": 31.5,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Heathrow/Stockley Park",
+   "tier": "prime",
+   "rent_psf": 36.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Basingstoke",
+   "tier": "prime",
+   "rent_psf": 38.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Guildford",
+   "tier": "prime",
+   "rent_psf": 50.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Croydon",
+   "tier": "prime",
+   "rent_psf": 40.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Crawley/Gatwick",
+   "tier": "prime",
+   "rent_psf": 37.5,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Watford",
+   "tier": "prime",
+   "rent_psf": 45.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "St Albans",
+   "tier": "prime",
+   "rent_psf": 42.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Brentwood",
+   "tier": "prime",
+   "rent_psf": 29.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Dartford",
+   "tier": "prime",
+   "rent_psf": 23.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Hammersmith",
+   "tier": "prime",
+   "rent_psf": 56.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Chiswick",
+   "tier": "prime",
+   "rent_psf": 54.0,
+   "agent": "Knight Frank",
+   "publication": "South East & Greater London Offices (Prime Rents map)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Reading (One Station Hill, achieved deal)",
+   "tier": "mid",
+   "rent_psf": 49.5,
+   "agent": "Knight Frank",
+   "publication": "SEGLO key transactions (One Station Hill, achieved)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Milton Keynes (Witan Gate House, achieved deal)",
+   "tier": "mid",
+   "rent_psf": 28.5,
+   "agent": "Knight Frank",
+   "publication": "SEGLO key transactions (Witan Gate House, achieved)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "St Albans (CT2, achieved deal)",
+   "tier": "mid",
+   "rent_psf": 43.0,
+   "agent": "Knight Frank",
+   "publication": "SEGLO key transactions (CT2, achieved)",
+   "period": "Q3 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q3-2025-12520.pdf"
+  },
+  {
+   "zone": "Brighton",
+   "tier": "prime",
+   "rent_psf": 47.5,
+   "agent": "Knight Frank",
+   "publication": "SEGLO Leading Markets",
+   "period": "Year-end 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q-2025-12669.pdf"
+  },
+  {
+   "zone": "West London (Hammersmith/Chiswick market)",
+   "tier": "prime",
+   "rent_psf": 59.0,
+   "agent": "Knight Frank",
+   "publication": "SEGLO Leading Markets",
+   "period": "Year-end 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q-2025-12669.pdf"
+  },
+  {
+   "zone": "South West London",
+   "tier": "prime",
+   "rent_psf": 62.5,
+   "agent": "Knight Frank",
+   "publication": "SEGLO Leading Markets",
+   "period": "Year-end 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q-2025-12669.pdf"
+  },
+  {
+   "zone": "Cambridge",
+   "tier": "prime",
+   "rent_psf": 65.0,
+   "agent": "Knight Frank",
+   "publication": "SEGLO Leading Markets",
+   "period": "Year-end 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q-2025-12669.pdf"
+  },
+  {
+   "zone": "Oxford",
+   "tier": "prime",
+   "rent_psf": 65.0,
+   "agent": "Knight Frank",
+   "publication": "SEGLO Leading Markets",
+   "period": "Year-end 2025",
+   "url": "https://content.knightfrank.com/research/63/documents/en/south-east-greater-london-offices-q-2025-12669.pdf"
+  },
+  {
+   "zone": "Maidenhead (Tempo)",
+   "tier": "prime",
+   "rent_psf": 60.0,
+   "agent": "Savills",
+   "publication": "MiM Greater London & South East Offices",
+   "period": "Q1 2026",
+   "url": "https://www.savills.co.uk/research_articles/229130/390418-0"
+  },
+  {
+   "zone": "Maidenhead (Grade A tone)",
+   "tier": "mid",
+   "rent_psf": 48.5,
+   "agent": "Savills",
+   "publication": "MiM Greater London & South East Offices",
+   "period": "Q2 2026",
+   "url": "https://www.savills.co.uk/research_articles/229130/393216-0"
+  },
+  {
+   "zone": "St Albans",
+   "tier": "prime",
+   "rent_psf": 44.0,
+   "agent": "Savills",
+   "publication": "MiM Greater London & South East Offices",
+   "period": "2025",
+   "url": "https://www.savills.co.uk/research_articles/229130/386812-0"
+  },
+  {
+   "zone": "Watford",
+   "tier": "prime",
+   "rent_psf": 45.0,
+   "agent": "Savills",
+   "publication": "MiM Greater London & South East Offices",
+   "period": "2025",
+   "url": "https://www.savills.co.uk/research_articles/229130/386812-0"
+  },
+  {
+   "zone": "Richmond",
+   "tier": "prime",
+   "rent_psf": 64.5,
+   "agent": "Savills",
+   "publication": "MiM Greater London & South East Offices",
+   "period": "2025",
+   "url": "https://www.savills.co.uk/research_articles/229130/386812-0"
+  },
+  {
+   "zone": "Guildford",
+   "tier": "prime",
+   "rent_psf": 47.5,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Woking",
+   "tier": "prime",
+   "rent_psf": 40.5,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Crawley",
+   "tier": "prime",
+   "rent_psf": 37.0,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Weybridge",
+   "tier": "prime",
+   "rent_psf": 38.0,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Staines",
+   "tier": "prime",
+   "rent_psf": 36.0,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Redhill",
+   "tier": "prime",
+   "rent_psf": 31.5,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Reigate",
+   "tier": "prime",
+   "rent_psf": 28.0,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Leatherhead",
+   "tier": "prime",
+   "rent_psf": 28.5,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Farnborough",
+   "tier": "prime",
+   "rent_psf": 34.5,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Camberley",
+   "tier": "prime",
+   "rent_psf": 28.5,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Hook",
+   "tier": "prime",
+   "rent_psf": 22.0,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Fleet",
+   "tier": "prime",
+   "rent_psf": 18.0,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2025",
+   "period": "2025",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2026/02/2025-Office-Market-Report.pdf"
+  },
+  {
+   "zone": "Chertsey",
+   "tier": "prime",
+   "rent_psf": 36.5,
+   "agent": "Hurst Warne",
+   "publication": "Office Market Report 2024",
+   "period": "2024",
+   "url": "https://hurstwarne.co.uk/wp-content/uploads/2025/09/Hurst-Warne-2024-Office-Market-Report-1.pdf"
+  },
+  {
+   "zone": "Chelmsford",
+   "tier": "prime",
+   "rent_psf": 28.0,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Chelmsford",
+   "tier": "low",
+   "rent_psf": 23.0,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Brentwood",
+   "tier": "prime",
+   "rent_psf": 28.0,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Brentwood",
+   "tier": "low",
+   "rent_psf": 23.0,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Basildon",
+   "tier": "prime",
+   "rent_psf": 23.5,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Basildon",
+   "tier": "low",
+   "rent_psf": 18.0,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Braintree",
+   "tier": "prime",
+   "rent_psf": 18.0,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Braintree",
+   "tier": "low",
+   "rent_psf": 14.0,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Romford",
+   "tier": "prime",
+   "rent_psf": 21.5,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Romford",
+   "tier": "low",
+   "rent_psf": 17.5,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Stratford",
+   "tier": "prime",
+   "rent_psf": 40.0,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Stratford",
+   "tier": "low",
+   "rent_psf": 20.0,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Royal Docks (Royals)",
+   "tier": "prime",
+   "rent_psf": 30.0,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Barking/Dagenham/Rainham",
+   "tier": "prime",
+   "rent_psf": 22.5,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Enfield",
+   "tier": "prime",
+   "rent_psf": 28.5,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Enfield",
+   "tier": "low",
+   "rent_psf": 21.5,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Welwyn Garden City",
+   "tier": "prime",
+   "rent_psf": 23.5,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Welwyn Garden City",
+   "tier": "low",
+   "rent_psf": 16.5,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Hoddesdon/Cheshunt",
+   "tier": "prime",
+   "rent_psf": 17.5,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Harlow",
+   "tier": "prime",
+   "rent_psf": 17.5,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Harlow",
+   "tier": "low",
+   "rent_psf": 12.5,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Greenwich",
+   "tier": "prime",
+   "rent_psf": 32.5,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Bromley",
+   "tier": "prime",
+   "rent_psf": 28.5,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Dartford",
+   "tier": "prime",
+   "rent_psf": 25.0,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Dartford",
+   "tier": "low",
+   "rent_psf": 18.0,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Maidstone",
+   "tier": "prime",
+   "rent_psf": 25.0,
+   "agent": "Glenny",
+   "publication": "Office Databook",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Maidstone",
+   "tier": "low",
+   "rent_psf": 20.0,
+   "agent": "Glenny",
+   "publication": "Office Databook (secondary)",
+   "period": "Q3 2025",
+   "url": "https://www.glenny.co.uk/dam/jcr:6e41cf78-6519-420c-86c4-4142822e3e7c/databookpdf-q3-2025-office.pdf"
+  },
+  {
+   "zone": "Bath (city centre)",
+   "tier": "prime",
+   "rent_psf": 40.0,
+   "agent": "Alder King",
+   "publication": "Market Monitor 2026",
+   "period": "2025",
+   "url": "https://www.alderking.com/wp-content/uploads/2026/02/Alder-King-Annual-Report-2026-DIGITAL-FINAL.pdf"
+  },
+  {
+   "zone": "Swindon (town centre)",
+   "tier": "prime",
+   "rent_psf": 23.0,
+   "agent": "Alder King",
+   "publication": "Market Monitor 2026 (town centre)",
+   "period": "2025",
+   "url": "https://www.alderking.com/wp-content/uploads/2026/02/Alder-King-Annual-Report-2026-DIGITAL-FINAL.pdf"
+  },
+  {
+   "zone": "Swindon (out of town)",
+   "tier": "mid",
+   "rent_psf": 21.5,
+   "agent": "Alder King",
+   "publication": "Market Monitor 2026 (out of town)",
+   "period": "2025",
+   "url": "https://www.alderking.com/wp-content/uploads/2026/02/Alder-King-Annual-Report-2026-DIGITAL-FINAL.pdf"
+  },
+  {
+   "zone": "Gloucester (Gloucester Business Park)",
+   "tier": "prime",
+   "rent_psf": 30.0,
+   "agent": "Alder King",
+   "publication": "Market Monitor 2026",
+   "period": "2025",
+   "url": "https://www.alderking.com/wp-content/uploads/2026/02/Alder-King-Annual-Report-2026-DIGITAL-FINAL.pdf"
+  },
+  {
+   "zone": "Bristol (out of town, Aztec West)",
+   "tier": "prime",
+   "rent_psf": 27.0,
+   "agent": "Alder King",
+   "publication": "Market Monitor 2026 (out of town)",
+   "period": "2025",
+   "url": "https://www.alderking.com/wp-content/uploads/2026/02/Alder-King-Annual-Report-2026-DIGITAL-FINAL.pdf"
+  },
+  {
+   "zone": "Milton Keynes",
+   "tier": "prime",
+   "rent_psf": 39.0,
+   "agent": "Bidwells",
+   "publication": "M1 South Offices & Labs Databook",
+   "period": "2025",
+   "url": "https://www.bidwells.co.uk/insights-reports-events/M1-south-databook-offices-labs-february-2026/"
+  },
+  {
+   "zone": "Oxford",
+   "tier": "prime",
+   "rent_psf": 63.0,
+   "agent": "Bidwells",
+   "publication": "Oxford Offices & Labs Databook",
+   "period": "H1 2025",
+   "url": "https://www.bidwells.co.uk/insights-reports-events/oxford-databook-offices-labs-august-2025/"
+  },
+  {
+   "zone": "Southampton",
+   "tier": "prime",
+   "rent_psf": 30.0,
+   "agent": "Vail Williams",
+   "publication": "VW Insider South Coast",
+   "period": "H1 2025",
+   "url": "https://www.vailwilliams.com/vw-insider-south-coast-commercial-property-report-resilience-reinvention-and-the-race-for-quality/"
+  },
+  {
+   "zone": "Portsmouth (Lakeside North Harbour)",
+   "tier": "prime",
+   "rent_psf": 27.5,
+   "agent": "Vail Williams",
+   "publication": "VW Insider South Coast",
+   "period": "H1 2025",
+   "url": "https://www.vailwilliams.com/vw-insider-south-coast-commercial-property-report-resilience-reinvention-and-the-race-for-quality/"
+  },
+  {
+   "zone": "Portsmouth (Grade A)",
+   "tier": "mid",
+   "rent_psf": 25.0,
+   "agent": "Vail Williams",
+   "publication": "VW Insider South Coast (Grade A tone)",
+   "period": "H2 2025",
+   "url": "https://explore.epigram.co.uk/vail-williams-vw-insider/south-coast"
+  },
+  {
+   "zone": "Solent Business Park (Whiteley/Fareham)",
+   "tier": "mid",
+   "rent_psf": 23.5,
+   "agent": "Vail Williams",
+   "publication": "VW Insider South Coast (Grade A tone)",
+   "period": "H2 2025",
+   "url": "https://explore.epigram.co.uk/vail-williams-vw-insider/south-coast"
+  },
+  {
+   "zone": "Staines (Grade A)",
+   "tier": "prime",
+   "rent_psf": 40.0,
+   "agent": "Vail Williams",
+   "publication": "Staines market article",
+   "period": "Nov 2025",
+   "url": "https://www.vailwilliams.com/staines-the-quietly-competitive-place-to-locate-your-business/"
+  },
+  {
+   "zone": "Staines (average)",
+   "tier": "mid",
+   "rent_psf": 35.5,
+   "agent": "Vail Williams",
+   "publication": "Staines market article (average)",
+   "period": "Nov 2025",
+   "url": "https://www.vailwilliams.com/staines-the-quietly-competitive-place-to-locate-your-business/"
+  },
+  {
+   "zone": "Chelmsford (Grade A, top)",
+   "tier": "prime",
+   "rent_psf": 30.0,
+   "agent": "Fenn Wright",
+   "publication": "Commercial Property Market Overview 2025",
+   "period": "2024",
+   "url": "https://www.fennwright.co.uk/about-us/news/fenn-wright-commercial-property-market-overview-2025/"
+  },
+  {
+   "zone": "Colchester (Grade A, top)",
+   "tier": "prime",
+   "rent_psf": 24.0,
+   "agent": "Fenn Wright",
+   "publication": "Commercial Property Market Overview 2025",
+   "period": "2024",
+   "url": "https://www.fennwright.co.uk/about-us/news/fenn-wright-commercial-property-market-overview-2025/"
+  },
+  {
+   "zone": "Ipswich",
+   "tier": "prime",
+   "rent_psf": 20.0,
+   "agent": "Fenn Wright",
+   "publication": "Commercial Property Market Overview 2025",
+   "period": "2024",
+   "url": "https://www.fennwright.co.uk/about-us/news/fenn-wright-commercial-property-market-overview-2025/"
+  },
+  {
+   "zone": "Chatham Maritime (Medway, quoting)",
+   "tier": "mid",
+   "rent_psf": 22.5,
+   "agent": "Caxtons",
+   "publication": "Kent Property Market Report 2025-26 (quoting)",
+   "period": "2025",
+   "url": "https://www.no-use-empty.org.uk/wp-content/uploads/2025/11/KPMR-2025-26-report.pdf"
+  },
+  {
+   "zone": "Birmingham (city centre)",
+   "tier": "prime",
+   "rent_psf": 52.0,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Office Report 2025/26",
+   "period": "Q4 2025",
+   "url": "https://www.lsh.co.uk/explore/research-and-views/research/2025/december/regional-offices-report-2025"
+  },
+  {
+   "zone": "Bristol (out of town)",
+   "tier": "prime",
+   "rent_psf": 27.5,
+   "agent": "Lambert Smith Hampton",
+   "publication": "Regional Office Report 2025/26 (out of town)",
+   "period": "2025",
+   "url": "https://www.lsh.co.uk/-/media/files/lsh/research/2025/regional%20office%20report%202025%2026"
+  },
+  {
+   "zone": "Cambridge",
+   "tier": "prime",
+   "rent_psf": 62.5,
+   "agent": "Cushman & Wakefield",
+   "publication": "UK Regional Offices MarketBeat",
+   "period": "Q4 2025",
+   "url": "https://assets.cushmanwakefield.com/-/media/cw/marketbeat-pdfs/2025/q4/emea/uk_regional_offices_marketbeat_q4_2025.pdf"
+  }
+ ]
+}
