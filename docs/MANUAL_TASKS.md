@@ -330,3 +330,18 @@ there is no feed. Quarterly:
    `data/agent_office_rents.json` (merges zones, computes consensus averages).
 4. Commit + push, then:
    `select public.load_agent_office_rents('https://raw.githubusercontent.com/locgrimshaw/mastermapper/main/data/agent_office_rents.json');`
+
+## Conservation areas — refresh (fixed 2026-09)
+
+Two LPA-fed partial sources patch each other; refresh BOTH, in this order:
+1. Run the **"Load planning constraints"** workflow with
+   `kinds: conservation_area`, `clip_mode: none` — it downloads the FULL bulk
+   file from files.planning.data.gov.uk and replaces the kind. (Never refresh
+   this kind from the planning.data *entity API* — it serves far fewer
+   polygons than the bulk file; a trial reload dropped Norwich 34 → 2.)
+2. Then top up from Historic England's compiled dataset:
+   `select public.conservation_he_page_n(0, 1000);` stepping the offset by
+   1000 until it returns -1 (drop to 100/25 for pages that time out). Only
+   HE polygons not already >50% covered are added (props.src marks them).
+Even combined, some authorities have supplied boundaries to neither source —
+the layer's about-text says so, so absence is never read as evidence.
