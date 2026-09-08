@@ -4223,6 +4223,7 @@ function hoverContentForOverlay(def, p) {
     const fmtT = t => t ? `£${Number(t.avg).toFixed(2)}/ft² (${t.vals.length} agent${t.vals.length === 1 ? "" : "s"})` : null;
     rows = [row(fmtT(mi), "mid-tier"), row(fmtT(lo), "secondary"),
             row("tap for every agent's figure", "consensus detail")];
+  } else if (d === "build_cost_index") {
     title = p.name || "Local authority";
     kind = "Build cost index — free proxy, not BCIS";
     rows = [row(p.factor != null ? `${Number(p.factor).toFixed(2)}× national` : null,
