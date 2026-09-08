@@ -2892,3 +2892,39 @@ footer {
 .dd-office-tbl th { text-align: left; color: var(--text-dim); font-weight: 600; }
 .dd-office-tbl th, .dd-office-tbl td { padding: 2px 4px; border-bottom: 1px solid var(--ink-line); }
 .dd-office-tbl td:nth-child(n+2), .dd-office-tbl th:nth-child(n+2) { text-align: right; white-space: nowrap; }
+
+/* Punchy overlay tap-cards (openOverlayCard + the amenity/crime/heat/feeder
+   popups): layer-coloured eyebrow, big title, stat-chip grid, and the raw
+   field dump demoted to a collapsed drawer. --ov carries the layer colour. */
+.ovp2 { font-family: var(--font-ui); color: var(--text); min-width: 180px; }
+.ovp2 .ovp-kind {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: color-mix(in srgb, var(--ov, #868e96) 72%, var(--text));
+  margin: 0 14px 3px 0;
+}
+.ovp2 .ovp-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--ov, #868e96);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ov, #868e96) 22%, transparent);
+}
+.ovp2 .ovp-title { font-size: 15px; font-weight: 800; line-height: 1.2; margin: 0 0 2px; color: var(--text); display: flex; align-items: center; gap: 6px; }
+.ovp2 .ovp-sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+.ovp2 .ovp-stats {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 7px;
+}
+.ovp2 .ovp-stat {
+  border: 1px solid color-mix(in srgb, var(--ov, #868e96) 28%, var(--ink-line));
+  background: color-mix(in srgb, var(--ov, #868e96) 6%, var(--ink-2));
+  border-radius: 8px; padding: 4px 7px; min-width: 0;
+}
+.ovp2 .ovp-stat:first-child:nth-last-child(odd) { grid-column: 1 / -1; }
+.ovp2 .ovp-stat-wide { grid-column: 1 / -1; }
+.ovp2 .ovp-sv { font-size: 12.5px; font-weight: 700; line-height: 1.25; word-break: break-word; color: var(--text); }
+.ovp2 .ovp-sk { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); margin-top: 1px; }
+.ovp2 .ovp-more { margin-top: 7px; }
+.ovp2 .ovp-more summary { font-size: 10px; color: var(--text-dim); cursor: pointer; }
+.ovp2 .ovp-more .ovp-table { margin-top: 4px; }
+.ovp2 .ovp-k { color: var(--text-dim); }
+.ovp2 .ovp-v { color: var(--text); }
+.ovp2 .ovp-note { color: var(--text-dim); }

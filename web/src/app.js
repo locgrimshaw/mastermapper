@@ -2634,14 +2634,31 @@ function openOverlayCard(key, p, lngLat) {
       `<button type="button" class="deepdive-btn uni-dd-open">Full deep dive →</button>`);
     return;
   }
-  const skip = new Set(["dataset"]);
-  const rows = Object.entries(p)
+  // Same curated {title, kind, rows} the hover card uses — so a tap (the only
+  // gesture on touch devices) gets the readable story, not a field dump. The
+  // dump survives, demoted to a collapsed "all attributes" drawer.
+  const def = overlayDef(key) || { dataset: p.dataset, label: key, color: "#868e96" };
+  let c;
+  try { c = hoverContentForOverlay(def, p); } catch (_) { c = null; }
+  if (!c) c = { title: p.name || def.label, kind: def.label, chip: def.color, rows: [] };
+  const stats = (c.rows || []).map(([v, l]) =>
+    `<div class="ovp-stat${String(v).length > 24 ? " ovp-stat-wide" : ""}">` +
+    `<div class="ovp-sv">${_esc(v)}</div><div class="ovp-sk">${_esc(l)}</div></div>`).join("");
+  const skip = new Set(["dataset", "name"]);
+  const raw = Object.entries(p)
     .filter(([k, v]) => !skip.has(k) && v != null && v !== "" && v !== "null")
-    .map(([k, v]) => `<tr><td class="ovp-k">${_esc(k)}</td><td class="ovp-v">${_esc(v)}</td></tr>`)
+    .map(([k, v]) => `<tr><td class="ovp-k">${_esc(String(k).replace(/_/g, " "))}</td><td class="ovp-v">${_esc(v)}</td></tr>`)
     .join("");
+  const title = c.title || p.name || def.label || key;
+  const kind = c.kind && c.kind !== title ? c.kind : (def.label !== title ? def.label : "");
   openClickPopup({ closeButton: true, maxWidth: "320px", offset: 10 }, lngLat,
-    `<div class="ovp"><div class="ovp-title">${_esc(p.name || overlayDef(key)?.label || key)}</div>` +
-    `<table class="ovp-table">${rows}</table></div>`);
+    `<div class="ovp ovp2" style="--ov:${c.chip || def.color || "#868e96"}">` +
+    (kind ? `<div class="ovp-kind"><span class="ovp-dot"></span>${_esc(kind)}</div>` : "") +
+    `<div class="ovp-title">${kind ? "" : `<span class="ovp-dot"></span>`}${_esc(title)}</div>` +
+    (stats ? `<div class="ovp-stats">${stats}</div>` : "") +
+    (raw ? `<details class="ovp-more"><summary>All attributes</summary>` +
+           `<table class="ovp-table">${raw}</table></details>` : "") +
+    `</div>`);
 }
 
 // The PBSA-lens card for a university provider dot: headline student numbers
@@ -4882,7 +4899,13 @@ function tapDeepDiveLayers(point, box, nearest, coarse) {
       const ll = f.geometry && f.geometry.coordinates
         ? { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
         : map.unproject([point.x, point.y]);
-      openClickPopup({ offset: 8 }, ll, `<strong>${pr.name}</strong><br>${pr.sub || a.label}`);
+      const kindLbl = (a.label || "").replace(/s$/, "");
+      openClickPopup({ offset: 8 }, ll,
+        `<div class="ovp ovp2" style="--ov:${a.color}">` +
+        `<div class="ovp-kind"><span class="ovp-dot"></span>${_esc(kindLbl)}</div>` +
+        `<div class="ovp-title">${_esc(pr.name || kindLbl)}</div>` +
+        (pr.sub && pr.sub !== a.label ? `<div class="ovp-sub">${_esc(pr.sub)}</div>` : "") +
+        `</div>`);
       return true;
     }
   }
@@ -4896,9 +4919,12 @@ function tapDeepDiveLayers(point, box, nearest, coarse) {
       ? { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
       : map.unproject([point.x, point.y]);
     openClickPopup({ offset: 8 }, ll,
-      `<strong>${pr.count} crime${pr.count == 1 ? "" : "s"}</strong>` +
-      (pr.street ? `<br>${pr.street}` : "") +
-      (pr.breakdown ? `<br><span style="font-size:11px;text-transform:capitalize">${pr.breakdown}</span>` : ""));
+      `<div class="ovp ovp2" style="--ov:#e03131">` +
+      `<div class="ovp-kind"><span class="ovp-dot"></span>Reported crime — Police.uk, last 12 months</div>` +
+      `<div class="ovp-title">${pr.count} crime${pr.count == 1 ? "" : "s"}</div>` +
+      (pr.street ? `<div class="ovp-sub">${_esc(pr.street)}</div>` : "") +
+      (pr.breakdown ? `<div class="ovp-sub" style="text-transform:capitalize">${_esc(pr.breakdown)}</div>` : "") +
+      `</div>`);
     return true;
   }
 
@@ -5052,9 +5078,10 @@ function wireInteractions() {
         hoverCardHide();
         openClickPopup({ closeButton: true, maxWidth: "300px", offset: 10 },
           map.unproject([point.x, point.y]),
-          `<div class="ovp"><div class="ovp-title">Parcel ${_esc(pid)}</div>` +
-          `<table class="ovp-table"><tr><td class="ovp-k">INSPIRE ID</td><td class="ovp-v">${_esc(pid)}</td></tr></table>` +
-          `<p class="ovp-note">Registered parcel outline (HM Land Registry INSPIRE index). The free data doesn't name the owner — cross-reference the council-property dots; exact title-to-parcel ownership is HMLR's licensed National Polygon Service.</p></div>`);
+          `<div class="ovp ovp2" style="--ov:#f59f00">` +
+          `<div class="ovp-kind"><span class="ovp-dot"></span>Registered land parcel — HMLR INSPIRE</div>` +
+          `<div class="ovp-title">Parcel ${_esc(pid)}</div>` +
+          `<p class="ovp-note">The outline of a registered title. The free data doesn't name the owner — cross-reference the council-property dots; exact title-to-parcel ownership is HMLR's licensed National Polygon Service.</p></div>`);
         setDrawer(false);
         return true;
       }
@@ -12773,7 +12800,13 @@ function pbsaDrawViz(gws, feeders) {
       const p = e.features[0].properties;
       map.getCanvas().style.cursor = "pointer";
       pop.setLngLat(e.lngLat)
-        .setHTML(`<strong>${p.name}</strong> · ${p.minutes != null ? Math.round(p.minutes) + " min" : ""} · ${p.trains ?? "?"} trains/day`)
+        .setHTML(`<div class="ovp ovp2" style="--ov:#7c3aed">` +
+          `<div class="ovp-kind"><span class="ovp-dot"></span>Feeder station</div>` +
+          `<div class="ovp-title">${_esc(p.name || "")}</div>` +
+          `<div class="ovp-stats">` +
+          (p.minutes != null ? `<div class="ovp-stat"><div class="ovp-sv">${Math.round(p.minutes)} min</div><div class="ovp-sk">to campus</div></div>` : "") +
+          `<div class="ovp-stat"><div class="ovp-sv">${p.trains ?? "?"}</div><div class="ovp-sk">trains / day</div></div>` +
+          `</div></div>`)
         .addTo(map);
     });
     map.on("mouseleave", "pbsa-feeder-dot", () => { map.getCanvas().style.cursor = ""; pop.remove(); });
@@ -15680,9 +15713,13 @@ async function dcHeatOverlay(on) {
       if (!p) return;
       new maplibregl.Popup({ closeButton: true, maxWidth: "280px" })
         .setLngLat(e.lngLat)
-        .setHTML(`<strong>${escapeSift(p.name || "Heat network")}</strong><br>` +
-                 `${escapeSift(p.status)}${p.tech ? " · " + escapeSift(p.tech) : ""}<br>` +
-                 `<span class="hint">DESNZ Heat Networks Planning Database</span>`)
+        .setHTML(`<div class="ovp ovp2" style="--ov:#e8590c">` +
+          `<div class="ovp-kind"><span class="ovp-dot"></span>Heat network — DESNZ planning database</div>` +
+          `<div class="ovp-title">${escapeSift(p.name || "Heat network")}</div>` +
+          `<div class="ovp-stats">` +
+          (p.status ? `<div class="ovp-stat"><div class="ovp-sv">${escapeSift(p.status)}</div><div class="ovp-sk">status</div></div>` : "") +
+          (p.tech ? `<div class="ovp-stat"><div class="ovp-sv">${escapeSift(p.tech)}</div><div class="ovp-sk">technology</div></div>` : "") +
+          `</div></div>`)
         .addTo(map);
     });
     map.on("mouseenter", "dc-heat-pts", () => { map.getCanvas().style.cursor = "pointer"; });
