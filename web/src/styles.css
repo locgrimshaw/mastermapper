@@ -2858,3 +2858,18 @@ footer {
 /* Step-1 gate: the NPPF-route sub-checkboxes sit indented under the radio. */
 .sift-gate-sub { margin: 0 0 4px 22px; padding-left: 8px; border-left: 2px solid var(--ink-line); }
 .sift-gate-sub .dd-row input[disabled] + span { opacity: .5; }
+
+/* Major-applications list in the deep dive (renderMajorApps). */
+.dd-app-list { display: flex; flex-direction: column; gap: 5px; }
+.dd-app-row {
+  display: flex; gap: 8px; align-items: flex-start;
+  padding: 6px 8px; border: 1px solid var(--ink-line); border-radius: 9px;
+  text-decoration: none; color: var(--text); background: var(--ink-2);
+}
+.dd-app-row:hover { border-color: var(--accent, #4c6ef5); }
+.dd-app-state { flex: none; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; width: 62px; }
+.dd-app-body { flex: 1; min-width: 0; font-size: 11.5px; line-height: 1.3; }
+.dd-app-body b { display: block; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dd-app-desc { color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dd-app-meta { flex: none; font-size: 9.5px; color: var(--text-dim); text-align: right; }
+.dd-g-plots { --g: #0ca678; }

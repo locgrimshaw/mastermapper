@@ -1218,6 +1218,7 @@ const MAP_OVERLAYS = [
   // already charges for, and the HO4(1)(b) access-to-services test.
   { key: "school", group: "land", label: "Schools & colleges", color: "#f59f00", dataset: "school", render: "point", minZoom: 11, lim: 6000,
     radius: ["interpolate", ["linear"], ["zoom"], 11, 2.5, 14, 4.5, 17, 7] },
+  { key: "he_land",               group: "land", label: "Homes England land (Land Hub)", color: "#0ca678", dataset: "he_land", minZoom: 6 },
   { key: "la_property",           group: "land", label: "Public-authority property (CCOD)", color: "#c92a2a", dataset: "la_property", render: "point", minZoom: 8, lim: 8000, icon: "town",
     cap: { color: ["match", ["to-string", ["get", "owner_class"]],
            "local_authority", "#c92a2a", "parish", "#f08c00",
@@ -1644,6 +1645,7 @@ const LAYER_INFO = {
   ukpn_sites:          { about: "UK Power Networks grid & primary substations, coloured by the DNO's demand classification — green COLD sites have headroom, red HOT sites are constrained. London, the South East and East. Click a site for full details.", source: "UK Power Networks Open Data (opendatasoft)" },
   nged_sites:          { about: "National Grid Electricity Distribution primary & bulk supply substations, coloured by their demand RAG (green/amber/red) and sized by connected headroom — the MW figure appears beside each site as you zoom in. Midlands, South West and South Wales. Click a site for full details.", source: "NGED Connected Data portal" },
   alc:                 { about: "Agricultural Land Classification, coloured by grade — deep green Grade 1 (best and most versatile, policy steers development away) through amber Grade 4 and brown Grade 5; greys are urban/non-agricultural.", source: "Natural England (OGL v3)" },
+  he_land:            { about: "Land Homes England is bringing to market or preparing for disposal — the agency's live development pipeline, with acreage, proposed use, housing capacity, planning status and disposal route per site. Click a site for details. Distinct from HE's full ownership (not published as open data): this is the disposals shop window, which is exactly the land a partner can actually pursue.", source: "Homes England Land Hub open data (ArcGIS), refreshed as sites come to market" },
   la_property:         { about: "Property titles owned by public bodies — councils, parishes, combined authorities, NHS, universities, police/fire and central government — aggregated to postcode points with a title count, coloured by owner type. Indicative locations (postcode centroids), not boundaries — parcel outlines come in a later phase.", source: "HM Land Registry CCOD © Crown copyright and database right 2026; OS Code-Point Open (OGL)" },
   water_availability:  { about: "Whether water is available for new abstraction licences, by catchment — green available, amber restricted, red not available. A proxy for large-scale water supply feasibility.", source: "Environment Agency CAMS (OGL v3)" },
   ppd_sales:           { about: "Every registered property sale in the last 12 months as a dot, colour-ramped from amber (~£100k) to deep red (£1.5m+). Street-level price truth beneath the LSOA averages. Positions are postcode-centroid based. Zoom right in — it's dense.", source: "HM Land Registry Price Paid Data © Crown copyright (PPD licence); OS Code-Point Open" },
@@ -4384,6 +4386,14 @@ function hoverContentForOverlay(def, p) {
       : "Ground slope — 1 km cell";
     rows = [row(p.max_slope != null ? `${p.max_slope}°` : null,
                 nCells > 1 ? "steepest 50 m in group" : "steepest 50 m")];
+  } else if (d === "he_land") {
+    title = p.name || "Homes England site";
+    kind = "Homes England Land Hub — " + (p.status || "status unknown");
+    rows = [row(p.ha != null ? p.ha + " ha" : null, "gross area"),
+            row(p.capacity ? Math.round(Number(p.capacity)).toLocaleString() + " homes" : null, "indicative capacity"),
+            row(p.use, "proposed use"),
+            row(p.planning, "planning status"),
+            row(p.route, "disposal route")];
   } else if (d === "public_parcel") {
     const m = parcelConfidence(p);
     title = p.owner || p.name || "Public land";
@@ -7415,6 +7425,7 @@ async function loadPublicLand() {
     });
     if (error) throw error;
     deep.publicLand = (data && data[0]) || null;
+    if (typeof renderDdHeadlines === "function") renderDdHeadlines();
   } catch (err) {
     console.error("public_land_in_catchment failed", err);
     deep._lastPublicLandError = err.message || "query failed";
@@ -8178,12 +8189,6 @@ function developableSectionHTML(station) {
           </div>
           ${siftOneDensity() ? `<p class="dd-dph-override">Capacity here is using <strong>${siftOneDensity()} dph everywhere</strong> — the single density set in step 2 of the sift — so this dive and the shortlist size the same scheme. The four rates above are paused while that is on; switch the sift back to per-station density floors to use them.</p>` : ddDphPolicyNoteHTML(dph)}
           <div id="dd-developable-summary"></div>
-          <label class="dd-row dd-row-all">
-            <input type="checkbox" class="enable" id="dd-publicland-show" />
-            <span class="dd-label"><strong>Public land in catchment</strong></span>
-            <span class="dd-stat" id="dd-publicland-status"></span>
-          </label>
-          <div id="dd-publicland-summary"></div>
           <p class="hint" style="margin-top:8px">Developable land = the radius catchment minus the selected physical/planning constraints (OS &amp; Environment Agency data). Capacity applies dwellings-per-hectare by regime; the highlighted regime is auto-selected from catchment density. Constraints re-query the database; regime &amp; dph recompute instantly.</p>
         </div>
       </section>`;
@@ -8199,6 +8204,22 @@ function wireDevelopableControls(panel) {
 
   const pub = panel.querySelector("#dd-publicland-show");
   if (pub) pub.addEventListener("change", (e) => togglePublicLand(e.target.checked));
+  // Plots & ownership: INSPIRE parcel outlines (national PMTiles) and the
+  // Homes England Land Hub overlay ride the existing layer plumbing.
+  const par = panel.querySelector("#dd-parcels-show");
+  if (par) par.addEventListener("change", (e) => {
+    setParcelsVisible(e.target.checked);
+    const cb = document.getElementById("parcels-show");
+    if (cb) cb.checked = e.target.checked;
+    if (e.target.checked && map.getZoom() < 13.2)
+      map.easeTo({ zoom: 13.4, duration: 500 });   // outlines start at z13
+  });
+  const hel = panel.querySelector("#dd-heland-show");
+  if (hel) hel.addEventListener("change", (e) => {
+    toggleMapOverlay("he_land", e.target.checked);
+    const cb = document.querySelector('input[data-ov="he_land"]');
+    if (cb) cb.checked = e.target.checked;
+  });
 
   const radius = panel.querySelector("#dd-developable-radius");
   if (radius) radius.addEventListener("change", (e) => {
@@ -10980,8 +11001,8 @@ function ddIcon(name) {
 }
 
 const DD_GROUP_ICON = {
-  keyfacts: "landmark", capacity: "home", connectivity: "train",
-  market: "trend", need: "pulse",
+  keyfacts: "landmark", capacity: "home", plots: "map",
+  connectivity: "train", market: "trend", need: "pulse",
 };
 
 // One dashboard group: an accent-coloured card wrapping the header (icon
@@ -11037,6 +11058,7 @@ async function fetchDdContext(station) {
     if (typeof renderDeepDiveViability === "function" && deep.developableResult)
       renderDeepDiveViability();
   });
+  fetchMajorApps(deep.stationCentre, station.crs).then(renderMajorApps);
   try {
     const centre = deep.stationCentre;
     const [ctx, arow] = await Promise.all([
@@ -11071,6 +11093,68 @@ async function fetchDdContext(station) {
   renderDdConnectivityDetail();
   renderDdConstraintsDetail();
   renderDdHeadlines();
+}
+
+// ---- Major applications near the station (PlanIt, live) --------------------
+// "Major development" is the statutory test (DMPO 2015 art.2): 10+ dwellings
+// or a residential site of 0.5 ha+, or 1,000 m²+ of floorspace / a 1 ha+
+// site for other uses. PlanIt's app_size = "Large" mirrors that
+// classification as councils publish it, so it is the operational proxy —
+// queried live within the 800 m catchment, back to 2015. Refused schemes
+// matter as much as approved ones: they are the political read.
+const _majorAppsCache = new Map();
+async function fetchMajorApps(centre, crs) {
+  if (!centre) return null;
+  if (crs && _majorAppsCache.has(crs)) return _majorAppsCache.get(crs);
+  try {
+    const u = "https://www.planit.org.uk/api/applics/json?lat=" + centre[1].toFixed(5) +
+      "&lng=" + centre[0].toFixed(5) + "&krad=0.8&app_size=Large&pg_sz=100" +
+      "&start_date=2015-01-01&sort=-start_date";
+    const r = await fetch(u, { headers: { Accept: "application/json" } });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    const recs = (j.records || []).map(x => ({
+      uid: x.name, state: x.app_state || "Undecided", type: x.app_type || "",
+      desc: (x.description || "").slice(0, 180), address: (x.address || "").slice(0, 90),
+      started: x.start_date || null, decided: x.decided_date || null,
+      distM: x.distance != null ? Math.round(x.distance * 1000) : null,
+      link: x.link || ("https://www.planit.org.uk/planapplic/" + x.name + "/"),
+    }));
+    if (crs) _majorAppsCache.set(crs, recs);
+    return recs;
+  } catch (e) { console.error("PlanIt major apps failed", e); return null; }
+}
+
+function renderMajorApps(recs) {
+  const el = document.getElementById("dd-majorapps");
+  if (!el) return;
+  if (recs == null) {
+    el.innerHTML = `<p class="hint">PlanIt unavailable right now — try reopening the dive.</p>`;
+    return;
+  }
+  if (!recs.length) {
+    el.innerHTML = `<p class="hint">No major applications (PlanIt "Large" — the statutory 10+ homes / 1,000 m²+ test) within 800 m since 2015. Quiet pipeline: nothing consented to compete with, and no refusal history to learn from.</p>`;
+    return;
+  }
+  const ok = recs.filter(r => r.state === "Permitted" || r.state === "Conditions").length;
+  const no = recs.filter(r => r.state === "Rejected").length;
+  const open = recs.filter(r => ["Undecided", "Referred", "Unresolved"].includes(r.state)).length;
+  const stCls = s => s === "Permitted" || s === "Conditions" ? "dd-ok"
+    : s === "Rejected" ? "dd-warn" : "";
+  const rows = recs.slice(0, 12).map(r => `
+    <a class="dd-app-row" href="${r.link}" target="_blank" rel="noopener">
+      <span class="dd-app-state ${stCls(r.state)}">${escapeSift(r.state)}</span>
+      <span class="dd-app-body"><b>${escapeSift(r.address || r.uid)}</b>
+        <span class="dd-app-desc">${escapeSift(r.desc)}</span></span>
+      <span class="dd-app-meta">${r.distM != null ? r.distM + " m" : ""}<br>${escapeSift((r.decided || r.started || "").slice(0, 7))}</span>
+    </a>`).join("");
+  el.innerHTML =
+    `<p class="hint" style="margin:0 0 6px"><b>${recs.length}</b> major application${recs.length === 1 ? "" : "s"} within 800 m since 2015 — ` +
+    `<b class="dd-ok">${ok} approved</b> · <b class="dd-warn">${no} refused</b> · ${open} undecided. ` +
+    `"Major" = PlanIt's Large class, mirroring the statutory test (10+ homes, 0.5 ha+ residential, or 1,000 m²+ / 1 ha+ other).</p>` +
+    `<div class="dd-app-list">${rows}</div>` +
+    (recs.length > 12 ? `<p class="hint" style="margin-top:4px">Showing the 12 most recent of ${recs.length}.</p>` : "") +
+    `<p class="hint" style="margin-top:4px">Live from planit.org.uk (council planning registers). Click a row for the application. Locations are the register's own geocoding — the occasional mislocated record does appear, so sanity-check addresses.</p>`;
 }
 
 const DD_PARTY_SHORT = {
@@ -11146,6 +11230,19 @@ function renderDdHeadlines() {
                fr < 0.15 ? "ok" : fr < 0.35 ? "warn" : "bad", null, "shield")
       : ddPillNA("Planning friction", null, "shield"));
     set("capacity", pills.join(""));
+  }
+
+  // --- Plots & ownership ---------------------------------------------------
+  {
+    const pl = deep.publicLand;
+    const pills = [];
+    pills.push(pl && pl.n_parcels != null
+      ? ddPill(Number(pl.n_parcels).toLocaleString(), "Public parcels", null, null, "map")
+      : ddPillNA("Public parcels", "toggle on", "map"));
+    pills.push(pl && pl.total_ha != null
+      ? ddPill(Number(pl.total_ha).toFixed(1) + " <small>ha</small>", "Public land", null, null, "landmark")
+      : ddPillNA("Public land", "toggle on", "landmark"));
+    set("plots", pills.join(""));
   }
 
   // --- Connectivity --------------------------------------------------------
@@ -11308,6 +11405,14 @@ function buildDeepDivePanel(meta) {
     <div class="dd-body${meta.station ? " dd-body5" : ""}">
       ${meta.station ? ddGroup("keyfacts", "Key facts", `
         <div id="dd-keyfacts-detail"><p class="hint">Looking up the local authority…</p></div>
+        <section class="dd-block collapsed" data-section="majorapps">
+          <button class="dd-block-head" type="button" aria-expanded="false">
+            <span class="dd-h">Planning pipeline — major applications</span><span class="dd-caret">▾</span>
+          </button>
+          <div class="dd-block-content">
+            <div id="dd-majorapps"><p class="hint">Loading nearby major applications…</p></div>
+          </div>
+        </section>
         ${stationSectionHTML(meta.station)}`)
       + ddGroup("capacity", "Capacity · yield", `
       ${developableSectionHTML(meta.station)}
@@ -11330,6 +11435,22 @@ function buildDeepDivePanel(meta) {
         </div>
       </section>
       <section class="dd-synthesis" id="dd-synthesis"></section>`)
+      + ddGroup("plots", "Plots & ownership", `
+        <p class="hint">Who owns the land around the developable zones. Parcel outlines are HMLR INSPIRE (every registered title's index polygon); public ownership is CCOD matched to those parcels (best-quality first — published coordinates/UPRNs, then postcode-centroid joins); Homes England's Land Hub shows the agency's own sites coming to market.</p>
+        <label class="dd-row dd-row-all">
+          <input type="checkbox" class="enable" id="dd-parcels-show" />
+          <span class="dd-label"><strong>Land ownership plots</strong> <span class="hint">(HMLR INSPIRE, z13+)</span></span>
+        </label>
+        <label class="dd-row dd-row-all">
+          <input type="checkbox" class="enable" id="dd-publicland-show" />
+          <span class="dd-label"><strong>Publicly-owned plots</strong> <span class="hint">(highlighted + listed)</span></span>
+          <span class="dd-stat" id="dd-publicland-status"></span>
+        </label>
+        <label class="dd-row dd-row-all">
+          <input type="checkbox" class="enable" id="dd-heland-show" />
+          <span class="dd-label"><strong>Homes England land</strong> <span class="hint">(Land Hub disposals)</span></span>
+        </label>
+        <div id="dd-publicland-summary"></div>`)
       + ddGroup("connectivity", "Connectivity", `
         <div id="dd-connectivity-detail"></div>`)
       + ddGroup("market", "Market · viability", `
