@@ -8353,6 +8353,29 @@ function persistSavedLayouts(list) {
 }
 let _savedLayouts = loadSavedLayouts();
 
+// One saved layout PER SITE: dedupe by a geometry signature of the assembled
+// parcels, never by name — unnamed assemblies on different plots must coexist,
+// while re-saving the same site replaces its earlier layout.
+function siteSigOf(feats) {
+  const c = JSON.stringify(feats.map(f => f.geometry && f.geometry.coordinates));
+  let h = 0;
+  for (let i = 0; i < c.length; i += 7) h = (h * 31 + c.charCodeAt(i)) | 0;
+  return h + ":" + c.length;
+}
+function saveLayoutEntry(entry) {
+  _savedLayouts = [..._savedLayouts.filter(s =>
+    entry.sig ? s.sig !== entry.sig : s.id !== entry.id), entry].slice(-6);
+  // keep chip names tellable-apart when defaults collide
+  const seen = {};
+  for (const sl of _savedLayouts) {
+    const base = sl.name.replace(/ · \d+$/, "");
+    seen[base] = (seen[base] || 0) + 1;
+    sl.name = seen[base] > 1 ? base + " · " + seen[base] : base;
+  }
+  persistSavedLayouts(_savedLayouts);
+  try { renderSavedLayoutsOnMap(); } catch (e2) { console.warn(e2); }
+}
+
 const _SL_BTYPE_COLORS = ["match", ["get", "btype"],
   "det", "#e8590c", "semi", "#f59f00", "terr", "#fab005", "flat", "#7048e8",
   "#e8590c"];
@@ -8426,7 +8449,7 @@ function renderSavedLayoutsChip() {
 map.on("load", () => { try { renderSavedLayoutsOnMap(); } catch (e) { console.warn(e); } });
 // harness/debug access
 window._slTest = {
-  add: (e) => { _savedLayouts = [..._savedLayouts, e].slice(-6); persistSavedLayouts(_savedLayouts); renderSavedLayoutsOnMap(); },
+  add: (e) => saveLayoutEntry(e),
   list: () => _savedLayouts, wf: (id) => openLayoutWaterfall(_savedLayouts.find(s => s.id === id)),
 };
 
@@ -8593,7 +8616,7 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws146");
+      const mod = await import("./layoutgen.js?v=ws147");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       // Hard constraints INSIDE the site become no-build exclusion zones in
@@ -8629,6 +8652,7 @@ function openCompileModal() {
           const netHa = totHa * (_compileState.netPct || 75) / 100;
           const entry = {
             id: "sl" + Date.now().toString(36),
+            sig: siteSigOf(feats),
             name: name || "Generated layout",
             created: Date.now(),
             fc, stats,
@@ -8643,9 +8667,7 @@ function openCompileModal() {
               greenBeltShare: deepGbShare(),
             },
           };
-          _savedLayouts = [..._savedLayouts.filter(s => s.name !== entry.name), entry].slice(-6);
-          persistSavedLayouts(_savedLayouts);
-          try { renderSavedLayoutsOnMap(); } catch (e2) { console.warn(e2); }
+          saveLayoutEntry(entry);
         },
         onAdopt: ({ units, flatsPct }) => {
           const netPctIn = m.querySelector("#cm-netpct");
