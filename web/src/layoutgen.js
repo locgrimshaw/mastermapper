@@ -182,6 +182,8 @@ function distToBoundary(x, y, rings) {
 // Building footprint for a lot — one source of truth for the renderer and
 // the solar engine. Returns the closed quad plus eaves-ish height.
 function bldQuad(l) {
+  if (l.corner)
+    return { quad: l.quad, h: l.storeys === 2 ? 6.8 : 9.5 };
   const { tx, ty, nx, ny } = l;
   const p0 = l.quad[0];
   const w0 = TYPES[l.type].w;
@@ -215,12 +217,20 @@ function _rayHitsQuad(px, py, dx, dy, maxT, quad) {
 function computeSun(cand, site) {
   if (cand._sun) return cand._sun;
   const phi = (site.lat0 || 52) * Math.PI / 180;
-  const blds = cand.lots.map(l => {
+  const blds = [];
+  for (const l of cand.lots) {
+    if (l.bwings) {
+      const h2 = l.storeys === 2 ? 6.8 : 9.5;
+      for (const w of l.bwings)
+        blds.push({ quad: w, h: h2,
+                    cx: (w[0][0] + w[2][0]) / 2, cy: (w[0][1] + w[2][1]) / 2 });
+      continue;
+    }
     const b = bldQuad(l);
-    return { quad: b.quad, h: b.h,
-             cx: (b.quad[0][0] + b.quad[2][0]) / 2,
-             cy: (b.quad[0][1] + b.quad[2][1]) / 2 };
-  });
+    blds.push({ quad: b.quad, h: b.h,
+                cx: (b.quad[0][0] + b.quad[2][0]) / 2,
+                cy: (b.quad[0][1] + b.quad[2][1]) / 2 });
+  }
   const hoursLit = [];
   for (const l of cand.lots) {
     if (l.type === "flat") continue;
@@ -803,6 +813,101 @@ function generateCandidate(site, params, genome) {
     }
   }
   };
+  // --- corner-first flat blocks ---------------------------------------------
+  // Blocks of flats anchor junctions: L-shaped floor plates (~13.5 m deep,
+  // dual-aspect) wrap street corners, shaped to the junction's own angles.
+  // Mid-span rectangles remain only as the fallback when corners run out.
+  const placeCornerFlats = () => {
+    if (mixShares.flat <= 0) return;
+    const samp = [];
+    roads.forEach((r, ri) => {
+      for (let i = 1; i < r.pts.length; i++) {
+        const a = r.pts[i - 1], b = r.pts[i];
+        const L2 = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        samp.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2,
+                   (b[0] - a[0]) / L2, (b[1] - a[1]) / L2, ri]);
+      }
+    });
+    const nodes = [];
+    for (let i = 0; i < samp.length; i++)
+      for (let j = i + 1; j < samp.length; j++) {
+        if (samp[i][4] === samp[j][4]) continue;
+        const dx = samp[i][0] - samp[j][0], dy = samp[i][1] - samp[j][1];
+        if (dx * dx + dy * dy > 36) continue;
+        const J = [(samp[i][0] + samp[j][0]) / 2, (samp[i][1] + samp[j][1]) / 2];
+        if (nodes.some(n => Math.hypot(n.x - J[0], n.y - J[1]) < 18)) continue;
+        nodes.push({ x: J[0], y: J[1],
+                     ta: [samp[i][2], samp[i][3]], tb: [samp[j][2], samp[j][3]],
+                     wa: STREETS[roads[samp[i][4]].type].corridor / 2,
+                     wb: STREETS[roads[samp[j][4]].type].corridor / 2 });
+      }
+    for (let i = nodes.length - 1; i > 0; i--) {
+      const j2 = (rnd() * (i + 1)) | 0;
+      const t2 = nodes[i]; nodes[i] = nodes[j2]; nodes[j2] = t2;
+    }
+    const D = 13.5;                    // dual-aspect residential plate depth
+    // corner pass runs before anything else exists, so it works to an
+    // upfront flats budget (expected capacity x the dial), not a live share
+    const estTotal = Math.min(targetUnits,
+      (site.areaM2 / 1e4) * Math.max(20, params.density) * params.netPct / 100);
+    const budget = estTotal * mixShares.flat;
+    for (const nd of nodes) {
+      if (total >= targetUnits || placed.flat >= budget) break;
+      let done = false;
+      for (const sa of [1, -1]) {
+        if (done) break;
+        for (const sb of [1, -1]) {
+          if (done) break;
+          const u = [nd.ta[0] * sa, nd.ta[1] * sa];
+          const v2 = [nd.tb[0] * sb, nd.tb[1] * sb];
+          const cross = u[0] * v2[1] - u[1] * v2[0];
+          const ang = Math.atan2(Math.abs(cross), u[0] * v2[0] + u[1] * v2[1]);
+          if (ang < 0.9 || ang > 2.25) continue;   // corner too shallow/reflex
+          const sinA = Math.abs(cross);
+          for (const [LA, LB] of [[26, 20], [21, 16], [18, 0]]) {
+            const rect = LB < D + 2.5;             // single-wing fallback
+            const PA = LA + 1.6, PB = (rect ? D + 9 : LB) + 1.6;
+            const O = [nd.x + u[0] * (nd.wb + 1.4) + v2[0] * (nd.wa + 1.4),
+                       nd.y + u[1] * (nd.wb + 1.4) + v2[1] * (nd.wa + 1.4)];
+            const P = (s2, t3) => [O[0] + u[0] * s2 + v2[0] * t3,
+                                   O[1] + u[1] * s2 + v2[1] * t3];
+            const quad = [P(0, 0), P(PA, 0), P(PA, PB), P(0, PB), P(0, 0)];
+            if (!tryQuad(quad)) continue;
+            const plate = (rect ? LA * D : LA * D + (LB - D) * D) * sinA;
+            const uu2 = Math.floor(plate * 2 / 82), uu3 = Math.floor(plate * 3 / 82);
+            const left = budget - placed.flat;
+            const err = uu => Math.abs(uu - left);
+            const storeys = err(uu2) <= err(uu3) ? 2 : 3;
+            const units = storeys === 2 ? uu2 : uu3;
+            if (units < 6) continue;
+            if (units > left + 5) { done = true; break; }   // would blow the dial
+            const m3 = 0.8;
+            const wingA = [P(m3, m3), P(LA, m3), P(LA, m3 + D), P(m3, m3 + D), P(m3, m3)];
+            let bp, bwings, court;
+            if (rect) {
+              bp = wingA; bwings = [wingA];
+              court = [P(m3 + 1, m3 + D + 1.2), P(LA - 1, m3 + D + 1.2),
+                       P(LA - 1, PB - 1), P(m3 + 1, PB - 1), P(m3 + 1, m3 + D + 1.2)];
+            } else {
+              bp = [P(m3, m3), P(LA, m3), P(LA, m3 + D), P(m3 + D, m3 + D),
+                    P(m3 + D, LB), P(m3, LB), P(m3, m3)];
+              bwings = [wingA,
+                [P(m3, m3), P(m3 + D, m3), P(m3 + D, LB), P(m3, LB), P(m3, m3)]];
+              court = [P(m3 + D + 1.2, m3 + D + 1.2), P(PA - 1, m3 + D + 1.2),
+                       P(PA - 1, PB - 1), P(m3 + D + 1.2, PB - 1), P(m3 + D + 1.2, m3 + D + 1.2)];
+            }
+            lots.push({ quad, type: "flat", corner: true, side: 1, runId: null,
+                        row: null, spos: 0, front: [quad[0], quad[1]],
+                        tx: u[0], ty: u[1], nx: v2[0], ny: v2[1],
+                        units, storeys, jit: 0, bpoly: bp, bwings, court });
+            placed.flat += units; total += units;
+            done = true; break;
+          }
+        }
+      }
+    }
+  };
+  placeCornerFlats();
   placePass(1);
   placePass(0.55);
 
@@ -989,6 +1094,7 @@ function generateCandidate(site, params, genome) {
         * (l.type === "det" ? 1.35 : l.type === "terr" ? 0.8 : 1);
   const exts = [];
   for (const l of lots) {
+    if (l.corner) { exts.push([0, 0]); continue; }
     const w0 = TYPES[l.type].w;
     const rear0 = l.type === "flat" ? Math.max(0, FLAT_PLOT_D - FLAT_BLD_D - 4) : gardenDepth;
     let capExt = Math.min(24, Math.max(0, (gardenMaxOf(l) - rear0 * w0) / w0));
@@ -1050,6 +1156,7 @@ function generateCandidate(site, params, genome) {
   {
     const rows = new Map();
     for (const l of lots) {
+      if (l.row == null) continue;
       let arr = rows.get(l.row); if (!arr) rows.set(l.row, arr = []);
       arr.push(l);
     }
@@ -1353,6 +1460,14 @@ function svgOf(cand, site, w, h, detail) {
   }
   // driveways, parking courts, then houses (shadow + body + ridge)
   for (const l of cand.lots) {
+    if (l.corner) {
+      // corner block: courtyard, then the L-shaped plate with its shadow
+      if (detail && l.court) out += `<path d="${path([l.court])}" fill="#cfd5da"/>`;
+      if (detail)
+        out += `<path d="${path([l.bpoly.map(p => [p[0] + 0.9, p[1] - 0.9])])}" fill="rgba(33,37,41,0.28)"/>`;
+      out += `<path d="${path([l.bpoly])}" fill="${TYPES.flat.color}"${detail ? ` stroke="#ffffff" stroke-width="0.45"` : ""}/>`;
+      continue;
+    }
     const { tx, ty, nx, ny } = l;
     const p0 = l.quad[0];
     if (detail && (l.type === "det" || l.type === "semi")) {
@@ -1744,8 +1859,10 @@ export function openLayoutGen(ctx) {
                 max dials (Essex Design Guide benchmark 100 m²; detached
                 +35%, terraces −20%), meeting opposing fences midway — no
                 phantom developable land left on the plan.</li>
-              <li>Flats get communal amenity gardens at ~22 m²/unit behind
-                the parking court.</li>
+              <li>Flat blocks seek corner sites first: L-shaped dual-aspect
+                plates (~13.5 m deep) wrap junctions with a parking court and
+                communal courtyard behind; mid-span rectangles only when
+                corners run out. Flats get ~22 m²/unit communal amenity.</li>
               <li>Parking: dial per house on-plot + 0.25 visitor/home
                 (typical SPD rates); flats 1.25/unit in courts.</li>
               <li>Exclusion zones: flood zones 2/3, ancient woodland, SSSI/SAC/

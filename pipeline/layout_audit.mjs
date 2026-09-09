@@ -171,6 +171,7 @@ const report = await page.evaluate(() => {
     greensN: (cand.greens || []).length,
     greensM2: Math.round((cand.greens || []).reduce((a, g) => a + g.cells.length * 36, 0)),
     stats: cand.stats && { total: cand.stats.total, density: cand.stats.density.toFixed(1), green: (cand.stats.greenPct * 100).toFixed(0) },
+    flats: { blocks: lots.filter(l => l.type === 'flat').length, corner: lots.filter(l => l.corner).length },
   };
 });
 console.log(JSON.stringify(report, null, 1));
