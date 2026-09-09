@@ -375,15 +375,21 @@ function buildPartNetwork(part, site, params, genome, rnd, E0, roads, heads, roa
   const bp = part.boundary;
   const isMain = part.main;
 
-  // entrance for this part
+  // entrance for this part: the main part takes the RESOLVED entrance from
+  // the caller (a user pin when one is set, else the genome's choice) — it
+  // must never re-derive from the genome or pinned entrances are ignored.
+  // Other parts anchor to the nearest pin when pins exist, else to E0.
   let E = bp[0];
-  if (isMain) E = bp[Math.floor(genome.tE * bp.length) % bp.length];
+  if (isMain) E = E0;
   else {
+    const anchors = (params.entrances && params.entrances.length)
+      ? params.entrances : [E0];
     let bd = 1e18;
-    for (const p of bp) {
-      const d = Math.hypot(p[0] - E0[0], p[1] - E0[1]);
-      if (d < bd) { bd = d; E = p; }
-    }
+    for (const a2 of anchors)
+      for (const p of bp) {
+        const d = Math.hypot(p[0] - a2[0], p[1] - a2[1]);
+        if (d < bd) { bd = d; E = p; }
+      }
   }
 
   // tiny or thin parts: a shared-surface lane tracing just inside the
