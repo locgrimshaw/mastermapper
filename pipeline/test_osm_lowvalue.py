@@ -78,9 +78,12 @@ add("biggest West End car park", {"amenity": "parking", "parking": "surface"}, 6
 # genuine out-of-town retail park and must survive.
 add("Fosse-style district", {"landuse": "retail"}, 250, -1.1955, 52.5855, "osm_retail")
 add("Fosse-style car park", {"amenity": "parking", "parking": "surface"}, 140, -1.1938, 52.5855, "osm_parking")
-# Some major retail parks are mapped landuse=commercial, not retail. Large +
-# large car park must qualify; a city commercial block must not.
-add("commercial retail park", {"landuse": "commercial"}, 250, -1.4500, 53.4000, "osm_retail")
+# landuse=commercial with the out-of-town signature is a BUSINESS PARK or
+# trading estate, not retail. The first build that admitted these under
+# "retail park" produced Slough Trading Estate, Gloucester Business Park and
+# Chester Business Park, so they now classify as industrial. A city
+# commercial block must still fall out entirely.
+add("commercial business park", {"landuse": "commercial"}, 250, -1.4500, 53.4000, "osm_industrial")
 add("its car park", {"amenity": "parking", "parking": "surface"}, 140, -1.4483, 53.4000, "osm_parking")
 add("city commercial block", {"landuse": "commercial"}, 120, -0.0900, 51.5150, None)
 add("city service parking", {"amenity": "parking", "parking": "surface"}, 60, -0.0895, 51.5150, "osm_parking")
@@ -91,6 +94,14 @@ add("warehouse 1-storey", {"building": "warehouse", "building:levels": "1"}, 90,
 add("industrial estate", {"landuse": "industrial"}, 200, O[0] + 0.004, O[1] + 0.01, "osm_industrial")
 add("5-storey factory", {"building": "factory", "building:levels": "5"}, 60, O[0] + 0.008, O[1] + 0.01, None)
 add("tall shed (18 m)", {"building": "warehouse", "height": "18"}, 70, O[0] + 0.012, O[1] + 0.01, None)
+# building=commercial: a low-rise office/trade shed on its own surface parking
+# is an underutilised business site; a tall one and an unparked one are not.
+C = (-1.3400, 52.4300)
+add("commercial shed", {"building": "commercial", "building:levels": "2"}, 60, C[0], C[1], "osm_industrial")
+add("commercial shed parking", {"amenity": "parking", "parking": "surface"}, 90, C[0] + 0.0007, C[1], "osm_parking")
+add("6-storey office", {"building": "commercial", "building:levels": "6"}, 60, C[0] + 0.004, C[1], None)
+add("office park parking", {"amenity": "parking", "parking": "surface"}, 90, C[0] + 0.0047, C[1], "osm_parking")
+add("commercial shed, no parking", {"building": "commercial", "building:levels": "1"}, 60, C[0] + 0.010, C[1], None)
 
 # --- other classes ---------------------------------------------------------
 add("multi-storey car park", {"amenity": "parking", "parking": "multi-storey"}, 70, O[0] + 0.016, O[1] + 0.01, None)

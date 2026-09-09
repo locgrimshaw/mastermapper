@@ -25,9 +25,11 @@ forestry buildings; and land where restoration has been secured. Those are
 applied as hard filters, not scored afterwards — a coverage-driven model with
 no exclusions surfaces every school field and allotment in England.
 
-Golf courses, driving ranges and garden centres are large and low-value but
-are NOT previously developed land unless they carry permanent structures, so
-they get their own class flagged `pdl: false` rather than being mixed in.
+Golf courses, driving ranges and similar large low-density leisure land are
+big and cheap but are NOT previously developed land unless they carry
+permanent structures, so they get their own class flagged `pdl: false` rather
+than being mixed in. Garden centres are the exception: they are a big-box
+retail format with their own car park, so they classify as retail.
 
 RETAIL IS THE HARD ONE, and the first cut got it badly wrong. `landuse=retail`
 in OSM is a DISTRICT tag: it blankets Oxford Street, Regent Street and Mayfair
@@ -120,7 +122,7 @@ EXCLUDE_LEISURE = {
 
 # class -> (label, previously-developed-land status, NPPF policy hook)
 CLASS_META = {
-    "osm_industrial": ("Industrial land & sheds", True, "L2(1)(b) underutilised business sites"),
+    "osm_industrial": ("Industrial estates & business parks", True, "L2(1)(b) underutilised business sites"),
     "osm_retail":     ("Retail sheds & parks", True, "L2(1)(b) underutilised retail sites"),
     "osm_parking":    ("Surface car parks", True, "L2(1)(b) car parks no longer required"),
     "osm_storage":    ("Yards, depots & lock-ups", True, "L2(1)(b) service yards and lock-ups"),
@@ -223,8 +225,7 @@ def classify(t, area=0.0, near_parking=False, big_parking=False):
     # --- 4. retail sheds & parks -------------------------------------------
     # Three gates, because OSM's retail tags describe SHOPS and DISTRICTS, not
     # redevelopment opportunities (see the note at the top of this file).
-    is_retailish = (lu in ("retail", "commercial")
-                    or bld in ("retail", "supermarket", "commercial") or shop)
+    is_retailish = (lu == "retail" or bld in ("retail", "supermarket") or shop)
     if is_retailish:
         if shop in NEVER_RETAIL_SHOPS:
             return None, None                  # department stores are landmarks
@@ -244,34 +245,44 @@ def classify(t, area=0.0, near_parking=False, big_parking=False):
         #     nearby parking — that put 11,054 districts, six of them in the
         #     West End, into the layer. Districts go through gate (d) instead.
         if area >= MIN_RETAIL_SHED_M2 and near_parking:
-            if bld in ("retail", "supermarket", "commercial"):
+            if bld in ("retail", "supermarket"):
                 return "osm_retail", bld
             if shop in ("supermarket", "furniture", "hardware"):
                 return "osm_retail", shop
-        # (d) a LARGE retail/commercial district with a LARGE car park: the
-        #     out-of-town signature no city centre can fake. Some major retail
-        #     parks are mapped as landuse=commercial rather than retail, and
-        #     many carry no "retail park" in the name, so both land uses are
-        #     eligible HERE ONLY — never on ordinary nearby parking.
-        if lu in ("retail", "commercial") and area >= MIN_RETAIL_DISTRICT_M2 and big_parking:
+        # (d) a LARGE retail district with a LARGE car park: the out-of-town
+        #     signature no city centre can fake. Many genuine retail parks
+        #     carry no "retail park" in the name, so the district tag IS
+        #     eligible here — but never on ordinary nearby parking.
+        #     landuse=commercial is deliberately NOT eligible here: sampling
+        #     showed it is business parks and trading estates, which are
+        #     classified as industrial below.
+        if lu == "retail" and area >= MIN_RETAIL_DISTRICT_M2 and big_parking:
             return "osm_retail", "retail_park"
-        # anything else retail-tagged is a shop or a district, not a site.
-        # landuse=commercial falls through to the industrial branch below,
-        # where an unnamed commercial estate is still a legitimate lead.
-        if lu == "retail" or bld in ("retail", "supermarket", "commercial") or shop:
+        # anything else retail-tagged is a shop or a district, not a site
+        if lu == "retail" or bld in ("retail", "supermarket") or shop:
             return None, None
 
     # --- 5. industrial land & sheds ----------------------------------------
     if lu == "industrial":
         return "osm_industrial", "industrial_land"
+    # Business parks and trading estates: landuse=commercial land with the
+    # out-of-town signature (large site, large surface car park). Sampling the
+    # first build that admitted these showed what they really are — Slough
+    # Trading Estate, Gloucester Business Park, Chester Business Park — so they
+    # belong here and NOT under retail, where "retail park" misdescribed them.
+    # Single- and two-storey sheds on vast surface parking is exactly the
+    # "underutilised business sites" NPPF L2(1)(b) names.
+    if lu == "commercial" and area >= MIN_RETAIL_DISTRICT_M2 and big_parking:
+        return "osm_industrial", "business_park"
+    if (bld == "commercial" and area >= MIN_RETAIL_SHED_M2
+            and near_parking and is_lowrise(t)):
+        return "osm_industrial", "commercial_shed"
     if bld in ("industrial", "warehouse", "factory", "manufacture", "hangar"):
         return ("osm_industrial", bld) if is_lowrise(t) else (None, None)
 
     # --- 6. large low-density leisure — explicitly NOT PDL -----------------
     if leis in ("golf_course", "driving_range", "track", "water_park", "marina"):
         return "osm_leisure_lowdensity", leis
-    if shop == "garden_centre":
-        return "osm_leisure_lowdensity", "garden_centre"
     return None, None
 
 
