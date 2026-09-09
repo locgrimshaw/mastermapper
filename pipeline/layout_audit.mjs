@@ -50,7 +50,9 @@ await page.evaluate(async ({ flats, siteKind }) => {
     ppm2: 5200, assumptions: { flatMixPct: flats, salesAdjPct: 120, buildPm2House: 1900, buildPm2Flat: 2200, sitePrepPerPlot: 6, infraPerPlot: 8 },
     onAdopt: () => {} });
 }, { flats: FLATS, siteKind: SITE });
-await page.waitForTimeout(16000);
+await page.waitForTimeout(1500);
+await page.evaluate(() => document.getElementById('lg-run')?.click());
+await page.waitForTimeout(15000);
 
 const report = await page.evaluate(() => {
   const cand = window.__lgShow, site = window.__lgSite, T2 = window.__lgMod._test;

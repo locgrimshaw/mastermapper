@@ -700,8 +700,8 @@ function generateCandidate(site, params, genome) {
 
   // every plot edge is sampled (~3 m) so a street can never thread between
   // the corner test points of a deep plot
-  const ptBad = (px, py) => !inAnyPoly(px, py, site.polys) || onRoad(px, py)
-    || inAnyPoly(px, py, site.exclusionPolys);
+  const ptBad = (px, py) => !site.inSite(px, py) || onRoad(px, py)
+    || site.inExcl(px, py);
   const tryQuad = (quad) => {
     const cx = (quad[0][0] + quad[2][0]) / 2, cy = (quad[0][1] + quad[2][1]) / 2;
     if (ptBad(cx, cy)) return false;
@@ -850,9 +850,9 @@ function generateCandidate(site, params, genome) {
       for (let ix = 0; ix < gCols; ix++)
         for (let iy = 0; iy < gRows; iy++) {
           const cx = site.minX + (ix + 0.5) * GCELL, cy = site.minY + (iy + 0.5) * GCELL;
-          if (!inAnyPoly(cx, cy, site.polys)) continue;
+          if (!site.inSite(cx, cy)) continue;
           if (onRoad(cx, cy)) continue;
-          if (inAnyPoly(cx, cy, site.exclusionPolys)) continue;
+          if (site.inExcl(cx, cy)) continue;
           if (greenMask.has(gKey(ix, iy))) continue;
           if (lotHitFn(cx, cy, null) >= 0) {
             // mop-up pass (minSeed 0): a cell straddling a fence still counts
@@ -863,7 +863,7 @@ function generateCandidate(site, params, genome) {
             let clear = false;
             for (const [qa, qb] of [[q, q], [-q, q], [q, -q], [-q, -q]])
               if (lotHitFn(cx + qa, cy + qb, null) < 0 && !onRoad(cx + qa, cy + qb)
-                  && inAnyPoly(cx + qa, cy + qb, site.polys)) { clear = true; break; }
+                  && site.inSite(cx + qa, cy + qb)) { clear = true; break; }
             if (!clear) continue;
           }
           open.add(gKey(ix, iy));
@@ -999,8 +999,8 @@ function generateCandidate(site, params, genome) {
         let ext = 0;
         for (let d = 1; d <= capExt; d += 1) {
           const px = corner[0] + l.nx * d, py = corner[1] + l.ny * d;
-          if (!inAnyPoly(px, py, site.polys) || onRoad(px, py)
-              || inAnyPoly(px, py, site.exclusionPolys) || inGreen(px, py)) break;
+          if (!site.inSite(px, py) || onRoad(px, py)
+              || site.inExcl(px, py) || inGreen(px, py)) break;
           const hit = lotHit(px, py, l);
           if (hit >= 0) {
             const o = lots[hit];
@@ -1024,8 +1024,8 @@ function generateCandidate(site, params, genome) {
         const nS = Math.max(1, Math.ceil(eL2 / 2.5));
         for (let s2 = 0; s2 <= nS; s2++) {
           const px = a[0] + (b[0] - a[0]) * s2 / nS, py = a[1] + (b[1] - a[1]) * s2 / nS;
-          if (!inAnyPoly(px, py, site.polys) || onRoad(px, py)
-              || inAnyPoly(px, py, site.exclusionPolys) || inGreen(px, py)) return false;
+          if (!site.inSite(px, py) || onRoad(px, py)
+              || site.inExcl(px, py) || inGreen(px, py)) return false;
         }
         return true;
       };
@@ -1053,8 +1053,8 @@ function generateCandidate(site, params, genome) {
       let arr = rows.get(l.row); if (!arr) rows.set(l.row, arr = []);
       arr.push(l);
     }
-    const weldOK = (x, y) => inAnyPoly(x, y, site.polys) && !onRoad(x, y)
-      && !inAnyPoly(x, y, site.exclusionPolys) && !inGreen(x, y);
+    const weldOK = (x, y) => site.inSite(x, y) && !onRoad(x, y)
+      && !site.inExcl(x, y) && !inGreen(x, y);
     for (const arr of rows.values()) {
       arr.sort((a, b) => a.spos - b.spos);
       for (let i = 0; i + 1 < arr.length; i++) {
@@ -1092,8 +1092,8 @@ function generateCandidate(site, params, genome) {
         const nS = Math.max(1, Math.ceil(eL2 / 2.5));
         for (let s2 = 0; s2 <= nS; s2++) {
           const px = a[0] + (b[0] - a[0]) * s2 / nS, py = a[1] + (b[1] - a[1]) * s2 / nS;
-          if (!inAnyPoly(px, py, site.polys) || onRoad(px, py)
-              || inAnyPoly(px, py, site.exclusionPolys)) return false;
+          if (!site.inSite(px, py) || onRoad(px, py)
+              || site.inExcl(px, py)) return false;
         }
       }
       return true;
@@ -1108,9 +1108,11 @@ function generateCandidate(site, params, genome) {
   }
 
   // --- mop-up greens: every sizeable leftover pocket becomes deliberate -----
-  // After growth and welding, any remaining pocket over ~140 m² is claimed as
-  // a shaped shared green, so nothing on the plan reads as unclaimed land.
-  {
+  // After growth and welding, any remaining pocket is claimed as a shaped
+  // shared green, so nothing on the plan reads as unclaimed land. Purely
+  // presentational (scoring never reads greens), so it runs lazily via
+  // decorate() on the layout actually shown.
+  const mopupGreens = () => {
     const lgrid2 = new Map();
     lots.forEach((l, idx) => {
       let x0 = 1e12, y0 = 1e12, x1 = -1e12, y1 = -1e12;
@@ -1134,7 +1136,7 @@ function generateCandidate(site, params, genome) {
       return -1;
     };
     carveGreens(site.areaM2, 96, 0, 90, lotHit2);
-  }
+  };
 
   // --- greens, pond, trees --------------------------------------------------
   const lotArea = lots.reduce((a, l) => a + ringArea(l.quad), 0);
@@ -1157,7 +1159,8 @@ function generateCandidate(site, params, genome) {
   // pond + street trees are display dressing, filled in lazily by decorate()
   // so the evolution loop never pays for them — see decorate() below.
   return { genome, roads, roadClip: null, fullPolys, carrPolys, heads, lots,
-           greens, stats, pond: null, trees: [], gardenDepth, ctrl };
+           greens, stats, pond: null, trees: [], gardenDepth, ctrl,
+           _mopup: mopupGreens };
 }
 
 // Display-only dressing (SuDS pond siting + street trees). Deferred out of
@@ -1166,6 +1169,7 @@ function generateCandidate(site, params, genome) {
 function decorate(cand, site) {
   if (cand._dec) return cand;
   cand._dec = true;
+  if (cand._mopup) { try { cand._mopup(); } catch (_) {} cand._mopup = null; }
   // exact street land take (union of ribbons ∩ site) for crisp display/export
   if (!cand.roadClip && cand.fullPolys.length) {
     try {
@@ -1492,6 +1496,52 @@ export function openLayoutGen(ctx) {
     feat: polys.length === 1 ? F(polys[0]) : MF(polys),
     kx, ky, ox, oy, lat0,
   };
+  // Membership bitmap: candidate generation asks "is this point in the site /
+  // an exclusion?" tens of thousands of times; answer from a 1.2 m grid and
+  // fall back to the exact polygon test only in boundary cells (state 2).
+  {
+    const SC = 1.2;
+    const bw = Math.ceil((maxX - minX) / SC) + 3, bh = Math.ceil((maxY - minY) / SC) + 3;
+    const mk = polysArr => {
+      const m = new Uint8Array(bw * bh);
+      for (let ix = 0; ix < bw; ix++)
+        for (let iy = 0; iy < bh; iy++)
+          m[ix * bh + iy] = inAnyPoly(minX + (ix - 1 + 0.5) * SC, minY + (iy - 1 + 0.5) * SC, polysArr) ? 1 : 0;
+      const un = [];
+      for (let ix = 0; ix < bw; ix++)
+        for (let iy = 0; iy < bh; iy++) {
+          const v = m[ix * bh + iy];
+          if (v === 2) continue;
+          for (let a = Math.max(0, ix - 1); a <= Math.min(bw - 1, ix + 1); a++)
+            for (let b = Math.max(0, iy - 1); b <= Math.min(bh - 1, iy + 1); b++)
+              if ((m[a * bh + b] & 1) !== (v & 1)) { un.push(ix * bh + iy); a = bw; break; }
+        }
+      for (const i of un) m[i] = 2;
+      // dilate the uncertain band one more ring for safety
+      const un2 = [];
+      for (const i of un) {
+        const ix = Math.floor(i / bh), iy = i % bh;
+        for (let a = Math.max(0, ix - 1); a <= Math.min(bw - 1, ix + 1); a++)
+          for (let b = Math.max(0, iy - 1); b <= Math.min(bh - 1, iy + 1); b++)
+            if (m[a * bh + b] !== 2) un2.push(a * bh + b);
+      }
+      for (const i of un2) m[i] = 2;
+      return m;
+    };
+    const siteMap = mk(polys);
+    const lookup = (m, polysArr) => (x, y) => {
+      const ix = Math.floor((x - minX) / SC) + 1, iy = Math.floor((y - minY) / SC) + 1;
+      if (ix < 0 || iy < 0 || ix >= bw || iy >= bh) return false;
+      const v = m[ix * bh + iy];
+      if (v !== 2) return v === 1;
+      return inAnyPoly(x, y, polysArr);
+    };
+    site.inSite = lookup(siteMap, polys);
+    site._mkExcl = () => {
+      site.inExcl = site.exclusionPolys.length
+        ? lookup(mk(site.exclusionPolys), site.exclusionPolys) : (() => false);
+    };
+  }
   // Hard-constraint exclusion zones (flood, heritage, habitat) arrive already
   // clipped to the site: no dwelling, plot or pond may land in one.
   site.exclusionPolys = [];
@@ -1506,6 +1556,7 @@ export function openLayoutGen(ctx) {
       site.exclusionArea += polyArea(lp);
     }
   }
+  site._mkExcl();
   const siteHa = areaM2 / 1e4;
 
   const params = {
@@ -1563,13 +1614,25 @@ export function openLayoutGen(ctx) {
       + ((a.loop > 0.55) === (b.loop > 0.55) ? 0 : 0.8);
   };
   const build = gnm => { try { return generateCandidate(site, params, gnm); } catch (_) { return null; } };
+  // Population rebuilds are chunked: a few candidates immediately so the view
+  // responds, the rest on idle ticks — the UI never freezes for a full build.
   const resetPop = () => {
+    if (m && m._fillT) { clearTimeout(m._fillT); m._fillT = null; }
     pop = [];
-    for (let i = 0; i < POP * 2 && pop.length < POP; i++) {
+    for (let i = 0; i < 10 && pop.length < 4; i++) {
       const c = build(randGenome()); if (c) pop.push(c);
     }
     gen = 0; best = null; bestHist = []; focusIdx = null; sinceUp = 0;
-    stepAndRender();
+    render();
+    const fill = () => {
+      m._fillT = null;
+      if (running || pop.length >= POP) return;
+      const c = build(randGenome());
+      if (c) pop.push(c);
+      render();
+      if (pop.length < POP) m._fillT = setTimeout(fill, 40);
+    };
+    m._fillT = setTimeout(fill, 40);
   };
   let sinceUp = 0;   // generations since the best score last improved
   const step = () => {
@@ -1782,7 +1845,6 @@ export function openLayoutGen(ctx) {
       c2.stroke();
     }
   };
-  const stepAndRender = () => { step(); render(); };
 
   // Evolution runs as fast as the machine allows: each tick spends up to
   // ~110 ms stepping generations back-to-back, then renders once. Display
@@ -1808,13 +1870,16 @@ export function openLayoutGen(ctx) {
     if (on) timer = setTimeout(loopTick, 0);
   };
 
+  // Sliders update their label instantly; the (costly) population rebuild is
+  // debounced so dragging stays fluid.
+  const debouncedReset = () => { clearTimeout(m._deb); m._deb = setTimeout(resetPop, 300); };
   const slider = (id, key, lbl, map) => {
     const el = m.querySelector(id);
     el.addEventListener("input", () => {
       params[key] = map ? map(Number(el.value)) : Number(el.value);
       const lab = m.querySelector(lbl);
       if (lab) lab.textContent = map ? el.value : el.value;
-      resetPop();
+      debouncedReset();
     });
   };
   slider("#lg-density", "density", "#lg-dv");
@@ -1831,7 +1896,7 @@ export function openLayoutGen(ctx) {
       params.organic = Number(el.value) / 100;
       m.querySelector("#lg-ov").textContent =
         params.organic < 0.25 ? "formal" : params.organic < 0.65 ? "relaxed" : "organic";
-      resetPop();
+      debouncedReset();
     });
   }
   m.querySelector("#lg-obj").addEventListener("change", e => { params.objective = e.target.value; resetPop(); });
@@ -1926,7 +1991,6 @@ export function openLayoutGen(ctx) {
 
   m.hidden = false;
   resetPop();
-  setRunning(true);
 }
 
 // test/harness access to internal geometry helpers (no runtime cost)
