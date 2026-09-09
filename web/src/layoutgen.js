@@ -1574,9 +1574,10 @@ function svgOf(cand, site, w, h, detail) {
   return `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">${out}</svg>`;
 }
 
-// Closing the tool keeps the evolved population in memory, so reopening the
-// generator on the same site resumes exactly where it left off.
-let _lgSession = null;
+// Closing the tool keeps the evolved population in memory, PER SITE (up to
+// four sites), so hopping between adjacent schemes resumes each one exactly
+// where it left off.
+const _lgSessions = new Map();
 
 // Shared site preparation: sliver weld, local-metre projection, disjoint
 // parts, membership bitmaps, exclusion projection. Used by the resi tool
@@ -1736,9 +1737,9 @@ export function openLayoutGen(ctx) {
     for (let i = 0; i < c.length; i += 7) h = (h * 31 + c.charCodeAt(i)) | 0;
     return h + ":" + c.length;
   })();
-  const saved = _lgSession && _lgSession.sig === sig ? _lgSession : null;
+  const saved = _lgSessions.get(sig) || null;
 
-  const params = saved ? saved.params : {
+  const baseParams = {
     objective: "target",
     density: ctx.density || 35, netPct: ctx.netPct || 80,
     flatsPct: Math.round(ctx.assumptions.flatMixPct ?? 20),
@@ -1747,8 +1748,11 @@ export function openLayoutGen(ctx) {
     entrances: [],
     ppm2: ctx.ppm2, assumptions: ctx.assumptions || {},
   };
+  // priority: live in-memory session > dials stored with a saved layout > defaults
+  const params = saved ? saved.params
+    : ctx.savedParams ? Object.assign(baseParams, ctx.savedParams) : baseParams;
   if (!params.entrances) params.entrances = [];
-  if (saved) { params.ppm2 = ctx.ppm2; params.assumptions = ctx.assumptions || {}; }
+  params.ppm2 = ctx.ppm2; params.assumptions = ctx.assumptions || {};
 
   const POP = 12;
   let pop = [], gen = 0, best = null, bestHist = [], running = false, timer = null, focusIdx = null;
@@ -2089,7 +2093,9 @@ export function openLayoutGen(ctx) {
   m.querySelector("#lg-obj").addEventListener("change", e => { params.objective = e.target.value; resetPop(); });
   m.querySelector("#lg-run").addEventListener("click", () => setRunning(!running));
   const stash = () => {
-    _lgSession = { sig, pop, best, gen, bestHist, focusIdx, params };
+    _lgSessions.delete(sig);
+    _lgSessions.set(sig, { sig, pop, best, gen, bestHist, focusIdx, params });
+    if (_lgSessions.size > 4) _lgSessions.delete(_lgSessions.keys().next().value);
   };
   const closeTool = () => { setRunning(false); stash(); m.hidden = true; };
   m.querySelector("#lg-close").addEventListener("click", closeTool);
@@ -2225,11 +2231,13 @@ export function openLayoutGen(ctx) {
     if (!cand || !ctx.onSaveLayout) return;
     decorate(cand, site);
     const st = cand.stats;
+    const { ppm2: _pp, assumptions: _aa, ...psnap } = params;
     ctx.onSaveLayout({
       fc: layoutFC(cand),
       stats: { units: st.total, density: st.density, netDevPct: st.netDevPct,
                flatsPct: Math.round(st.mix.flat * 100), gia: st.gia,
                greenPct: st.greenPct, avgGarden: st.avgGarden },
+      params: psnap,
     });
     const b2 = m.querySelector("#lg-save");
     b2.textContent = "✓ Saved — shown on the map";

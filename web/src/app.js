@@ -8426,6 +8426,7 @@ function renderSavedLayoutsChip() {
       <span class="sl-name" title="${sl.name}">${sl.name}</span>
       <span class="sl-meta">${sl.stats.units} homes · ${sl.stats.density.toFixed(1)}/ha</span>
       <button type="button" data-act="zoom" title="Zoom to layout">◎</button>
+      <button type="button" data-act="gen" title="Continue in generator">✎</button>
       <button type="button" data-act="wf" title="Viability waterfall">£</button>
       <button type="button" data-act="del" title="Remove">×</button>
     </div>`).join("");
@@ -8439,6 +8440,8 @@ function renderSavedLayoutsChip() {
       try { map.fitBounds(turf.bbox(sl.fc), { padding: 60, maxZoom: 17 }); } catch (_) {}
     } else if (btn.dataset.act === "wf") {
       openLayoutWaterfall(sl);
+    } else if (btn.dataset.act === "gen") {
+      openSavedLayoutGenerator(sl);
     } else if (btn.dataset.act === "del") {
       _savedLayouts = _savedLayouts.filter(s => s.id !== id);
       persistSavedLayouts(_savedLayouts);
@@ -8450,8 +8453,64 @@ map.on("load", () => { try { renderSavedLayoutsOnMap(); } catch (e) { console.wa
 // harness/debug access
 window._slTest = {
   add: (e) => saveLayoutEntry(e),
+  gen: (id) => openSavedLayoutGenerator(_savedLayouts.find(s => s.id === id)),
   list: () => _savedLayouts, wf: (id) => openLayoutWaterfall(_savedLayouts.find(s => s.id === id)),
 };
+
+// Reopen the generator on a saved layout's SITE to keep iterating: the site
+// geometry and dials travel with the entry, the in-memory session (if this
+// tab still holds one for that site) resumes the evolved population, and
+// re-saving updates the same entry in place.
+async function openSavedLayoutGenerator(sl) {
+  if (!sl.site || !sl.site.length) {
+    alert("This layout was saved before reopening was supported — rebuild it once from the compile view and re-save.");
+    return;
+  }
+  try {
+    const mod = await import("./layoutgen.js?v=ws149");
+    let site = sl.site[0];
+    for (let i = 1; i < sl.site.length; i++) site = _turfUnion(site, sl.site[i]);
+    const totHa = sl.site.reduce((s2, f) => s2 + (Number(f.properties.area_ha) || 0), 0)
+      || (turf.area(site) / 1e4);
+    let exclusions = [];
+    try {
+      const sb = getSupabase();
+      const bb = turf.bbox(site);
+      const { data } = await sb.rpc("constraints_in_bbox", {
+        p_kinds: ["flood_zone_3", "flood_zone_2", "ancient_woodland",
+                  "scheduled_monument", "sssi", "sac", "spa", "ramsar"],
+        w: bb[0] - 0.001, s: bb[1] - 0.001, e: bb[2] + 0.001, n: bb[3] + 0.001,
+        p_zoom: 15 });
+      for (const f of (data && data.features) || []) {
+        const clipped = _turfIntersect(site, f);
+        if (clipped) exclusions.push({ kind: (f.properties || {}).kind || "constraint",
+                                       geometry: clipped.geometry });
+      }
+    } catch (err2) { console.warn("layout exclusions unavailable", err2); }
+    const lp = sl.layoutParams || {};
+    mod.openLayoutGen({
+      site, siteHa: totHa, name: sl.name, exclusions,
+      density: lp.density || 35, netPct: lp.netPct || 75,
+      ppm2: (sl.appraisalInputs && sl.appraisalInputs.ppm2) || null,
+      assumptions: Object.assign({}, SIFT.assumptions,
+        sl.stats && sl.stats.flatsPct != null ? { flatMixPct: sl.stats.flatsPct } : {}),
+      savedParams: sl.layoutParams || null,
+      onSaveLayout: ({ fc, stats, params }) => {
+        saveLayoutEntry({
+          id: sl.id, sig: sl.sig,
+          name: sl.name.replace(/ · \d+$/, ""),
+          created: Date.now(),
+          fc, stats,
+          layoutParams: params || sl.layoutParams || null,
+          site: sl.site,
+          appraisalInputs: Object.assign({}, sl.appraisalInputs, { units: stats.units }),
+        });
+      },
+    });
+  } catch (err) {
+    console.error("saved-layout generator reopen failed", err);
+  }
+}
 
 // Full development appraisal waterfall for one saved layout, run through the
 // same engine as every other appraisal in the app, on the layout's real unit
@@ -8616,7 +8675,7 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws148");
+      const mod = await import("./layoutgen.js?v=ws149");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       // Hard constraints INSIDE the site become no-build exclusion zones in
@@ -8648,7 +8707,7 @@ function openCompileModal() {
         // affordable) runs on the layout that will actually be built.
         // Save: persist the chosen layout and draw it on the main map, with
         // everything needed for a standalone viability waterfall later.
-        onSaveLayout: ({ fc, stats }) => {
+        onSaveLayout: ({ fc, stats, params }) => {
           const netHa = totHa * (_compileState.netPct || 75) / 100;
           const entry = {
             id: "sl" + Date.now().toString(36),
@@ -8656,6 +8715,10 @@ function openCompileModal() {
             name: name || "Generated layout",
             created: Date.now(),
             fc, stats,
+            layoutParams: params || null,
+            site: feats.map(f => ({ type: "Feature",
+              properties: { area_ha: Number(f.properties.area_ha) || 0 },
+              geometry: f.geometry })),
             appraisalInputs: {
               units: stats.units, ppm2: deep.ppm2 || null,
               region: (deep.station && deep.station.region) || null,
