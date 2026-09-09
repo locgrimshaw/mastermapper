@@ -8593,7 +8593,7 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws145");
+      const mod = await import("./layoutgen.js?v=ws146");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       // Hard constraints INSIDE the site become no-build exclusion zones in
@@ -16793,7 +16793,7 @@ function openDcCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading DC layout engine…";
     try {
-      const mod = await import("./dcgen.js?v=dc1");
+      const mod = await import("./dcgen.js?v=dc2");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       let exclusions = [];

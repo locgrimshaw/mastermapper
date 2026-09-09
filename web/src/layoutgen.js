@@ -544,8 +544,19 @@ function generateCandidate(site, params, genome) {
 
   const roads = [], heads = [], roadSamples = [];
   const mainPart = site.parts.find(p => p.main);
-  const E = (genome.ov && genome.ov.E) ? genome.ov.E
-    : mainPart.boundary[Math.floor(genome.tE * mainPart.boundary.length) % mainPart.boundary.length];
+  const userEnts = params.entrances || [];
+  let E;
+  if (genome.ov && genome.ov.E) E = genome.ov.E;
+  else if (userEnts.length) {
+    // pinned entrance nearest the main part, snapped onto its boundary
+    let best = null, bd0 = 1e12;
+    for (const ep of userEnts)
+      for (const p of mainPart.boundary) {
+        const d = Math.hypot(p[0] - ep[0], p[1] - ep[1]);
+        if (d < bd0) { bd0 = d; best = p; }
+      }
+    E = best || mainPart.boundary[0];
+  } else E = mainPart.boundary[Math.floor(genome.tE * mainPart.boundary.length) % mainPart.boundary.length];
   genome._ctrlOut = {};
   for (const part of site.parts)
     buildPartNetwork(part, site, params, genome, rnd, E, roads, heads, roadSamples, plotDepth);
@@ -595,6 +606,31 @@ function generateCandidate(site, params, genome) {
       road.openEnd = false;
       if (polylineLen(road.pts) > 24) { heads.push(road.pts[road.pts.length - 1]); deadEnds++; }
     }
+  }
+
+  // user-pinned extra entrances: a connector street from each pin to the
+  // nearest street, so every declared access point is served by the network
+  for (const ep of userEnts) {
+    if (Math.hypot(ep[0] - E[0], ep[1] - E[1]) < 14) continue;
+    let bq = null, bd2 = 1e12, bpart = null;
+    for (const r of roads)
+      for (const q of r.pts) {
+        const d = Math.hypot(q[0] - ep[0], q[1] - ep[1]);
+        if (d < bd2) { bd2 = d; bq = q; bpart = r.part; }
+      }
+    if (!bq || bd2 < 10 || bd2 > 240) continue;
+    const steps = Math.max(2, Math.ceil(bd2 / 4));
+    const pts = [];
+    let ok = true;
+    for (let s2 = 0; s2 <= steps; s2++) {
+      const q = [ep[0] + (bq[0] - ep[0]) * s2 / steps,
+                 ep[1] + (bq[1] - ep[1]) * s2 / steps];
+      if (s2 > 0 && s2 < steps && !inAnyPoly(q[0], q[1], site.polys)) { ok = false; break; }
+      pts.push(q);
+    }
+    if (!ok) continue;
+    roads.push({ pts, type: "secondary", part: bpart, openStart: false, openEnd: false });
+    junctions++;
   }
 
   // --- corridors (full ribbons + carriageways) ------------------------------
@@ -1521,6 +1557,9 @@ function svgOf(cand, site, w, h, detail) {
       out += `<line x1="${X(seg[0][0]).toFixed(1)}" y1="${Y(seg[0][1]).toFixed(1)}" x2="${X(seg[1][0]).toFixed(1)}" y2="${Y(seg[1][1]).toFixed(1)}" stroke="rgba(141,110,66,0.4)" stroke-width="0.8"/>`;
     }
   }
+  for (const [i2, ep] of (site._entrances || []).entries())
+    out += `<g><circle cx="${X(ep[0]).toFixed(1)}" cy="${Y(ep[1]).toFixed(1)}" r="${detail ? 6 : 3}" fill="#e8590c" stroke="#fff" stroke-width="1.4"/>`
+      + (detail ? `<text x="${X(ep[0]).toFixed(1)}" y="${Y(ep[1]).toFixed(1)}" font-size="7.5" text-anchor="middle" dominant-baseline="middle" fill="#fff">E${i2 + 1}</text>` : "") + `</g>`;
   if (detail) {
     const bar = 50 * sc;
     out += `<line x1="${pad}" y1="${h - 6}" x2="${pad + bar}" y2="${h - 6}" stroke="#212529" stroke-width="2"/>
@@ -1699,8 +1738,10 @@ export function openLayoutGen(ctx) {
     flatsPct: Math.round(ctx.assumptions.flatMixPct ?? 20),
     detPct: 30, terrPct: 20,
     gardenMin: 80, gardenMax: 240, greenPct: 10, organic: 0.7, parkRatio: 2,
+    entrances: [],
     ppm2: ctx.ppm2, assumptions: ctx.assumptions || {},
   };
+  if (!params.entrances) params.entrances = [];
   if (saved) { params.ppm2 = ctx.ppm2; params.assumptions = ctx.assumptions || {}; }
 
   const POP = 12;
@@ -1865,6 +1906,7 @@ export function openLayoutGen(ctx) {
           <div class="lg-gen">gen <b id="lg-gen">0</b></div>
           <canvas id="lg-spark" width="170" height="34"></canvas>
           <button type="button" id="lg-edit" class="ghost">✋ Edit streets</button>
+          <button type="button" id="lg-ent" class="ghost">📍 Define entrances${(params.entrances || []).length ? ` (${params.entrances.length})` : ""}</button>
           <button type="button" id="lg-adopt" class="plot-mode-btn">Adopt into appraisal</button>
           <button type="button" id="lg-save" class="plot-mode-btn">★ Save layout to map</button>
           <button type="button" id="lg-export" class="ghost">Export GeoJSON</button>
@@ -2070,6 +2112,42 @@ export function openLayoutGen(ctx) {
     }
     render();
   });
+  // Define entrances: click the plan to pin boundary access points that the
+  // street network must serve; click a pin again to remove it.
+  let entMode = false;
+  site._entrances = params.entrances;
+  const entBtn = m.querySelector("#lg-ent");
+  const entLabel = () => {
+    entBtn.textContent = (entMode ? "✔ Done placing entrances" : "📍 Define entrances")
+      + (params.entrances.length ? ` (${params.entrances.length})` : "");
+    entBtn.classList.toggle("active", entMode);
+  };
+  entBtn.addEventListener("click", () => {
+    entMode = !entMode;
+    if (entMode) { setRunning(false); if (editMode) m.querySelector("#lg-edit").click(); }
+    entLabel();
+  });
+  bigBox.addEventListener("click", (ev) => {
+    if (!entMode) return;
+    const p = clientToLocal(ev);
+    if (!p) return;
+    const hit = params.entrances.findIndex(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < 15);
+    if (hit >= 0) params.entrances.splice(hit, 1);
+    else {
+      let best = null, bd2 = 1e12;
+      for (const part of site.parts)
+        for (const q of part.boundary) {
+          const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+          if (d < bd2) { bd2 = d; best = q; }
+        }
+      if (!best || bd2 > site.diag * 0.25) return;
+      params.entrances.push([best[0], best[1]]);
+    }
+    site._entrances = params.entrances;
+    entLabel();
+    resetPop();
+  });
+
   bigBox.addEventListener("pointerdown", (ev) => {
     if (!editMode) return;
     const t2 = ev.target.closest && ev.target.closest(".lg-handle");

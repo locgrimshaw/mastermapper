@@ -3055,3 +3055,8 @@ footer {
   padding: 2px 9px; font-size: 11.5px; color: #364152; white-space: nowrap; }
 .dcp-contours { width: 100%; max-width: 260px; display: block; margin: 8px 0 2px; }
 #dc-compile-modal .cm-card, #dcg-modal .lg-card { max-height: 94vh; overflow: auto; }
+
+/* checkbox row + entrance button state in the generators */
+.lg-controls .lg-check { flex-direction: row !important; align-items: center; gap: 6px !important; }
+.lg-controls .lg-check input { margin: 0; }
+#lg-ent.active, #dcg-ent.active { background: #e8590c; color: #fff; border-color: #e8590c; }

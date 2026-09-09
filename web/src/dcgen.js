@@ -80,43 +80,69 @@ function rectOK(ring, site, setback, extraRings) {
 // ---- one candidate campus ---------------------------------------------------
 function generateCampus(site, params, genome) {
   const rnd = mulberry32(genome.seed);
-  const hall = HALLS[params.hallSize] || HALLS.M;
   const cool = COOLING[params.cooling] || COOLING.air;
-  const mwPerHall = hall.w * hall.d * params.storeys / cool.m2PerMw;
   const targetMw = params.objective === "target" ? params.targetMw : 1e9;
-  const c = Math.cos(genome.theta), s = Math.sin(genome.theta);
   const setback = params.setback;
-
-  // hall + yard envelope per slot (yards on both long elevations)
-  const envD = hall.d / 2 + YARD;
-  const pitchX = hall.w + 28;                       // fire gap + column road
-  const pitchY = hall.d + 2 * YARD + ROAD_COR;      // yards + shared loop lane
-
-  // lattice centred on the site centroid, offset by the genome
-  const mainC = site.parts[0].centroid;
-  const ox = mainC[0] + genome.ox, oy = mainC[1] + genome.oy;
-  const halls = [];
-  const span = Math.ceil(site.diag / Math.min(pitchX, pitchY)) + 1;
-  const slots = [];
-  for (let gx = -span; gx <= span; gx++)
-    for (let gy = -span; gy <= span; gy++) {
-      const [lx, ly] = rot(gx * pitchX, gy * pitchY, c, s);
-      slots.push({ gx, gy, x: ox + lx, y: oy + ly,
-                   d2: gx * gx * pitchX * pitchX + gy * gy * pitchY * pitchY });
-    }
-  slots.sort((a, b) => a.d2 - b.d2);
-  const placedRings = [];   // hall+yard envelopes for overlap tests
-  let itMw = 0;
-  for (const sl of slots) {
-    if (itMw >= targetMw) break;
-    const env = rectRing(sl.x, sl.y, hall.w / 2 + 4, envD + 1, c, s);
-    if (!rectOK(env, site, setback, placedRings)) continue;
-    halls.push({ x: sl.x, y: sl.y, gx: sl.gx, gy: sl.gy,
-                 ring: rectRing(sl.x, sl.y, hall.w / 2, hall.d / 2, c, s),
-                 env, mw: mwPerHall });
-    placedRings.push(env);
-    itMw += mwPerHall;
+  // Degree of variation: 0 (or exact-replication toggle) = one hall size on
+  // one shared orientation, the classic replicated campus. Higher values let
+  // each hall twist off the lattice angle and deploy smaller hall sizes into
+  // pockets the primary size cannot use — maximising what the site yields.
+  const uniform = !!params.uniform;
+  const variation = uniform ? 0 : (params.variation ?? 0.5);
+  const order = ["L", "M", "S"];
+  const primary = params.hallSize;
+  let sizeList = [primary];
+  if (variation >= 0.3) {
+    const rest = order.slice(order.indexOf(primary) + 1);
+    sizeList = sizeList.concat(rest.slice(0, variation >= 0.7 ? 2 : 1));
   }
+  const jitterAmp = variation * 0.5;   // up to ±14° per hall at 100%
+
+  const mainC = site.parts[0].centroid;
+  const halls = [];
+  const placedRings = [];
+  let itMw = 0;
+  const placeLattice = (hs, theta2, off2) => {
+    const H = HALLS[hs];
+    const mwOf = H.w * H.d * params.storeys / cool.m2PerMw;
+    const envD2 = H.d / 2 + YARD;
+    const pX = H.w + 28, pY = H.d + 2 * YARD + ROAD_COR;
+    const c2 = Math.cos(theta2), s2 = Math.sin(theta2);
+    const ox2 = mainC[0] + off2[0], oy2 = mainC[1] + off2[1];
+    const span = Math.ceil(site.diag / Math.min(pX, pY)) + 1;
+    const slots = [];
+    for (let gx = -span; gx <= span; gx++)
+      for (let gy = -span; gy <= span; gy++) {
+        const [lx, ly] = rot(gx * pX, gy * pY, c2, s2);
+        slots.push({ gx, gy, x: ox2 + lx, y: oy2 + ly,
+                     d2: gx * gx * pX * pX + gy * gy * pY * pY });
+      }
+    slots.sort((a, b) => a.d2 - b.d2);
+    // big plates keep near the lattice angle (packing dominates); small
+    // infill halls twist the most — that's where variation earns its keep
+    const jit = jitterAmp * (H.w > 150 ? 0.3 : H.w > 100 ? 0.55 : 1);
+    for (const sl of slots) {
+      if (itMw >= targetMw) break;
+      const tw = jit > 0 ? [(rnd() - 0.5) * 2 * jit, 0] : [0];
+      for (const dA of tw) {
+        const cc = Math.cos(theta2 + dA), ss = Math.sin(theta2 + dA);
+        const env = rectRing(sl.x, sl.y, H.w / 2 + 4, envD2 + 1, cc, ss);
+        if (!rectOK(env, site, setback, placedRings)) continue;
+        halls.push({ x: sl.x, y: sl.y, gx: sl.gx, gy: sl.gy, size: hs,
+                     w: H.w, d: H.d, c: cc, s: ss, primary: hs === primary && off2 === genome0,
+                     ring: rectRing(sl.x, sl.y, H.w / 2, H.d / 2, cc, ss),
+                     env, mw: mwOf });
+        placedRings.push(env);
+        itMw += mwOf;
+        break;
+      }
+    }
+  };
+  const genome0 = [genome.ox, genome.oy];
+  placeLattice(primary, genome.theta, genome0);
+  for (let i = 1; i < sizeList.length; i++)
+    placeLattice(sizeList[i], genome.theta2 != null ? genome.theta2 : genome.theta,
+                 [genome.ox2 || 0, genome.oy2 || 0]);
   if (!halls.length) return null;
 
   // substation sized to grid demand (1.2 ha / 100 MW × 1.5 reserve)
@@ -125,17 +151,19 @@ function generateCampus(site, params, genome) {
   let sub = null;
   {
     const tries = [];
-    const offD = envD + subSide / 2 + ROAD_COR;
-    const offW = hall.w / 2 + 6 + subSide / 2 + ROAD_COR;
-    for (const h of halls)
+    for (const h of halls) {
+      const offD = h.d / 2 + YARD + subSide / 2 + ROAD_COR;
+      const offW = h.w / 2 + 6 + subSide / 2 + ROAD_COR;
       for (const [lx, ly] of [[0, offD], [0, -offD], [offW, 0], [-offW, 0]]) {
-        const [rx, ry] = rot(lx, ly, c, s);
+        const [rx, ry] = rot(lx, ly, h.c, h.s);
         tries.push([h.x + rx, h.y + ry]);
       }
+    }
     // genome nudges which candidate position wins
     for (let i = 0; i < tries.length; i++) {
       const k = (i + genome.sub) % tries.length;
-      const ring = rectRing(tries[k][0], tries[k][1], subSide / 2, subSide / 2, c, s);
+      const ring = rectRing(tries[k][0], tries[k][1], subSide / 2, subSide / 2,
+                            Math.cos(genome.theta), Math.sin(genome.theta));
       if (rectOK(ring, site, Math.max(8, setback * 0.6), placedRings)) {
         sub = { x: tries[k][0], y: tries[k][1], side: subSide, ring };
         placedRings.push(ring);
@@ -144,9 +172,11 @@ function generateCampus(site, params, genome) {
     }
   }
 
-  // entrance on the boundary, gatehouse + parking just inside
+  // entrance(s): user-defined pins win; otherwise the genome explores
   const bnd = site.parts[0].boundary;
-  const E = bnd[Math.floor(genome.tE * bnd.length) % bnd.length];
+  const userEnts = (params.entrances || []).filter(p => p && p.length === 2);
+  const E = userEnts.length ? userEnts[0]
+    : bnd[Math.floor(genome.tE * bnd.length) % bnd.length];
   // walk inward: direction toward the nearest hall
   let near = halls[0];
   for (const h of halls) if (Math.hypot(h.x - E[0], h.y - E[1]) < Math.hypot(near.x - E[0], near.y - E[1])) near = h;
@@ -167,14 +197,20 @@ function generateCampus(site, params, genome) {
   // roads: loop rectangle around the hall cluster + row lanes + entrance spur
   const roads = [];
   {
-    // cluster bounds in lattice frame
-    let x0 = 1e12, x1 = -1e12, y0 = 1e12, y1 = -1e12;
+    const c = Math.cos(genome.theta), s = Math.sin(genome.theta);
+    const ox = mainC[0] + genome.ox, oy = mainC[1] + genome.oy;
+    // cluster bounds in the primary frame (world → frame projection), so the
+    // loop wraps every hall regardless of its own size or twist
+    let fx0 = 1e12, fx1 = -1e12, fy0 = 1e12, fy1 = -1e12;
+    const proj = [];
     for (const h of halls) {
-      x0 = Math.min(x0, h.gx); x1 = Math.max(x1, h.gx);
-      y0 = Math.min(y0, h.gy); y1 = Math.max(y1, h.gy);
+      const dx = h.x - ox, dy = h.y - oy;
+      const px2 = dx * c + dy * s, py2 = -dx * s + dy * c;
+      proj.push({ h, px: px2, py: py2 });
+      const rw = h.w / 2 + 12, rd = h.d / 2 + YARD + ROAD_COR / 2;
+      fx0 = Math.min(fx0, px2 - rw); fx1 = Math.max(fx1, px2 + rw);
+      fy0 = Math.min(fy0, py2 - rd); fy1 = Math.max(fy1, py2 + rd);
     }
-    const fx0 = x0 * pitchX - hall.w / 2 - 12, fx1 = x1 * pitchX + hall.w / 2 + 12;
-    const fy0 = y0 * pitchY - envD - ROAD_COR / 2, fy1 = y1 * pitchY + envD + ROAD_COR / 2;
     const W = (lx, ly) => { const [rx, ry] = rot(lx, ly, c, s); return [ox + rx, oy + ry]; };
     // clip to the site, SPLITTING into runs at every gap — otherwise the
     // ribbon would bridge straight across a notch outside the boundary
@@ -199,27 +235,39 @@ function generateCampus(site, params, genome) {
                   ...seg(W(fx1, fy1), W(fx0, fy1)), ...seg(W(fx0, fy1), W(fx0, fy0))];
     const loopRuns = clipRuns(loop);
     for (const r2 of loopRuns) roads.push({ pts: r2, loop: true });
-    // a lane between each pair of used rows
-    const rows = [...new Set(halls.map(h => h.gy))].sort((a, b) => a - b);
+    // a lane between each pair of distinct hall rows (projected clusters)
+    const rowYs = proj.map(p2 => p2.py).sort((a, b) => a - b);
+    const rows = [];
+    for (const y2 of rowYs)
+      if (!rows.length || y2 - rows[rows.length - 1] > 40) rows.push(y2);
+      else rows[rows.length - 1] = (rows[rows.length - 1] + y2) / 2;
     for (let i = 0; i + 1 < rows.length; i++) {
-      const midY = (rows[i] * pitchY + rows[i + 1] * pitchY) / 2;
+      const midY = (rows[i] + rows[i + 1]) / 2;
       for (const r2 of clipRuns(seg(W(fx0, midY), W(fx1, midY)))) roads.push({ pts: r2 });
     }
-    // entrance spur to the nearest point of any loop run
-    let best = null, bd = 1e12;
-    for (const r2 of loopRuns) for (const p of r2) {
-      const d = Math.hypot(p[0] - E[0], p[1] - E[1]);
-      if (d < bd) { bd = d; best = p; }
+    // a spur from EVERY entrance to the nearest point of the loop
+    const ents2 = userEnts.length ? userEnts : [E];
+    for (const e3 of ents2) {
+      let best = null, bd = 1e12;
+      for (const r2 of loopRuns) for (const p of r2) {
+        const d = Math.hypot(p[0] - e3[0], p[1] - e3[1]);
+        if (d < bd) { bd = d; best = p; }
+      }
+      if (best) for (const r2 of clipRuns(seg(e3, best))) roads.push({ pts: r2 });
     }
-    if (best) for (const r2 of clipRuns(seg(E, best))) roads.push({ pts: r2 });
   }
   let roadArea = 0;
   const roadPolys = roads.map(r => { const rb = ribbon(r.pts, ROAD_COR / 2); if (rb) roadArea += ringArea(rb[0]); return rb; }).filter(Boolean);
 
   // ---- stats ---------------------------------------------------------------
-  const footprint = halls.length * hall.w * hall.d;
-  const yards = halls.length * hall.w * YARD * 2;
+  const footprint = halls.reduce((a2, h) => a2 + h.w * h.d, 0);
+  const yards = halls.reduce((a2, h) => a2 + h.w * YARD * 2, 0);
   const gea = footprint * params.storeys;
+  const bySize = {};
+  for (const h of halls) bySize[h.size] = (bySize[h.size] || 0) + 1;
+  const hallMix = Object.entries(bySize)
+    .map(([k, n2]) => `${n2}×${k} ${(HALLS[k].w * HALLS[k].d * params.storeys / cool.m2PerMw).toFixed(0)}MW`)
+    .join(" + ");
   const subArea = sub ? sub.side * sub.side : 0;
   const developed = footprint + yards + roadArea + subArea + (park ? ringArea(park.ring) : 0);
   const greenPct = Math.max(0, 1 - developed / site.areaM2);
@@ -228,7 +276,7 @@ function generateCampus(site, params, genome) {
   const margin = capex > 0 ? (value - capex) / capex * 100 : 0;
   const fenceLen = site.allRings.reduce((a2, r2) => a2 + polylineLen(r2), 0);
   const stats = {
-    itMw, gridMw, halls: halls.length, mwPerHall, gea,
+    itMw, gridMw, halls: halls.length, hallMix, gea,
     coverage: footprint / site.areaM2 * 100,
     mwHa: itMw / (site.areaM2 / 1e4),
     greenPct: greenPct * 100, roadArea, subArea, subOk: !!sub,
@@ -236,7 +284,7 @@ function generateCampus(site, params, genome) {
     capex, value, margin,
     fuelM3: Math.round(gridMw * 250 * 48 / 1000),   // 48 h @ 250 L/MW/h
   };
-  return { genome, halls, hall, sub, gate, park, roads, roadPolys, stats,
+  return { genome, halls, sub, gate, park, roads, roadPolys, stats,
            E, dir: [ex, ey], theta: genome.theta, pond: null, trees: [] };
 }
 
@@ -267,7 +315,8 @@ function decorate(cand, site) {
     for (let gy = site.minY + 12; gy < site.maxY; gy += 16) {
       if (!site.inSite(gx, gy) || site.inExcl(gx, gy) || blocked(gx, gy)) continue;
       let d = distToBoundary(gx, gy, site.allRings);
-      for (const h of cand.halls) d = Math.min(d, Math.hypot(gx - h.x, gy - h.y) - hallRad(cand));
+      for (const h of cand.halls)
+        d = Math.min(d, Math.hypot(gx - h.x, gy - h.y) - (Math.hypot(h.w, h.d) / 2 + YARD));
       if (cand.sub) d = Math.min(d, Math.hypot(gx - cand.sub.x, gy - cand.sub.y) - cand.sub.side * 0.71);
       if (cand.park) {
         const pc = cand.park.ring;
@@ -301,7 +350,7 @@ function decorate(cand, site) {
   cand.trees = trees;
   return cand;
 }
-function hallRad(cand) { return Math.hypot(cand.hall.w, cand.hall.d) / 2 + YARD; }
+
 
 // ---- rendering --------------------------------------------------------------
 function svgOf(cand, site, w, h, detail) {
@@ -333,28 +382,24 @@ function svgOf(cand, site, w, h, detail) {
       out += `<text x="${X(sx).toFixed(1)}" y="${Y(sy - cand.sub.side / 2 - 4).toFixed(1)}" font-size="9" text-anchor="middle" fill="#7a5a00">substation ${(cand.stats.subArea / 1e4).toFixed(1)} ha</text>`;
     }
   }
-  const c = Math.cos(cand.theta), s = Math.sin(cand.theta);
   for (const hl of cand.halls) {
-    // yard aprons then the hall with a roof-plant band
-    const yardR = rectRing(hl.x, hl.y, cand.hall.w / 2, cand.hall.d / 2 + YARD, c, s);
+    const c = hl.c, s = hl.s;
+    const yardR = rectRing(hl.x, hl.y, hl.w / 2, hl.d / 2 + YARD, c, s);
     out += `<path d="${path([yardR])}" fill="#ccd3da"/>`;
     if (detail) {
-      // generator sets along both long elevations
       for (const sgn of [-1, 1]) {
         for (let i = -2; i <= 2; i++) {
-          const [gx2, gy2] = rot(i * cand.hall.w * 0.17, sgn * (cand.hall.d / 2 + YARD * 0.5), c, s);
+          const [gx2, gy2] = rot(i * hl.w * 0.17, sgn * (hl.d / 2 + YARD * 0.5), c, s);
           out += `<path d="${path([rectRing(hl.x + gx2, hl.y + gy2, 5.5, 3, c, s)])}" fill="#8b95a1"/>`;
         }
       }
-    }
-    if (detail) {
       const sh = 1.4;
       out += `<path d="${path([hl.ring.map(p => [p[0] + sh, p[1] - sh])])}" fill="rgba(33,37,41,0.3)"/>`;
     }
     out += `<path d="${path([hl.ring])}" fill="#274b6d"${detail ? ` stroke="#ffffff" stroke-width="0.6"` : ""}/>`;
     if (detail) {
-      out += `<path d="${path([rectRing(hl.x, hl.y, cand.hall.w / 2 - 6, cand.hall.d * 0.16, c, s)])}" fill="#3e6a94"/>`;
-      out += `<text x="${X(hl.x).toFixed(1)}" y="${Y(hl.y).toFixed(1)}" font-size="9" text-anchor="middle" dominant-baseline="middle" fill="#dbe7f3">${hl.mw.toFixed(0)} MW</text>`;
+      out += `<path d="${path([rectRing(hl.x, hl.y, hl.w / 2 - 6, hl.d * 0.16, c, s)])}" fill="#3e6a94"/>`;
+      out += `<text x="${X(hl.x).toFixed(1)}" y="${Y(hl.y).toFixed(1)}" font-size="${hl.size === "S" ? 7.5 : 9}" text-anchor="middle" dominant-baseline="middle" fill="#dbe7f3">${hl.mw.toFixed(0)} MW</text>`;
     }
   }
   if (cand.gate)
@@ -372,6 +417,9 @@ function svgOf(cand, site, w, h, detail) {
       out += `<line x1="${X(seg2[0][0]).toFixed(1)}" y1="${Y(seg2[0][1]).toFixed(1)}" x2="${X(seg2[1][0]).toFixed(1)}" y2="${Y(seg2[1][1]).toFixed(1)}" stroke="rgba(141,110,66,0.35)" stroke-width="0.8"/>`;
     }
   }
+  for (const [i2, ep] of (site._entrances || []).entries())
+    out += `<g><circle cx="${X(ep[0]).toFixed(1)}" cy="${Y(ep[1]).toFixed(1)}" r="${detail ? 6 : 3}" fill="#e8590c" stroke="#fff" stroke-width="1.4"/>`
+      + (detail ? `<text x="${X(ep[0]).toFixed(1)}" y="${Y(ep[1]).toFixed(1)}" font-size="7.5" text-anchor="middle" dominant-baseline="middle" fill="#fff">E${i2 + 1}</text>` : "") + `</g>`;
   if (detail) {
     const bar = 50 * sc;
     out += `<line x1="${pad}" y1="${h - 6}" x2="${pad + bar}" y2="${h - 6}" stroke="#212529" stroke-width="2"/>
@@ -402,7 +450,7 @@ export function openDcGen(ctx) {
     objective: "target",
     targetMw: Math.max(10, Math.round(siteHa * (ctx.netPct || 70) / 100 * (ctx.mwPerHa || 10))),
     cooling: "air", storeys: 2, hallSize: siteHa > 12 ? "L" : siteHa > 5 ? "M" : "S",
-    setback: 20, greenPct: 35,
+    setback: 20, greenPct: 35, variation: 0.5, uniform: false, entrances: [],
     pue: ctx.pue || 1.25, costPerMw: ctx.costPerMw || 11, valuePerMw: ctx.valuePerMw || 15,
   };
   if (saved) { params.pue = ctx.pue || params.pue; }
@@ -416,15 +464,21 @@ export function openDcGen(ctx) {
 
   const randGenome = () => ({
     theta: Math.random() * Math.PI,
+    theta2: Math.random() * Math.PI,
     ox: (Math.random() - 0.5) * site.diag * 0.25,
     oy: (Math.random() - 0.5) * site.diag * 0.25,
+    ox2: (Math.random() - 0.5) * site.diag * 0.3,
+    oy2: (Math.random() - 0.5) * site.diag * 0.3,
     tE: Math.random(), sub: (Math.random() * 12) | 0,
     seed: (Math.random() * 1e9) | 0,
   });
   const mutate = (g2, pw = 1) => ({
     theta: g2.theta + (Math.random() - 0.5) * 0.22 * pw,
+    theta2: (g2.theta2 ?? Math.random() * Math.PI) + (Math.random() - 0.5) * 0.3 * pw,
     ox: g2.ox + (Math.random() - 0.5) * 24 * pw,
     oy: g2.oy + (Math.random() - 0.5) * 24 * pw,
+    ox2: (g2.ox2 || 0) + (Math.random() - 0.5) * 30 * pw,
+    oy2: (g2.oy2 || 0) + (Math.random() - 0.5) * 30 * pw,
     tE: Math.random() < 0.08 * pw ? Math.random() : (g2.tE + (Math.random() - 0.5) * 0.1 * pw + 1) % 1,
     sub: Math.random() < 0.2 * pw ? (Math.random() * 12) | 0 : g2.sub,
     seed: Math.random() < 0.3 ? (Math.random() * 1e9) | 0 : g2.seed,
@@ -518,6 +572,11 @@ export function openDcGen(ctx) {
             <select id="dcg-hall">
               ${Object.entries(HALLS).map(([k, h2]) => `<option value="${k}">${h2.label}</option>`).join("")}
             </select></label>
+          <label><span>Degree of variation <b id="dcg-vv">${Math.round((params.variation ?? 0.5) * 100)}</b>%</span>
+            <input type="range" id="dcg-var" min="0" max="100" step="10" value="${Math.round((params.variation ?? 0.5) * 100)}"></label>
+          <label class="lg-check"><input type="checkbox" id="dcg-uniform"${params.uniform ? " checked" : ""}>
+            <span>Exact replication (uniform halls)</span></label>
+          <button type="button" id="dcg-ent" class="ghost">📍 Define entrances${(params.entrances || []).length ? ` (${params.entrances.length})` : ""}</button>
           <label><span>Security setback <b id="dcg-bv">${params.setback}</b> m</span>
             <input type="range" id="dcg-setback" min="10" max="50" step="5" value="${params.setback}"></label>
           <label><span>Landscape floor <b id="dcg-gv">${params.greenPct}</b>%</span>
@@ -589,7 +648,7 @@ export function openDcGen(ctx) {
       m.querySelector("#dcg-best-stats").innerHTML = `<div class="cm-grid">`
         + cell(st.itMw.toFixed(0) + " MW", "IT load")
         + cell(st.gridMw.toFixed(0) + " MW", `grid demand @ PUE ${params.pue}`)
-        + cell(st.halls + " × " + st.mwPerHall.toFixed(0) + " MW", "data halls")
+        + cell(st.hallMix, "data halls")
         + cell(Math.round(st.gea).toLocaleString() + " m²", "GEA")
         + cell(st.mwHa.toFixed(1) + " MW/ha", "IT density (gross)")
         + cell(st.coverage.toFixed(0) + "%", "building coverage")
@@ -652,6 +711,18 @@ export function openDcGen(ctx) {
   dial("#dcg-target", "targetMw", "#dcg-tv", true);
   dial("#dcg-storeys", "storeys", "#dcg-sv", true);
   dial("#dcg-setback", "setback", "#dcg-bv", true);
+  {
+    const el = m.querySelector("#dcg-var");
+    el.addEventListener("input", () => {
+      params.variation = Number(el.value) / 100;
+      m.querySelector("#dcg-vv").textContent = el.value;
+      debouncedReset();
+    });
+    m.querySelector("#dcg-uniform").addEventListener("change", (e) => {
+      params.uniform = e.target.checked;
+      resetPop();
+    });
+  }
   dial("#dcg-green", "greenPct", "#dcg-gv", true);
   dial("#dcg-pue", "pue", "#dcg-pv", true);
   m.querySelector("#dcg-obj").value = params.objective;
@@ -661,6 +732,52 @@ export function openDcGen(ctx) {
   m.querySelector("#dcg-hall").value = params.hallSize;
   m.querySelector("#dcg-hall").addEventListener("change", e => { params.hallSize = e.target.value; resetPop(); });
   m.querySelector("#dcg-run").addEventListener("click", () => setRunning(!running));
+
+  // Define entrances: click the big plan to pin boundary entry points that
+  // road placement must serve; click a pin again to remove it.
+  let entMode = false;
+  site._entrances = params.entrances || [];
+  const entBtn = m.querySelector("#dcg-ent");
+  const entLabel = () => {
+    entBtn.textContent = (entMode ? "✔ Done placing entrances" : "📍 Define entrances")
+      + (params.entrances.length ? ` (${params.entrances.length})` : "");
+    entBtn.classList.toggle("active", entMode);
+  };
+  entBtn.addEventListener("click", () => {
+    entMode = !entMode;
+    if (entMode) setRunning(false);
+    entLabel();
+  });
+  m.querySelector("#dcg-best-svg").addEventListener("click", (ev) => {
+    if (!entMode) return;
+    const svg = m.querySelector("#dcg-best-svg svg");
+    if (!svg) return;
+    const box = svg.getBoundingClientRect();
+    const pad = 14, w2 = 430, h2 = 360;
+    const sc2 = Math.min((w2 - 2 * pad) / Math.max(1, site.maxX - site.minX),
+                         (h2 - 2 * pad) / Math.max(1, site.maxY - site.minY));
+    const vx = (ev.clientX - box.left) / box.width * w2;
+    const vy = (ev.clientY - box.top) / box.height * h2;
+    const lx = site.minX + (vx - pad) / sc2;
+    const ly = site.minY + (h2 - pad - vy) / sc2;
+    // toggle-remove if near an existing pin
+    const hit = params.entrances.findIndex(p => Math.hypot(p[0] - lx, p[1] - ly) < 15);
+    if (hit >= 0) params.entrances.splice(hit, 1);
+    else {
+      // snap to the nearest boundary vertex across every part
+      let best = null, bd = 1e12;
+      for (const part of site.parts)
+        for (const p of part.boundary) {
+          const d = Math.hypot(p[0] - lx, p[1] - ly);
+          if (d < bd) { bd = d; best = p; }
+        }
+      if (!best || bd > site.diag * 0.25) return;
+      params.entrances.push([best[0], best[1]]);
+    }
+    site._entrances = params.entrances;
+    entLabel();
+    resetPop();
+  });
 
   const stash = () => { _dcgSession = { sig, pop, best, gen, bestHist, focusIdx, params }; };
   const closeTool = () => { setRunning(false); stash(); m.hidden = true; };
@@ -685,7 +802,7 @@ export function openDcGen(ctx) {
       feats.push({ type: "Feature", properties: { kind: "data_hall", mw: +hl.mw.toFixed(1), storeys: params.storeys },
         geometry: { type: "Polygon", coordinates: [ringLL(hl.ring)] } });
       feats.push({ type: "Feature", properties: { kind: "plant_yard" },
-        geometry: { type: "Polygon", coordinates: [ringLL(rectRing(hl.x, hl.y, cand.hall.w / 2, cand.hall.d / 2 + YARD, Math.cos(cand.theta), Math.sin(cand.theta)))] } });
+        geometry: { type: "Polygon", coordinates: [ringLL(rectRing(hl.x, hl.y, hl.w / 2, hl.d / 2 + YARD, hl.c, hl.s))] } });
     }
     if (cand.sub) feats.push({ type: "Feature", properties: { kind: "substation" },
       geometry: { type: "Polygon", coordinates: [ringLL(cand.sub.ring)] } });
@@ -717,3 +834,6 @@ export function openDcGen(ctx) {
     resetPop();
   }
 }
+
+// harness access
+export const _dctest = { generateCampus, prepareSiteRef: prepareSite };
