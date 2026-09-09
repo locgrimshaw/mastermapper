@@ -42,8 +42,7 @@ const TYPES = {
   terr: { w: 5.3,  m2: 82,  label: "Terrace",  color: "#fab005", valMult: 0.94 },
   flat: { w: 26.0, m2: 58,  label: "Flats",    color: "#7048e8", valMult: 0.90 },
 };
-const FLAT_PLOT_D = 22, FLAT_BLD_D = 14, FLAT_STOREYS = 3;
-const FLAT_PER_BLOCK = Math.floor(26 * FLAT_BLD_D * FLAT_STOREYS / 82); // ≈13
+const FLAT_PLOT_D = 22, FLAT_BLD_D = 14; // blocks sized 2 or 3 storeys at placement time
 
 const T = () => window.turf;
 
@@ -193,7 +192,7 @@ function bldQuad(l) {
   const b1 = [b0[0] + tx * (w0 - 2 * m), b0[1] + ty * (w0 - 2 * m)];
   const b2 = [b1[0] + nx * bd, b1[1] + ny * bd];
   const b3 = [b0[0] + nx * bd, b0[1] + ny * bd];
-  return { quad: [b0, b1, b2, b3, b0.slice()], h: l.type === "flat" ? 9.5 : 7.8 };
+  return { quad: [b0, b1, b2, b3, b0.slice()], h: l.type === "flat" ? (l.storeys === 2 ? 6.8 : 9.5) : 7.8 };
 }
 
 // ---- solar: equinox garden sun-hours ---------------------------------------
@@ -623,19 +622,43 @@ function generateCandidate(site, params, genome) {
   const lots = [];        // {quad, type, front:[p0,p1], runId, side}
   let total = 0, runCounter = 0;
 
-  const deficits = () => Object.keys(mixShares)
-    .filter(k => mixShares[k] > 0)
+  // Flats arrive in whole blocks, so left unguarded they overshoot the dial
+  // by a block at a time (a 20% dial was landing 26-35%). pickFlatUnits sizes
+  // the next block (2 or 3 storeys) to whichever lands the mix closest to
+  // target, and flatOK refuses a block that would move the share AWAY from it.
+  const pickFlatUnits = () => {
+    const t2 = mixShares.flat;
+    const u3 = Math.floor(26 * FLAT_BLD_D * 3 / 82);
+    const u2 = Math.floor(26 * FLAT_BLD_D * 2 / 82);
+    const err = u => Math.abs((placed.flat + u) / Math.max(1, total + u) - t2);
+    return err(u2) < err(u3) ? { units: u2, storeys: 2 } : { units: u3, storeys: 3 };
+  };
+  const flatOK = () => {
+    if (mixShares.flat <= 0) return false;
+    const t2 = mixShares.flat;
+    const { units: u } = pickFlatUnits();
+    const now = total > 0 ? placed.flat / total : 0;
+    const after = (placed.flat + u) / Math.max(1, total + u);
+    return after <= t2 + 0.02 || Math.abs(after - t2) < Math.abs(now - t2);
+  };
+  const typeOrder = () => Object.keys(mixShares)
+    .filter(k => mixShares[k] > 0 && (k !== "flat" || flatOK()))
     .sort((a, b) =>
       (mixShares[b] - (total > 0 ? placed[b] / total : 0))
       - (mixShares[a] - (total > 0 ? placed[a] / total : 0)));
   const biased = (pos) => {
-    // flats & terraces gravitate to the entrance, detached to the far edges
+    // Flats & terraces gravitate to the entrance, detached to the far edges —
+    // but a type is only PROMOTED while it is still under its target share,
+    // otherwise position bias tramples the mix (the 20%-flats-came-out-35%
+    // bug: every placeable entrance frontage kept taking another block).
     const d = Math.hypot(pos[0] - E[0], pos[1] - E[1]) / diag;
-    let order = deficits();
+    const under = k => (total > 0 ? placed[k] / total : 0) < mixShares[k];
+    let order = typeOrder();
     if (d < 0.3) order = order.sort((a, b) =>
-      (a === "flat" || a === "terr" ? -1 : 0) - (b === "flat" || b === "terr" ? -1 : 0));
+      ((a === "flat" || a === "terr") && under(a) ? -1 : 0)
+      - ((b === "flat" || b === "terr") && under(b) ? -1 : 0));
     else if (d > 0.62) order = order.sort((a, b) =>
-      (a === "det" ? -1 : 0) - (b === "det" ? -1 : 0));
+      (a === "det" && under(a) ? -1 : 0) - (b === "det" && under(b) ? -1 : 0));
     return order;
   };
 
@@ -717,10 +740,13 @@ function generateCandidate(site, params, genome) {
             if (runLeft > 0) { thisRun = runId; runLeft--; }
             else { runId = "s" + (runCounter++); thisRun = runId; runType = "semi"; runLeft = 1; }
           } else runLeft = 0;
+          const flatInfo = type === "flat" ? pickFlatUnits() : null;
           lots.push({ quad, type, side, runId: thisRun,
                       front: [quad[0], quad[1]], tx, ty, nx, ny,
+                      units: flatInfo ? flatInfo.units : 1,
+                      storeys: flatInfo ? flatInfo.storeys : 2,
                       jit: (rnd() - 0.5) * 1.2 * params.organic });
-          if (type === "flat") { placed.flat += FLAT_PER_BLOCK; total += FLAT_PER_BLOCK; }
+          if (type === "flat") { placed.flat += flatInfo.units; total += flatInfo.units; }
           else { placed[type]++; total++; }
           s += tw + (runLeft > 0 ? 0.05 : 0.5 + rnd() * 1.4 * params.organic);
           placedHere = true;
