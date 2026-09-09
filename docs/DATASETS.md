@@ -405,3 +405,37 @@ the MapLibre demo glyph endpoint. If you switch glyph servers, update the
 `text-font` value in the `rail-stop-label` layer in `app.js` to a stack that
 server provides, or labels will silently not render (the dots still will).
 
+
+## OSM low-value / underused land (`osm_industrial`, `osm_retail`, `osm_parking`, `osm_storage`, `osm_brownfield`, `osm_leisure_lowdensity`)
+
+The built-form lens of `docs/PLAN_BROWNFIELD.md`: redevelopment candidates that
+no brownfield register contains — industrial and retail sheds, surface car
+parks, depots and lock-up courts, gasholder sites, works and mineral land.
+
+Built by `pipeline/build_osm_lowvalue.py` from an OSM extract and loaded into
+`map_features` by the existing `supabase/loaders/load_datasets.py`, via
+`.github/workflows/build-osm-lowvalue.yml` (manual, plus a quarterly cron).
+Extraction only runs in CI: dev containers cannot reach Geofabrik, and osmium
+needs the ~1.8 GB UK PBF.
+
+Classification follows the NPPF (Aug 2026) Annex B definition of previously
+developed land, which expressly includes "large areas of hardstanding which
+have been lawfully developed" (hence car parks and open yards) and expressly
+EXCLUDES residential gardens, parks, recreation grounds and allotments in
+built-up areas, and land last occupied by agricultural or forestry buildings.
+Those exclusions are hard filters in the builder, applied before anything is
+classified — without them the layer surfaces every school field in England.
+Golf courses, driving ranges and garden centres are kept as their own class
+but flagged `pdl: false`, because they are not PDL unless permanent structures
+are involved and so do not attract the policy L2 weighting.
+
+Each feature carries `area_m2` / `ha`, `pdl`, `subtype` and `hook` (the NPPF
+policy the class answers). The map layers raise their minimum area as you zoom
+out via `numFilter`, so a national view shows only the large sites.
+
+Licence: **OpenStreetMap contributors, ODbL 1.0** — not OGL. Attribution shows
+while a layer is on. Share-alike attaches to derived *databases*; rendering is
+a Produced Work and is fine. Keep these datasets separable from the OGL layers
+so they can be stripped if the licence becomes commercially awkward.
+
+To refresh: Actions > "Build OSM low-value land layers" > Run workflow.

@@ -1134,6 +1134,14 @@ const OVERLAY_TREE = [
     { key: "flood",       title: "Flood risk" },
     { key: "land",        title: "Land ownership & infrastructure" },
   ]},
+  // Brownfield gets its own branch rather than a single row under Planning
+  // designations: the register is one lens on the same question, and the
+  // OSM built-form classes answer it from a completely different direction.
+  // See docs/PLAN_BROWNFIELD.md.
+  { key: "brownfieldgrp", title: "Brownfield &amp; underused land", subs: [
+    { key: "bfdeclared", title: "Declared sites" },
+    { key: "bfbuilt",    title: "Underused built form (OSM)" },
+  ]},
   { key: "student", title: "Student housing &amp; demand", subs: [
     { key: "students", title: "Universities & students" },
   ]},
@@ -1171,11 +1179,39 @@ const MAP_OVERLAYS = [
   { key: "green_space",       group: "planning", label: "Green space",                color: "#74b816", kinds: ["green_space"] },
   { key: "conservation_area", group: "planning", label: "Conservation areas",         color: "#9c36b5", kinds: ["conservation_area"] },
   { key: "aonb",              group: "planning", label: "AONB / National Landscapes", color: "#5c940d", kinds: ["aonb"] },
-  { key: "brownfield",        group: "planning", label: "Brownfield sites",           color: "#e8590c", brownfield: true },
+  { key: "brownfield",        group: "bfdeclared", label: "Brownfield register sites", color: "#e8590c", brownfield: true },
   // Derived MODEL layer (rebuild_grey_belt_candidates in the DB): Green Belt
   // land that is already previously-developed in character. Indigo = built-up
   // area basis, orange = registered-brownfield basis.
-  { key: "grey_belt_candidate", group: "planning", label: "Grey-belt candidates (model)", color: "#5c7cfa", dataset: "grey_belt_candidate", minZoom: 7 },
+  { key: "grey_belt_candidate", group: "bfdeclared", label: "Grey-belt candidates (model)", color: "#5c7cfa", dataset: "grey_belt_candidate", minZoom: 7 },
+
+  // ---- Underused built form, from OSM (ODbL) --------------------------------
+  // Redevelopment candidates that no register holds. NPPF (Aug 2026) Annex B
+  // counts "large areas of hardstanding which have been lawfully developed" as
+  // previously developed land, which is what brings car parks and open storage
+  // yards in; policy L2(1)(b) gives substantial weight to reusing exactly these
+  // ("underutilised retail and business sites … service yards, lock-ups, car
+  // parks"). Built by pipeline/build_osm_lowvalue.py; each feature carries its
+  // area, whether it is PDL, and the policy hook it answers.
+  // The area floor rises as you zoom out so the map stays readable.
+  { key: "osm_industrial", group: "bfbuilt", label: "Industrial land & sheds", color: "#5f3dc4",
+    dataset: "osm_industrial", minZoom: 11, lim: 6000,
+    numFilter: z => z < 12 ? { key: "area_m2", min: 20000 } : z < 13.5 ? { key: "area_m2", min: 5000 } : null },
+  { key: "osm_retail", group: "bfbuilt", label: "Retail sheds & parks", color: "#c2255c",
+    dataset: "osm_retail", minZoom: 11, lim: 6000,
+    numFilter: z => z < 12 ? { key: "area_m2", min: 15000 } : z < 13.5 ? { key: "area_m2", min: 4000 } : null },
+  { key: "osm_parking", group: "bfbuilt", label: "Surface car parks", color: "#1971c2",
+    dataset: "osm_parking", minZoom: 12, lim: 6000,
+    numFilter: z => z < 13 ? { key: "area_m2", min: 8000 } : z < 14 ? { key: "area_m2", min: 2500 } : null },
+  { key: "osm_storage", group: "bfbuilt", label: "Yards, depots & lock-ups", color: "#0b7285",
+    dataset: "osm_storage", minZoom: 12, lim: 6000,
+    numFilter: z => z < 13 ? { key: "area_m2", min: 6000 } : null },
+  { key: "osm_brownfield", group: "bfbuilt", label: "Brownfield, works & mineral land (OSM)", color: "#d9480f",
+    dataset: "osm_brownfield", minZoom: 10, lim: 6000,
+    numFilter: z => z < 12 ? { key: "area_m2", min: 10000 } : null },
+  { key: "osm_leisure_lowdensity", group: "bfbuilt", label: "Low-density leisure (not PDL)", color: "#66a80f",
+    dataset: "osm_leisure_lowdensity", minZoom: 10, lim: 4000,
+    numFilter: z => z < 12 ? { key: "area_m2", min: 40000 } : null },
   // Environmental designations
   { key: "sssi",              group: "environment", label: "SSSI",                         color: "#0c8599", kinds: ["sssi"] },
   { key: "sac",               group: "environment", label: "Special Areas of Conservation", color: "#12b886", kinds: ["sac"] },
@@ -1591,6 +1627,12 @@ const LAYER_INFO = {
   conservation_area:  { about: "Areas of special architectural or historic interest where extra planning controls apply. Coverage caveat: both national sources are fed by individual planning authorities and NEITHER is complete — a handful of districts have supplied no boundaries to either, so an empty map here is not proof there is no conservation area. Check the local authority's own register before relying on absence.", source: "planning.data.gov.uk + Historic England compiled dataset (both OGL v3, LPA-fed, indicative)" },
   aonb:               { about: "Areas of Outstanding Natural Beauty / National Landscapes — nationally protected landscapes.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   brownfield:         { about: "Previously developed sites councils have registered as suitable for redevelopment, with indicative dwelling capacity. Sites in public ownership are flagged in the tooltip.", source: "Brownfield land registers, planning.data.gov.uk (OGL v3)" },
+  osm_industrial:     { about: "Industrial land and sheds mapped in OpenStreetMap — industrial estates, warehouses, factories and works. <strong>Previously developed land</strong> under NPPF Annex B, and NPPF policy L2(1)(b) gives <strong>substantial weight</strong> to making better use of \"underutilised … business sites\". Nothing here is a registered site: this is the built form, so it finds the shed the register never mentions. Filter by area with the zoom — below z12 only sites over 2 ha are drawn. Area is measured from the mapped polygon, not from a title.", source: "OpenStreetMap contributors (ODbL 1.0), classified in pipeline/build_osm_lowvalue.py" },
+  osm_retail:         { about: "Retail parks, superstores and retail sheds, plus filling stations. <strong>Previously developed land</strong>; NPPF L2(1)(b) names \"redeveloping underutilised retail sites\" as attracting substantial weight, and these are the sites the market has most often already judged obsolete. A large single-storey box on a large surface plot is the classic residential-led redevelopment candidate.", source: "OpenStreetMap contributors (ODbL 1.0)" },
+  osm_parking:        { about: "Surface car parks — multi-storey, underground and rooftop parking is excluded, because only the flat hardstanding is the opportunity. NPPF Annex B expressly counts \"large areas of hardstanding which have been lawfully developed\" as <strong>previously developed land</strong>, and L2(1)(b) names \"car parks … no longer required\". Park-and-ride sites are tagged as such in the card. Ownership and current demand are not in this data — check both before assuming a car park is surplus.", source: "OpenStreetMap contributors (ODbL 1.0)" },
+  osm_storage:        { about: "Service yards, depots, lock-up garage courts, scrapyards, gasholder sites, storage tanks and waste-transfer land. <strong>Previously developed land</strong>, and the exact list NPPF L2(1)(b) calls out (\"service yards, lock-ups\"). Lock-up courts in particular are small, council-owned more often than not, and among the most deliverable infill in the country.", source: "OpenStreetMap contributors (ODbL 1.0)" },
+  osm_brownfield:     { about: "Land OSM itself tags as brownfield or under construction, plus quarries, landfill, works and water/wastewater treatment land. Independent of the statutory register — it catches sites mappers can see are derelict that no council has registered. Quarry and landfill land carries obvious remediation risk: treat it as a lead to investigate, not a capacity number. NPPF L2(1)(a) gives substantial weight to remediating \"despoiled, degraded, derelict, contaminated or unstable land\".", source: "OpenStreetMap contributors (ODbL 1.0)" },
+  osm_leisure_lowdensity: { about: "Golf courses, driving ranges, garden centres, marinas and tracks — large, low-value, lightly built land. Shown because it is a real land supply, but flagged <strong>NOT previously developed land</strong>: NPPF Annex B excludes parks, recreation grounds and undeveloped leisure land from the PDL definition unless permanent structures are involved, so these do not attract the L2 brownfield weighting and are a materially harder planning case than anything else in this group.", source: "OpenStreetMap contributors (ODbL 1.0)" },
   price_heat:         { about: "Median sold price over the last 3 years, mapped on real boundaries — local authorities nationally, neighbourhood (LSOA) areas from z9 in. Every Land Registry comparable inside the area feeds its median. Colour is the NATIONAL PERCENTILE (pale = cheapest, deep red = dearest) rather than the raw £: an absolute ramp leaves most of England one flat colour while London saturates it. The popup gives the actual median, the houses/flats split and the sale count. Areas with under 3 sales stay blank rather than publish a one-sale 'median'.", source: "HM Land Registry Price Paid Data © Crown copyright (display use, with attribution)" },
   ppm2_heat:          { about: "£ per m² over the last 3 years on real boundaries (authorities nationally, LSOA neighbourhoods from z9 in), shaded by NATIONAL PERCENTILE so the map reads evenly rather than saturating on London. Where sales address-match an EPC certificate the value is the median of REAL price ÷ measured floor area — 95% of sales now match, and the popup says how many; thin-coverage areas fall back to a property-type estimate marked with ~.", source: "HM Land Registry Price Paid Data © Crown copyright; MHCLG EPC register (floor areas)" },
   spen_sites:         { about: "SP Energy Networks substations with the operator's published capacity/headroom columns — click a dot for the full record.", source: "SP Energy Networks open data portal (CC-BY/OGL-style licence)" },
@@ -4029,6 +4071,27 @@ function hoverContentForOverlay(def, p) {
   const d = def.dataset;
   const row = (v, l) => (v == null || v === "" || v === "null") ? null : [String(v), l];
   let title = p.name || def.label, kind = def.label, rows = [];
+
+  // OSM low-value / underused land. Returns EARLY and deliberately does not
+  // join the else-if chain below — one shared card serves all six datasets,
+  // and the PDL flag is the headline because it decides which planning route
+  // the site is even on.
+  if (d && d.startsWith("osm_") && p.cls) {
+    const ha = Number(p.ha);
+    const sub = String(p.subtype || "").replace(/_/g, " ");
+    return { title: p.name || p.kind || def.label,
+             kind: (p.kind || def.label) + (sub ? " · " + sub : ""),
+             chip: def.color,
+             rows: [
+               row(ha ? (ha >= 1 ? ha.toFixed(2) + " ha" : Math.round(Number(p.area_m2)).toLocaleString() + " m²") : null, "site area"),
+               row(p.pdl === false ? "No — not previously developed land"
+                                   : "Yes — previously developed land", "NPPF Annex B"),
+               row(p.hook, "policy hook"),
+               row(p.levels ? p.levels + (p.levels === 1 ? " storey" : " storeys") : null, "height (OSM)"),
+               row(p.operator, "operator"),
+             ].filter(Boolean) };
+  }
+
   if (d === "power_substation") {
     title = p.name || "Substation";
     rows = [row(p.kv ? `${p.kv} kV` : null, "voltage"),

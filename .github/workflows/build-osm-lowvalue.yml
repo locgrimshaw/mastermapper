@@ -1,0 +1,120 @@
+name: Build OSM low-value land layers
+
+# The BUILT-FORM lens of docs/PLAN_BROWNFIELD.md: industrial sheds, retail
+# sheds, surface car parks, depots and lock-ups, gasholder sites, works and
+# mineral land — the redevelopment candidates no brownfield register holds.
+#
+# Extraction has to happen here rather than in a dev container: Geofabrik is
+# not reachable through the agent network policy, and osmium needs the ~1.8 GB
+# UK PBF. Runtime is ~35-50 min, nearly all of it the download and the osmium
+# pass — the same shape as build-building-tiles.yml.
+#
+# Classification, and the NPPF Annex B exclusions it applies, live in
+# pipeline/build_osm_lowvalue.py. Six datasets are written and loaded:
+#   osm_industrial  osm_retail  osm_parking
+#   osm_storage     osm_brownfield  osm_leisure_lowdensity
+#
+# Licence: OpenStreetMap contributors, ODbL 1.0 — attribution shows on the map
+# while any of these layers is on.
+
+on:
+  workflow_dispatch:
+    inputs:
+      osm_pbf_url:
+        description: "OSM PBF to build from (blank = Geofabrik united-kingdom-latest)"
+        required: false
+        default: ""
+      min_area_m2:
+        description: "Smallest site to keep, m² (default 1000)"
+        required: false
+        default: "1000"
+  schedule:
+    # Quarterly refresh — OSM moves, but not fast enough to justify monthly.
+    - cron: "40 4 8 1,4,7,10 *"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install osmium
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq osmium-tool
+          osmium --version
+
+      - name: Free up disk before the download
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          df -h /
+
+      - name: Extract candidate polygons from OSM
+        env:
+          OSM_SRC: ${{ inputs.osm_pbf_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p data/raw
+          PBF_URL="${OSM_SRC:-https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf}"
+          echo "Downloading OSM PBF (~1.8 GB): $PBF_URL"
+          curl -fL --retry 3 --retry-delay 15 -o data/raw/uk.osm.pbf "$PBF_URL"
+          df -h /
+          # Keep only ways/relations that could possibly classify. The tag set
+          # mirrors pipeline/build_osm_lowvalue.py — widen BOTH together.
+          osmium tags-filter data/raw/uk.osm.pbf \
+            w/landuse r/landuse \
+            w/amenity=parking,fuel,recycling r/amenity=parking,fuel,recycling \
+            w/building=industrial,warehouse,factory,manufacture,hangar,retail,supermarket,kiosk \
+            r/building=industrial,warehouse,factory,manufacture,hangar,retail,supermarket,kiosk \
+            w/man_made=works,gasometer,storage_tank,silo,water_works,wastewater_plant \
+            r/man_made=works,gasometer,storage_tank,silo,water_works,wastewater_plant \
+            w/leisure=golf_course,driving_range,track,water_park,marina \
+            r/leisure=golf_course,driving_range,track,water_park,marina \
+            w/shop r/shop w/industrial r/industrial \
+            -o data/raw/lv.osm.pbf --overwrite
+          rm -f data/raw/uk.osm.pbf
+          df -h /
+          # osmium export keeps EVERY tag as a property (unlike ogr2ogr's
+          # osmconf.ini subset), which the classifier needs, and -a id,type
+          # gives the stable @id/@type used for source_id.
+          osmium export data/raw/lv.osm.pbf \
+            -f geojsonseq -a id,type --geometry-types=polygon \
+            -o data/raw/osm_lowvalue.geojsonl --overwrite
+          rm -f data/raw/lv.osm.pbf
+          wc -l data/raw/osm_lowvalue.geojsonl
+          df -h /
+
+      - name: Classify and build the import CSV
+        env:
+          OSM_LV_MIN_AREA: ${{ inputs.min_area_m2 }}
+        run: |
+          python pipeline/build_osm_lowvalue.py
+          rm -f data/raw/osm_lowvalue.geojsonl
+          ls -la supabase/datasets_import.csv
+
+      - name: Keep the CSV as an artifact (recovery without re-downloading OSM)
+        uses: actions/upload-artifact@v4
+        with:
+          name: osm_lowvalue_csv
+          path: supabase/datasets_import.csv
+          retention-days: 14
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: "osm_industrial,osm_retail,osm_parking,osm_storage,osm_brownfield,osm_leisure_lowdensity"
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          echo "import CSV: $(wc -l < supabase/datasets_import.csv) line(s)"
+          python supabase/loaders/load_datasets.py
