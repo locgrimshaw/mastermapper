@@ -8337,6 +8337,139 @@ function renderParcelAssemblySummary(el, notice) {
 // defaults. From here the generative layout tool takes over.
 const _compileState = { density: 35, netPct: null };
 
+// ---- Saved generated layouts ------------------------------------------------
+// A layout saved from the generator persists (localStorage) and is drawn on
+// the main map: streets, plots, buildings by tenure, shared greens, pond,
+// trees. Each saved option carries the inputs for a full appraisal waterfall.
+const SAVED_LAYOUTS_KEY = "mm_saved_layouts_v1";
+function loadSavedLayouts() {
+  try { return JSON.parse(localStorage.getItem(SAVED_LAYOUTS_KEY)) || []; }
+  catch (_) { return []; }
+}
+function persistSavedLayouts(list) {
+  try { localStorage.setItem(SAVED_LAYOUTS_KEY, JSON.stringify(list)); }
+  catch (e) { console.warn("saved layouts not persisted", e); }
+}
+let _savedLayouts = loadSavedLayouts();
+
+const _SL_BTYPE_COLORS = ["match", ["get", "btype"],
+  "det", "#e8590c", "semi", "#f59f00", "terr", "#fab005", "flat", "#7048e8",
+  "#e8590c"];
+function renderSavedLayoutsOnMap() {
+  if (!map.isStyleLoaded && !map.getStyle) return;
+  const feats = [];
+  for (const sl of _savedLayouts)
+    for (const f of (sl.fc && sl.fc.features) || [])
+      feats.push({ ...f, properties: { ...(f.properties || {}), sid: sl.id } });
+  const fc = { type: "FeatureCollection", features: feats };
+  const src2 = map.getSource("saved-layouts");
+  if (src2) src2.setData(fc);
+  else {
+    map.addSource("saved-layouts", { type: "geojson", data: fc });
+    map.addLayer({ id: "sl-plot", type: "fill", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "plot"],
+      paint: { "fill-color": "#d8f5dd", "fill-opacity": 0.9, "fill-outline-color": "#96d9a5" } });
+    map.addLayer({ id: "sl-green", type: "fill", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "shared_green"],
+      paint: { "fill-color": "#9ed9a6", "fill-opacity": 0.9 } });
+    map.addLayer({ id: "sl-street", type: "fill", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "street"],
+      paint: { "fill-color": "#c4cad1", "fill-opacity": 0.95 } });
+    map.addLayer({ id: "sl-pond", type: "fill", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "suds_pond"],
+      paint: { "fill-color": "#74c0fc", "fill-opacity": 0.95 } });
+    map.addLayer({ id: "sl-bld", type: "fill", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "building"],
+      paint: { "fill-color": _SL_BTYPE_COLORS, "fill-opacity": 0.95,
+               "fill-outline-color": "#ffffff" } });
+    map.addLayer({ id: "sl-tree", type: "circle", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "tree"],
+      paint: { "circle-color": "#37b24d", "circle-radius":
+               ["interpolate", ["linear"], ["zoom"], 14, 1, 17, 3], "circle-opacity": 0.8 } });
+  }
+  renderSavedLayoutsChip();
+}
+function renderSavedLayoutsChip() {
+  let chip = document.getElementById("sl-chip");
+  if (!_savedLayouts.length) { if (chip) chip.remove(); return; }
+  if (!chip) {
+    chip = document.createElement("div");
+    chip.id = "sl-chip";
+    document.body.appendChild(chip);
+  }
+  chip.innerHTML = `<b>Saved layouts</b>` + _savedLayouts.map(sl => `
+    <div class="sl-row" data-id="${sl.id}">
+      <span class="sl-name" title="${sl.name}">${sl.name}</span>
+      <span class="sl-meta">${sl.stats.units} homes · ${sl.stats.density.toFixed(1)}/ha</span>
+      <button type="button" data-act="zoom" title="Zoom to layout">◎</button>
+      <button type="button" data-act="wf" title="Viability waterfall">£</button>
+      <button type="button" data-act="del" title="Remove">×</button>
+    </div>`).join("");
+  chip.onclick = (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const id = btn.closest(".sl-row").dataset.id;
+    const sl = _savedLayouts.find(s => s.id === id);
+    if (!sl) return;
+    if (btn.dataset.act === "zoom") {
+      try { map.fitBounds(turf.bbox(sl.fc), { padding: 60, maxZoom: 17 }); } catch (_) {}
+    } else if (btn.dataset.act === "wf") {
+      openLayoutWaterfall(sl);
+    } else if (btn.dataset.act === "del") {
+      _savedLayouts = _savedLayouts.filter(s => s.id !== id);
+      persistSavedLayouts(_savedLayouts);
+      renderSavedLayoutsOnMap();
+    }
+  };
+}
+map.on("load", () => { try { renderSavedLayoutsOnMap(); } catch (e) { console.warn(e); } });
+// harness/debug access
+window._slTest = {
+  add: (e) => { _savedLayouts = [..._savedLayouts, e].slice(-6); persistSavedLayouts(_savedLayouts); renderSavedLayoutsOnMap(); },
+  list: () => _savedLayouts, wf: (id) => openLayoutWaterfall(_savedLayouts.find(s => s.id === id)),
+};
+
+// Full development appraisal waterfall for one saved layout, run through the
+// same engine as every other appraisal in the app, on the layout's real unit
+// count and flat mix.
+function openLayoutWaterfall(sl) {
+  const a = Object.assign({}, SIFT.assumptions,
+    sl.stats.flatsPct != null ? { flatMixPct: sl.stats.flatsPct } : {});
+  const ap = computeAppraisal(sl.appraisalInputs, a, { noSens: true });
+  const money = v => (v < 0 ? "−" : "") + fmtMoneyShort(Math.abs(v));
+  let m2 = document.getElementById("wf-modal");
+  if (!m2) { m2 = document.createElement("div"); m2.id = "wf-modal"; document.body.appendChild(m2); }
+  const ragCls = ap.rag === "viable" ? "sg" : ap.rag === "marginal" ? "sa" : "sr";
+  const cell = (v, l, cls) => `<div class="cm-cell${cls ? " " + cls : ""}"><b>${v}</b><span>${l}</span></div>`;
+  m2.innerHTML = `
+    <div class="cm-card" style="max-width:760px">
+      <div class="cm-head">
+        <div><span class="cm-kicker">Saved layout · viability waterfall</span>
+          <h3>${sl.name}</h3></div>
+        <button type="button" id="wf-close" class="cm-close" aria-label="Close">×</button>
+      </div>
+      <div class="cm-grid" style="margin:10px 0">
+        ${cell(sl.stats.units.toLocaleString(), "dwellings")}
+        ${cell(sl.stats.density.toFixed(1) + "/ha", "gross density")}
+        ${cell((sl.stats.flatsPct ?? 0) + "%", "flats")}
+        ${cell(Math.round(sl.stats.gia).toLocaleString() + " m²", "total GIA")}
+        ${cell(ap.gdv ? money(ap.gdv) : "—", "GDV")}
+        ${cell(ap.totalCost ? money(ap.totalCost) : "—", "total cost")}
+        ${cell(ap.profitOnCost != null ? ap.profitOnCost.toFixed(1) + "%" : "—", "profit on cost", "cm-" + ragCls)}
+        ${cell(ap.residualLandValue != null ? money(ap.residualLandValue) : "—", "residual land value")}
+      </div>
+      ${ap.waterfall ? svgWaterfall(ap.waterfall, { alt: "Saved layout appraisal waterfall" }) : ""}
+      ${ap.waterfall ? `<table class="sr-table" style="margin-top:10px"><tbody>` +
+        ap.waterfall.map(([k, v]) => `<tr><td>${k}</td><td style="text-align:right">${money(v)}</td></tr>`).join("") +
+        `</tbody></table>` : ""}
+      <p class="hint">Same appraisal engine as the compile view — run on this layout's real unit count and mix, with current viability assumptions.</p>
+    </div>`;
+  m2.hidden = false;
+  m2.querySelector("#wf-close").onclick = () => { m2.hidden = true; };
+  m2.onclick = (e) => { if (e.target === m2) m2.hidden = true; };
+}
+
+
 function _sitePlanSVG(feats, w, h) {
   const pts = [];
   for (const f of feats) {
@@ -8459,7 +8592,7 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws143");
+      const mod = await import("./layoutgen.js?v=ws144");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       // Hard constraints INSIDE the site become no-build exclusion zones in
@@ -8489,6 +8622,30 @@ function openCompileModal() {
         // Adopt: push the chosen layout's achieved numbers back into this
         // compile appraisal, so the full residual (land, policy costs,
         // affordable) runs on the layout that will actually be built.
+        // Save: persist the chosen layout and draw it on the main map, with
+        // everything needed for a standalone viability waterfall later.
+        onSaveLayout: ({ fc, stats }) => {
+          const netHa = totHa * (_compileState.netPct || 75) / 100;
+          const entry = {
+            id: "sl" + Date.now().toString(36),
+            name: name || "Generated layout",
+            created: Date.now(),
+            fc, stats,
+            appraisalInputs: {
+              units: stats.units, ppm2: deep.ppm2 || null,
+              region: (deep.station && deep.station.region) || null,
+              areaHa: netHa,
+              ladCode: (deep._ctx && deep._ctx.lad_code) || null,
+              locationFactor: (deep._marketCtx && deep._marketCtx.factor) || null,
+              landValueHa: (deep._marketCtx && deep._marketCtx.landValueHa) || null,
+              cilAreaPm2: (deep._marketCtx && deep._marketCtx.cilPm2 != null) ? deep._marketCtx.cilPm2 : null,
+              greenBeltShare: deepGbShare(),
+            },
+          };
+          _savedLayouts = [..._savedLayouts.filter(s => s.name !== entry.name), entry].slice(-6);
+          persistSavedLayouts(_savedLayouts);
+          try { renderSavedLayoutsOnMap(); } catch (e2) { console.warn(e2); }
+        },
         onAdopt: ({ units, flatsPct }) => {
           const netPctIn = m.querySelector("#cm-netpct");
           const densIn = m.querySelector("#cm-density");

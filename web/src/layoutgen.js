@@ -1529,6 +1529,10 @@ function svgOf(cand, site, w, h, detail) {
   return `<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">${out}</svg>`;
 }
 
+// Closing the tool keeps the evolved population in memory, so reopening the
+// generator on the same site resumes exactly where it left off.
+let _lgSession = null;
+
 // ---- the tool --------------------------------------------------------------
 export function openLayoutGen(ctx) {
   const t = T();
@@ -1674,7 +1678,15 @@ export function openLayoutGen(ctx) {
   site._mkExcl();
   const siteHa = areaM2 / 1e4;
 
-  const params = {
+  const sig = (() => {
+    const c = JSON.stringify(g.coordinates);
+    let h = 0;
+    for (let i = 0; i < c.length; i += 7) h = (h * 31 + c.charCodeAt(i)) | 0;
+    return h + ":" + c.length;
+  })();
+  const saved = _lgSession && _lgSession.sig === sig ? _lgSession : null;
+
+  const params = saved ? saved.params : {
     objective: "target",
     density: ctx.density || 35, netPct: ctx.netPct || 80,
     flatsPct: Math.round(ctx.assumptions.flatMixPct ?? 20),
@@ -1682,6 +1694,7 @@ export function openLayoutGen(ctx) {
     gardenMin: 80, gardenMax: 240, greenPct: 10, organic: 0.7, parkRatio: 2,
     ppm2: ctx.ppm2, assumptions: ctx.assumptions || {},
   };
+  if (saved) { params.ppm2 = ctx.ppm2; params.assumptions = ctx.assumptions || {}; }
 
   const POP = 12;
   let pop = [], gen = 0, best = null, bestHist = [], running = false, timer = null, focusIdx = null;
@@ -1846,6 +1859,7 @@ export function openLayoutGen(ctx) {
           <canvas id="lg-spark" width="170" height="34"></canvas>
           <button type="button" id="lg-edit" class="ghost">✋ Edit streets</button>
           <button type="button" id="lg-adopt" class="plot-mode-btn">Adopt into appraisal</button>
+          <button type="button" id="lg-save" class="plot-mode-btn">★ Save layout to map</button>
           <button type="button" id="lg-export" class="ghost">Export GeoJSON</button>
           <details class="lg-std"><summary>Standards applied ⓘ</summary>
             <ul>
@@ -2016,10 +2030,15 @@ export function openLayoutGen(ctx) {
       debouncedReset();
     });
   }
+  m.querySelector("#lg-obj").value = params.objective;   // restore on resume
   m.querySelector("#lg-obj").addEventListener("change", e => { params.objective = e.target.value; resetPop(); });
   m.querySelector("#lg-run").addEventListener("click", () => setRunning(!running));
-  m.querySelector("#lg-close").addEventListener("click", () => { setRunning(false); m.hidden = true; });
-  m.addEventListener("click", e => { if (e.target === m) { setRunning(false); m.hidden = true; } });
+  const stash = () => {
+    _lgSession = { sig, pop, best, gen, bestHist, focusIdx, params };
+  };
+  const closeTool = () => { setRunning(false); stash(); m.hidden = true; };
+  m.querySelector("#lg-close").addEventListener("click", closeTool);
+  m.addEventListener("click", e => { if (e.target === m) closeTool(); });
   // Manual street shaping: pause evolution, drag the blue handles (entrance,
   // two bends, far end) — the layout regenerates live around your street.
   const bigBox = m.querySelector("#lg-best-svg");
@@ -2076,28 +2095,60 @@ export function openLayoutGen(ctx) {
     if (!cand || !ctx.onAdopt) return;
     ctx.onAdopt({ units: cand.stats.total,
                   flatsPct: Math.round(cand.stats.mix.flat * 100) });
-    setRunning(false);
+    setRunning(false); stash();
     m.hidden = true;
   });
-  m.querySelector("#lg-export").addEventListener("click", () => {
-    const cand = m._exportCand;
-    if (!cand) return;
+  // Georeferenced GeoJSON of one candidate — streets, plots, buildings,
+  // shared greens, pond, trees — shared by Export and Save-to-map.
+  const layoutFC = (cand) => {
     const toLL = p => [(p[0] + site.ox) / site.kx, (p[1] + site.oy) / site.ky];
     const ringLL = ring => ring.map(toLL);
     const feats = [];
-    for (const p of cand.roadClip)
+    for (const p of cand.roadClip || [])
       feats.push({ type: "Feature", properties: { kind: "street" },
         geometry: { type: "Polygon", coordinates: p.map(ringLL) } });
-    for (const l of cand.lots)
+    for (const gr of cand.greens || [])
+      feats.push({ type: "Feature", properties: { kind: "shared_green" },
+        geometry: { type: "Polygon", coordinates: [ringLL([...gr.outline, gr.outline[0]])] } });
+    for (const l of cand.lots) {
       feats.push({ type: "Feature", properties: { kind: "plot", house: TYPES[l.type].label },
         geometry: { type: "Polygon", coordinates: [ringLL(l.quad)] } });
+      const bq = l.bpoly ? l.bpoly : bldQuad(l).quad;
+      feats.push({ type: "Feature",
+        properties: { kind: "building", house: TYPES[l.type].label, btype: l.type,
+                      storeys: l.type === "flat" ? (l.storeys || 2) : 2,
+                      units: l.units || 1 },
+        geometry: { type: "Polygon", coordinates: [ringLL(bq)] } });
+    }
     if (cand.pond)
       feats.push({ type: "Feature", properties: { kind: "suds_pond" },
         geometry: { type: "Polygon", coordinates: cand.pond.map(ringLL) } });
-    for (const tr of cand.trees)
+    for (const tr of cand.trees || [])
       feats.push({ type: "Feature", properties: { kind: "tree" },
         geometry: { type: "Point", coordinates: toLL(tr) } });
-    const blob = new Blob([JSON.stringify({ type: "FeatureCollection", features: feats })],
+    return { type: "FeatureCollection", features: feats };
+  };
+
+  m.querySelector("#lg-save").addEventListener("click", () => {
+    const cand = m._exportCand;
+    if (!cand || !ctx.onSaveLayout) return;
+    decorate(cand, site);
+    const st = cand.stats;
+    ctx.onSaveLayout({
+      fc: layoutFC(cand),
+      stats: { units: st.total, density: st.density, netDevPct: st.netDevPct,
+               flatsPct: Math.round(st.mix.flat * 100), gia: st.gia,
+               greenPct: st.greenPct, avgGarden: st.avgGarden },
+    });
+    const b2 = m.querySelector("#lg-save");
+    b2.textContent = "✓ Saved — shown on the map";
+    setTimeout(() => { b2.textContent = "★ Save layout to map"; }, 2600);
+  });
+
+  m.querySelector("#lg-export").addEventListener("click", () => {
+    const cand = m._exportCand;
+    if (!cand) return;
+    const blob = new Blob([JSON.stringify(layoutFC(cand))],
       { type: "application/geo+json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -2107,7 +2158,13 @@ export function openLayoutGen(ctx) {
   });
 
   m.hidden = false;
-  resetPop();
+  if (saved && saved.pop && saved.pop.length) {
+    pop = saved.pop; best = saved.best; gen = saved.gen;
+    bestHist = saved.bestHist || []; focusIdx = saved.focusIdx;
+    render();
+  } else {
+    resetPop();
+  }
 }
 
 // test/harness access to internal geometry helpers (no runtime cost)

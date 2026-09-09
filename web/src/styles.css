@@ -3023,3 +3023,26 @@ footer {
 .lg-std { font-size: 10px; color: var(--text-dim); }
 .lg-std summary { cursor: pointer; font-weight: 600; }
 .lg-std ul { margin: 4px 0 0; padding-left: 14px; display: flex; flex-direction: column; gap: 3px; line-height: 1.4; }
+
+/* ---- saved generated layouts: map chip + waterfall modal ---- */
+#sl-chip {
+  position: fixed; left: 12px; bottom: 12px; z-index: 60;
+  background: rgba(255,255,255,0.96); border: 1px solid #dee2e6;
+  border-radius: 10px; padding: 8px 10px; font-size: 12px;
+  box-shadow: 0 4px 14px rgba(33,37,41,0.14); max-width: 300px;
+}
+#sl-chip > b { display: block; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em; color: #495057; margin-bottom: 4px; }
+#sl-chip .sl-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+#sl-chip .sl-name { font-weight: 600; max-width: 110px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+#sl-chip .sl-meta { color: #667085; flex: 1; white-space: nowrap; }
+#sl-chip button { border: 1px solid #dee2e6; background: #fff; border-radius: 6px;
+  width: 22px; height: 22px; cursor: pointer; font-size: 12px; line-height: 1;
+  padding: 0; color: #364152; }
+#sl-chip button:hover { background: #f1f3f5; }
+#wf-modal { position: fixed; inset: 0; z-index: 90; background: rgba(33,37,41,0.45);
+  display: flex; align-items: center; justify-content: center; padding: 18px; }
+#wf-modal[hidden] { display: none; }
+#wf-modal .cm-card { background: #fff; border-radius: 14px; padding: 18px 20px;
+  max-height: 92vh; overflow: auto; width: 100%; }
