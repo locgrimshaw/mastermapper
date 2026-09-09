@@ -599,14 +599,39 @@ function generateCandidate(site, params, genome) {
     fullPolys.push(circlePoly(hd[0], hd[1], HEAD_R));
     carrPolys.push(circlePoly(hd[0], hd[1], HEAD_R - 1.8));
   }
-  // road land take: union of full ribbons ∩ site
-  let roadArea = 0, roadClip = [];
-  if (fullPolys.length) {
-    let u = MF(fullPolys.map(p => p));
-    const inter = boolOp("intersect", site.feat, u);
-    roadClip = flatPolys(inter);
-    roadArea = roadClip.reduce((a, p) => a + polyArea(p), 0);
+  // road land take, approximated analytically (ribbon areas minus junction
+  // overlaps). The exact union∩site turf clip is far too slow for the
+  // evolution loop, so decorate() computes it only for the layout on show.
+  let roadArea = 0;
+  for (const fp of fullPolys) roadArea += polyArea(fp);
+  roadArea = Math.max(0, Math.min(roadArea - junctions * 42, site.areaM2 * 0.6));
+  // spatial hash of road samples: "is this point on a street?" in O(1),
+  // replacing point-in-ribbon scans over hundred-vertex polygons in tryQuad
+  const RCELL = 9, rgrid = new Map();
+  const rIdx = (x, y) => Math.floor(x / RCELL) * 100000 + Math.floor(y / RCELL);
+  const rPush = (x, y, hw) => {
+    const k = rIdx(x, y);
+    let arr = rgrid.get(k); if (!arr) rgrid.set(k, arr = []);
+    arr.push([x, y, hw * hw]);
+  };
+  for (const r of roads) {
+    const hw = STREETS[r.type].corridor / 2;
+    for (const p of r.pts) rPush(p[0], p[1], hw);
   }
+  for (const hd of heads) rPush(hd[0], hd[1], HEAD_R);
+  const onRoad = (x, y) => {
+    const ix = Math.floor(x / RCELL), iy = Math.floor(y / RCELL);
+    for (let a = ix - 1; a <= ix + 1; a++)
+      for (let b = iy - 1; b <= iy + 1; b++) {
+        const arr = rgrid.get(a * 100000 + b);
+        if (!arr) continue;
+        for (const s of arr) {
+          const dx = x - s[0], dy = y - s[1];
+          if (dx * dx + dy * dy < s[2]) return true;
+        }
+      }
+    return false;
+  };
 
   // --- plots along frontages ------------------------------------------------
   const targetUnits = params.objective === "target"
@@ -671,9 +696,9 @@ function generateCandidate(site, params, genome) {
     for (let i = 0; i < 4; i++)
       if (inAnyPoly(quad[i][0], quad[i][1], site.exclusionPolys)) return false;
     if (inAnyPoly(cx, cy, site.exclusionPolys)) return false;
-    for (const fp of fullPolys)
-      for (let i = 0; i < 4; i++)
-        if (inPoly(quad[i][0], quad[i][1], fp) || inPoly(cx, cy, fp)) return false;
+    if (onRoad(cx, cy)) return false;
+    for (let i = 0; i < 4; i++)
+      if (onRoad(quad[i][0], quad[i][1])) return false;
     for (const l of lots) {
       const lx = (l.quad[0][0] + l.quad[2][0]) / 2, ly = (l.quad[0][1] + l.quad[2][1]) / 2;
       if (Math.hypot(cx - lx, cy - ly) > 60) continue;
@@ -761,6 +786,41 @@ function generateCandidate(site, params, genome) {
   const lotArea = lots.reduce((a, l) => a + ringArea(l.quad), 0);
   const greenArea = Math.max(0, site.areaM2 - roadArea - lotArea);
 
+  const roadLen = roads.reduce((a, r) => a + polylineLen(r.pts), 0);
+  // Garden aspect: the rear garden faces away from the street (+normal).
+  // Local +y is north, so ny < −0.34 means the garden looks south-ish.
+  const houseLots = lots.filter(l => l.type !== "flat");
+  const southPct = houseLots.length
+    ? houseLots.filter(l => l.ny < -0.34).length / houseLots.length * 100 : 0;
+  const stats = statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea,
+                           site, params, gardenDepth, southPct, deadEnds, junctions,
+                           flatBlocks: lots.filter(l => l.type === "flat").length });
+  // pond + street trees are display dressing, filled in lazily by decorate()
+  // so the evolution loop never pays for them — see decorate() below.
+  return { genome, roads, roadClip: null, fullPolys, carrPolys, heads, lots,
+           stats, pond: null, trees: [], gardenDepth, ctrl };
+}
+
+// Display-only dressing (SuDS pond siting + street trees). Deferred out of
+// the evolution hot path: candidates are scored without it, and only the
+// layout actually shown (or exported) pays for it, once.
+function decorate(cand, site) {
+  if (cand._dec) return cand;
+  cand._dec = true;
+  // exact street land take (union of ribbons ∩ site) for crisp display/export
+  if (!cand.roadClip && cand.fullPolys.length) {
+    try {
+      const inter = boolOp("intersect", site.feat, MF(cand.fullPolys.map(p => p)));
+      const clip = flatPolys(inter);
+      if (clip.length) cand.roadClip = clip;
+    } catch (_) { /* fall through to raw ribbons */ }
+  }
+  if (!cand.roadClip) cand.roadClip = cand.fullPolys;
+  const rnd = mulberry32((cand.genome.seed ^ 0x51ab3e7) >>> 0);
+  const lots = cand.lots;
+  const roadSamples = [];
+  for (const road of cand.roads) for (const p of road.pts) roadSamples.push(p);
+
   let pond = null;
   if (site.areaM2 > 12000) {
     let bx = null, bd = -1;
@@ -790,9 +850,10 @@ function generateCandidate(site, params, genome) {
       pond = [ring];
     }
   }
+  cand.pond = pond;
 
   const trees = [];
-  for (const road of roads) {
+  for (const road of cand.roads) {
     if (road.type === "lane") continue;
     const off = STREETS[road.type].corridor / 2 + 1.6;
     let acc = 0, side = 1;
@@ -811,18 +872,8 @@ function generateCandidate(site, params, genome) {
       if (free) trees.push([px, py]);
     }
   }
-
-  const roadLen = roads.reduce((a, r) => a + polylineLen(r.pts), 0);
-  // Garden aspect: the rear garden faces away from the street (+normal).
-  // Local +y is north, so ny < −0.34 means the garden looks south-ish.
-  const houseLots = lots.filter(l => l.type !== "flat");
-  const southPct = houseLots.length
-    ? houseLots.filter(l => l.ny < -0.34).length / houseLots.length * 100 : 0;
-  const stats = statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea,
-                           site, params, gardenDepth, southPct, deadEnds, junctions,
-                           flatBlocks: lots.filter(l => l.type === "flat").length });
-  return { genome, roads, roadClip, carrPolys, heads, lots, pond, trees, stats,
-           gardenDepth, ctrl };
+  cand.trees = trees;
+  return cand;
 }
 
 function statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea, site, params, gardenDepth, southPct, deadEnds, junctions, flatBlocks }) {
@@ -900,7 +951,7 @@ function svgOf(cand, site, w, h, detail) {
   for (const ex of site.exclusionPolys || [])
     out += `<path d="${path(ex)}" fill="rgba(224,49,49,0.16)" stroke="#e03131" stroke-width="${detail ? 1 : 0.4}" stroke-dasharray="4 3" fill-rule="evenodd"/>`;
   // footway ribbon then carriageway on top
-  out += cand.roadClip.map(p => `<path d="${path(p)}" fill="#e3e7ea" fill-rule="evenodd"/>`).join("");
+  out += (cand.roadClip || cand.fullPolys).map(p => `<path d="${path(p)}" fill="#e3e7ea" fill-rule="evenodd"/>`).join("");
   for (const cp of cand.carrPolys)
     out += `<path d="${path(cp)}" fill="#c4cad1"/>`;
   // gardens / plots (rear gardens with under 2h equinox sun read duller)
@@ -1070,37 +1121,92 @@ export function openLayoutGen(ctx) {
     branchGap: 45 + Math.random() * 60, loop: Math.random(),
     seed: (Math.random() * 1e9) | 0,
   });
-  const mutate = gnm => ({
-    tE: (gnm.tE + (Math.random() - 0.5) * 0.12 + 1) % 1,
-    b1x: gnm.b1x + (Math.random() - 0.5) * 0.5, b1y: gnm.b1y + (Math.random() - 0.5) * 0.5,
-    b2x: gnm.b2x + (Math.random() - 0.5) * 0.5, b2y: gnm.b2y + (Math.random() - 0.5) * 0.5,
-    branchGap: Math.min(110, Math.max(40, gnm.branchGap + (Math.random() - 0.5) * 18)),
-    loop: Math.random() < 0.12 ? Math.random() : gnm.loop,
+  // pw (mutation power) rises when the search stagnates, so a stuck run
+  // starts testing genuinely different configurations — new entrance points,
+  // flipped loops — instead of only nudging the incumbent.
+  const mutate = (gnm, pw = 1) => ({
+    tE: Math.random() < 0.05 * pw ? Math.random()
+      : (gnm.tE + (Math.random() - 0.5) * 0.12 * pw + 1) % 1,
+    b1x: gnm.b1x + (Math.random() - 0.5) * 0.5 * pw, b1y: gnm.b1y + (Math.random() - 0.5) * 0.5 * pw,
+    b2x: gnm.b2x + (Math.random() - 0.5) * 0.5 * pw, b2y: gnm.b2y + (Math.random() - 0.5) * 0.5 * pw,
+    branchGap: Math.min(110, Math.max(40, gnm.branchGap + (Math.random() - 0.5) * 18 * pw)),
+    loop: Math.random() < 0.12 * pw ? Math.random() : gnm.loop,
     seed: Math.random() < 0.4 ? (Math.random() * 1e9) | 0 : gnm.seed,
   });
+  const cross = (a, b) => ({
+    tE: Math.random() < 0.5 ? a.tE : b.tE,
+    b1x: Math.random() < 0.5 ? a.b1x : b.b1x, b1y: Math.random() < 0.5 ? a.b1y : b.b1y,
+    b2x: Math.random() < 0.5 ? a.b2x : b.b2x, b2y: Math.random() < 0.5 ? a.b2y : b.b2y,
+    branchGap: Math.random() < 0.5 ? a.branchGap : b.branchGap,
+    loop: Math.random() < 0.5 ? a.loop : b.loop,
+    seed: (Math.random() * 1e9) | 0,
+  });
+  // How different two street genomes are — used to keep the elite spread
+  // across distinct topologies instead of four clones of the leader.
+  const gDiff = (a, b) => {
+    const dt = Math.min(Math.abs(a.tE - b.tE), 1 - Math.abs(a.tE - b.tE));
+    return dt * 2
+      + Math.hypot(a.b1x - b.b1x, a.b1y - b.b1y) * 0.4
+      + Math.hypot(a.b2x - b.b2x, a.b2y - b.b2y) * 0.4
+      + Math.abs(a.branchGap - b.branchGap) / 70
+      + ((a.loop > 0.55) === (b.loop > 0.55) ? 0 : 0.8);
+  };
   const build = gnm => { try { return generateCandidate(site, params, gnm); } catch (_) { return null; } };
   const resetPop = () => {
     pop = [];
     for (let i = 0; i < POP * 2 && pop.length < POP; i++) {
       const c = build(randGenome()); if (c) pop.push(c);
     }
-    gen = 0; best = null; bestHist = []; focusIdx = null;
+    gen = 0; best = null; bestHist = []; focusIdx = null; sinceUp = 0;
     stepAndRender();
   };
+  let sinceUp = 0;   // generations since the best score last improved
   const step = () => {
     if (!pop.length) return;
-    pop.sort((a, b) => scoreOf(b.stats, params) - scoreOf(a.stats, params));
-    const elite = pop.slice(0, 4);
-    const next = [...elite];
-    while (next.length < POP) {
-      const parent = elite[Math.floor(Math.random() * elite.length)];
-      const c = build(Math.random() < 0.15 ? randGenome() : mutate(parent.genome));
-      next.push(c || parent);
+    for (const c of pop) c._s = scoreOf(c.stats, params);
+    if (best) best._s = scoreOf(best.stats, params);
+    // best-ever always competes for elite, so its genes never leave the pool
+    const cands = best && !pop.includes(best) ? [best, ...pop] : pop.slice();
+    cands.sort((a, b) => b._s - a._s);
+    const elite = [];
+    for (const c of cands) {
+      if (elite.every(e => gDiff(e.genome, c.genome) > 0.15)) elite.push(c);
+      if (elite.length === 4) break;
     }
+    for (const c of cands) {
+      if (elite.length === 4) break;
+      if (!elite.includes(c)) elite.push(c);
+    }
+    const pw = Math.min(3, 1 + sinceUp / 15);
+    const next = [...elite];
+    let tries = 0;
+    if (sinceUp > 0 && sinceUp % 40 === 0) {
+      // restart wave: the elite survives, everything else refills fresh
+      while (next.length < POP && tries++ < POP * 3) {
+        const c = build(randGenome()); if (c) next.push(c);
+      }
+    }
+    while (next.length < POP && tries++ < POP * 4) {
+      const p1 = elite[(Math.random() * elite.length) | 0];
+      const r = Math.random();
+      let g;
+      if (r < 0.12) g = randGenome();
+      else if (r < 0.40 && elite.length > 1) {
+        let p2 = p1;
+        while (p2 === p1) p2 = elite[(Math.random() * elite.length) | 0];
+        g = mutate(cross(p1.genome, p2.genome), 1);
+      } else g = mutate(p1.genome, pw);
+      const c = build(g);
+      next.push(c || p1);
+    }
+    while (next.length < POP) next.push(elite[next.length % elite.length]);
     pop = next;
-    pop.sort((a, b) => scoreOf(b.stats, params) - scoreOf(a.stats, params));
-    if (!best || scoreOf(pop[0].stats, params) > scoreOf(best.stats, params)) best = pop[0];
-    bestHist.push(scoreOf(best.stats, params));
+    for (const c of pop) c._s = scoreOf(c.stats, params);
+    pop.sort((a, b) => b._s - a._s);
+    if (!best || pop[0]._s > best._s) { best = pop[0]; sinceUp = 0; }
+    else sinceUp++;
+    bestHist.push(best._s);
+    if (bestHist.length > 700) bestHist = bestHist.filter((_, i) => i % 2 === 0);
     gen++;
   };
 
@@ -1193,13 +1299,14 @@ export function openLayoutGen(ctx) {
     const grid = m.querySelector("#lg-grid");
     grid.innerHTML = pop.map((cnd, i) => `
       <div class="lg-cell${(focusIdx === i || (i === 0 && focusIdx == null)) ? " lg-top" : ""}" data-i="${i}">
-        ${svgOf(cnd, site, 150, 128, false)}
+        ${cnd._thumb || (cnd._thumb = svgOf(cnd, site, 150, 128, false))}
         <span>${cnd.stats.total} · ${cnd.stats.density.toFixed(0)}/ha${params.objective === "profit" ? " · " + cnd.stats.poc.toFixed(0) + "%" : ""}</span>
       </div>`).join("");
     grid.querySelectorAll(".lg-cell").forEach(cell =>
       cell.addEventListener("click", () => { focusIdx = +cell.dataset.i; render(); }));
     const show = focusIdx != null ? pop[focusIdx] : (best || pop[0]);
     if (show) {
+      decorate(show, site);
       computeSun(show, site);
       let bigSvg = svgOf(show, site, 430, 360, true);
       if (editMode && show.ctrl) {
@@ -1237,7 +1344,8 @@ export function openLayoutGen(ctx) {
         + (site.terrain ? ` · ⛰ slope mean ${site.terrain.meanSlope.toFixed(1)}% max ${site.terrain.maxSlope.toFixed(0)}%${site.terrain.maxSlope > 12 ? " ⚠" : ""} · earthworks ~${(computeEarthworks(show, site) || 0).toLocaleString()} m³` : " · ⛰ terrain loading…") + `</p>`;
       m._exportCand = show;
     }
-    m.querySelector("#lg-gen").textContent = gen;
+    m.querySelector("#lg-gen").textContent = gen
+      + (running && genRate >= 1 ? ` · ${genRate.toFixed(0)}/s` : "");
     const cv = m.querySelector("#lg-spark");
     if (cv && bestHist.length > 1) {
       const c2 = cv.getContext("2d");
@@ -1254,13 +1362,28 @@ export function openLayoutGen(ctx) {
   };
   const stepAndRender = () => { step(); render(); };
 
+  // Evolution runs as fast as the machine allows: each tick spends up to
+  // ~110 ms stepping generations back-to-back, then renders once. Display
+  // work (thumbnails, sun, pond/trees) is cached or deferred to the shown
+  // layout only, so nearly the whole budget goes on testing new layouts.
+  let genRate = 0;
+  const loopTick = () => {
+    if (!running) return;
+    const t0 = performance.now();
+    let n = 0;
+    do { step(); n++; } while (performance.now() - t0 < 110 && n < 60);
+    genRate = n * 1000 / Math.max(1, performance.now() - t0);
+    render();
+    timer = setTimeout(loopTick, 30);
+  };
   const setRunning = on => {
     running = on;
     const b = m.querySelector("#lg-run");
     b.textContent = on ? "❚❚ Pause" : "▶ Evolve";
     b.classList.toggle("active", on);
-    if (timer) { clearInterval(timer); timer = null; }
-    if (on) timer = setInterval(stepAndRender, 450);
+    if (timer) { clearTimeout(timer); timer = null; }
+    genRate = 0;
+    if (on) timer = setTimeout(loopTick, 0);
   };
 
   const slider = (id, key, lbl, map) => {

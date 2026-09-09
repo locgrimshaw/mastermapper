@@ -8459,7 +8459,7 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws135");
+      const mod = await import("./layoutgen.js?v=ws136");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       // Hard constraints INSIDE the site become no-build exclusion zones in
