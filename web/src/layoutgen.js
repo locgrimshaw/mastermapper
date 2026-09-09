@@ -1533,17 +1533,10 @@ function svgOf(cand, site, w, h, detail) {
 // generator on the same site resumes exactly where it left off.
 let _lgSession = null;
 
-// ---- the tool --------------------------------------------------------------
-export function openLayoutGen(ctx) {
-  const t = T();
-  if (!t) { alert("Geometry library not loaded yet — try again in a moment."); return; }
-
-  // Assembled sites inherit hairline slivers and seams from imperfect parcel
-  // geometry — neighbouring INSPIRE plots that almost, but not quite, abut.
-  // Those slits read as site boundary, so streets refuse to cross them and
-  // the network fragments. A small morphological closing (buffer out, then
-  // back in) welds any gap narrower than ~2.5 m before the generator starts;
-  // thin genuine features survive (closing fills gaps, it never erodes).
+// Shared site preparation: sliver weld, local-metre projection, disjoint
+// parts, membership bitmaps, exclusion projection. Used by the resi tool
+// here and by the data-centre generator (dcgen.js).
+export function prepareSite(ctx, t) {
   let siteFeat = ctx.site;
   try {
     const grown = t.buffer(siteFeat, 0.00125, { units: "kilometers" });
@@ -1575,7 +1568,7 @@ export function openLayoutGen(ctx) {
     // drop micro-holes and debris fragments left over from parcel geometry
     .map(poly => poly.filter((ring, i) => i === 0 || ringArea(ring) > 30))
     .filter(poly => ringArea(poly[0]) > 80);
-  if (!polys.length) { alert("Site geometry too small to lay out."); return; }
+  if (!polys.length) return null;
   const areaM2 = polys.reduce((a, p) => a + polyArea(p), 0);
   let minX = 1e12, maxX = -1e12, minY = 1e12, maxY = -1e12;
   for (const poly of polys) for (const ring of poly) for (const p of ring) {
@@ -1676,7 +1669,21 @@ export function openLayoutGen(ctx) {
     }
   }
   site._mkExcl();
+  site._g = g;
+  return site;
+
+}
+
+// ---- the tool --------------------------------------------------------------
+export function openLayoutGen(ctx) {
+  const t = T();
+  if (!t) { alert("Geometry library not loaded yet — try again in a moment."); return; }
+
+  const site = prepareSite(ctx, t);
+  if (!site) { alert("Site geometry too small to lay out."); return; }
+  const areaM2 = site.areaM2;
   const siteHa = areaM2 / 1e4;
+  const g = site._g;
 
   const sig = (() => {
     const c = JSON.stringify(g.coordinates);
@@ -2169,3 +2176,8 @@ export function openLayoutGen(ctx) {
 
 // test/harness access to internal geometry helpers (no runtime cost)
 export const _test = { bldQuad, inPoly, inRing, ringArea, quadOverlap };
+
+// Shared geometry/terrain toolkit for sibling generators (dcgen.js).
+export const _geom = { mulberry32, ringArea, polyArea, inRing, inPoly, inAnyPoly,
+                       ribbon, circlePoly, polylineLen, quadOverlap, boolOp,
+                       flatPolys, MF, F, distToBoundary, fetchTerrain };

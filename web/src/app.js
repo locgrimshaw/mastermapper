@@ -8224,7 +8224,8 @@ function assemblySiteFeatures() {
 
 // Owned-div render of the basket (#dd-assembly-summary).
 function renderAssemblySummary(notice) {
-  const el = document.getElementById("dd-assembly-summary");
+  const el = document.getElementById("dd-assembly-summary")
+          || document.getElementById("dc-assembly-summary");
   if (!el) return;
   if (deep.assembly.mode === "parcels") { renderParcelAssemblySummary(el, notice); return; }
   const plots = assemblyPlots();
@@ -8592,7 +8593,7 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws144");
+      const mod = await import("./layoutgen.js?v=ws145");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       // Hard constraints INSIDE the site become no-build exclusion zones in
@@ -16268,9 +16269,16 @@ async function dcActivate(on) {
   if (!map.getLayer("dc-lo-fill"))
     map.addLayer({ id: "dc-lo-fill", type: "fill", source: "dc-lo-src",
                    maxzoom: 9, paint: {} }, before);
-  if (!map.getLayer("dc-hi-fill"))
+  if (!map.getLayer("dc-hi-fill")) {
     map.addLayer({ id: "dc-hi-fill", type: "fill", source: "dc-hi-src",
                    minzoom: 9, paint: {} }, before);
+    map.on("click", "dc-hi-fill", (e) => {
+      const f = e.features && e.features[0];
+      if (f) openDcPanel(f.properties);
+    });
+    map.on("mouseenter", "dc-hi-fill", () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "dc-hi-fill", () => { map.getCanvas().style.cursor = ""; });
+  }
   dcApplyPaint();
   dcRefreshHi();
   if (status) status.textContent = `${lo.features.length.toLocaleString()} blocks`;
@@ -16497,6 +16505,341 @@ function wireOtherDataToggle() {
 }
 
 wireDcSiftBox();          // Data-centre sift (bottom box)
+
+// ==== DC site deep-dive panel ================================================
+// Clicking a 1 km cell of the DC sift (z9+) opens a right-hand panel with the
+// critical picture for data-centre development at that spot — power, planning,
+// constraints, water, and granular terrain — and a parcel assembler feeding a
+// DC compile view and the DC layout generator.
+const dcDeep = { cell: null, terrain: null };
+
+// Mirror of dcPassExpr in plain JS: returns the list of failed criteria.
+function dcFailsJs(c, p) {
+  const n = k => Number(p[k]);
+  const fails = [];
+  const chk = (ok, label) => { if (!ok) fails.push(label); };
+  if (c.exBuilt) chk(Math.max(n("built_pct"), 0) <= 10, "built-up cover");
+  if (c.exTrans) chk(Math.max(n("transp_pct"), 0) <= 20, "transport land");
+  if (c.exWater) chk(Math.max(n("water_pct"), 0) <= 20, "open water");
+  if (c.exProt) chk(Math.max(n("prot_pct"), 0) <= 5, "protected designations");
+  if (c.exHerit) chk(Math.max(n("herit_pct"), 0) <= 10, "heritage / AONB");
+  if (c.exFz3) chk(Math.max(n("fz3_pct"), 0) <= 10, "flood zone 3");
+  if (c.exFz2) chk(Math.max(n("fz2_pct"), 0) <= 10, "flood zone 2");
+  if (c.exGB) chk(Math.max(n("gb_pct"), 0) <= 25, "green belt");
+  if (c.exAlc) chk(Math.max(n("alc12_pct"), 0) <= 25, "best farmland (ALC 1-2)");
+  if (c.exAqma) chk(n("aqma") === 0, "air quality management area");
+  chk(n("slope10") <= Math.round(c.maxSlopeDeg * 10), "slope");
+  const pv = c.powerAttr.startsWith("d_dno") && n(c.powerAttr) === 255 ? 0 : n(c.powerAttr);
+  chk(pv <= c.powerKm * 10, "power distance");
+  if (c.avoidQueue) chk(n("gsp_mw") <= Math.round(c.maxQueueMw / 100), "GSP queue");
+  if (c.useSet) chk(n(c.setAttr) <= c.setKm * 10, "settlement distance");
+  if (c.useHeat) chk(n("d_heat") <= c.heatKm * 10, "heat-network distance");
+  return fails;
+}
+
+const _dcKm = v => { const x = Number(v); return x >= 255 || isNaN(x) ? null : x / 10; };
+const _dcKmTxt = v => { const k = _dcKm(v); return k == null ? "beyond 25 km / no data" : k.toFixed(1) + " km"; };
+
+function openDcPanel(p) {
+  const panel = document.getElementById("dc-panel");
+  if (!panel || !p) return;
+  dcDeep.cell = p;
+  const fails = dcFailsJs(DC.crit, p);
+  const pass = fails.length === 0;
+  const pc = (k) => { const v = Number(p[k]); return v < 0 ? "—" : v + "%"; };
+  const row = (v, k) => `<div class="sp-row"><span class="sp-v">${v}</span><span class="sp-k">${escapeSift(k)}</span></div>`;
+  const waterStat = { 0: "green (water available)", 1: "yellow (restricted)",
+                      2: "red (over-licensed)", 3: "grey (over-abstracted)" }[Number(p.water_stat)] || "no CAMS data";
+  panel.innerHTML = `
+    <div class="uni-head">
+      <button class="fd-close dcp-close" aria-label="Close">×</button>
+      <div class="fd-district">Data-centre site · ${escapeSift(p.lad_name || "")}</div>
+      <div class="fd-sub">1 km cell ${escapeSift(p.cell_id || "")} ·
+        <span class="dcp-verdict ${pass ? "ok" : "bad"}">${pass ? "passes current sift" : "fails: " + escapeSift(fails.join(", "))}</span></div>
+    </div>
+    <div class="uni-body">
+      <div class="sp-sec"><div class="sp-h">Power &amp; grid</div>
+        ${row(`<strong>${_dcKmTxt(p.d_sub132)}</strong>`, "nearest 132 kV+ substation")}
+        ${row(`<strong>${_dcKmTxt(p.d_sub275)}</strong>`, "nearest 275/400 kV substation")}
+        ${row(`<strong>${_dcKmTxt(p.d_line132)}</strong>`, "nearest 132 kV+ overhead line")}
+        ${row(`<strong>${_dcKmTxt(p.d_dno20)}</strong>`, "DNO site with ≥20 MW headroom")}
+        ${row(`<strong>${_dcKmTxt(p.d_dno50)}</strong>`, "DNO site with ≥50 MW headroom")}
+        ${row(`<strong>${Number(p.gsp_mw) > 0 ? (Number(p.gsp_mw) * 100).toLocaleString() + " MW" : "≈ none recorded"}</strong>`, "queued at the local GSP")}
+        <p class="hint">Distances from OSM grid geometry and DNO open-data headroom; the connection offer is always the real gate — treat these as screening.</p>
+      </div>
+      <div class="sp-sec"><div class="sp-h">Planning status</div><div id="dcp-planning"><p class="hint">Reading authority picture…</p></div></div>
+      <div class="sp-sec"><div class="sp-h">Constraint cover (share of cell)</div>
+        <div class="dcp-chips">
+          <span>built ${pc("built_pct")}</span><span>transport ${pc("transp_pct")}</span>
+          <span>water ${pc("water_pct")}</span><span>protected ${pc("prot_pct")}</span>
+          <span>heritage/AONB ${pc("herit_pct")}</span><span>FZ3 ${pc("fz3_pct")}</span>
+          <span>FZ2 ${pc("fz2_pct")}</span><span>green belt ${pc("gb_pct")}</span>
+          <span>ALC 1-2 ${pc("alc12_pct")}</span>
+          <span>${Number(p.aqma) ? "inside AQMA" : "no AQMA"}</span>
+        </div>
+      </div>
+      <div class="sp-sec"><div class="sp-h">Water &amp; environment</div>
+        ${row(`<strong>${waterStat}</strong>`, "abstraction status (CAMS)")}
+        ${row(`<strong>${_dcKmTxt(p.d_heat)}</strong>`, "nearest heat network (waste-heat offtake)")}
+        ${row(`<strong>${_dcKmTxt(p.d_set20)}</strong>`, "nearest 20k+ settlement (labour, latency)")}
+      </div>
+      <div class="sp-sec"><div class="sp-h">Terrain (granular)</div><div id="dcp-terrain"><p class="hint">Sampling elevations…</p></div></div>
+      <div class="sp-sec"><div class="sp-h">Assemble a site</div>
+        <p class="hint">Pick the land parcels for the campus exactly as in the resi workflow — zoom in past z13, press assemble, tap parcels.</p>
+        <div class="dd-plot-modes">
+          <button type="button" id="dcp-assemble" class="plot-mode-btn">${deep.assembly.active && deep.assembly.mode === "parcels" ? "■ Assembling — tap parcels" : "Assemble parcels"}</button>
+          <button type="button" id="dcp-compile" class="plot-mode-btn">Compile DC site →</button>
+        </div>
+        <div id="dc-assembly-summary"></div>
+      </div>
+    </div>`;
+  panel.classList.add("open");
+  panel.setAttribute("aria-hidden", "false");
+  panel.querySelector(".dcp-close").addEventListener("click", () => {
+    panel.classList.remove("open"); panel.setAttribute("aria-hidden", "true");
+  });
+  panel.querySelector("#dcp-assemble").addEventListener("click", async (e) => {
+    const on = !(deep.assembly.active && deep.assembly.mode === "parcels");
+    deep.assembly.active = on;
+    deep.assembly.mode = "parcels";
+    if (on) {
+      await setParcelsVisible(true);
+      if (map.getZoom() < 13.2)
+        map.flyTo({ center: [Number(p.lng), Number(p.lat)], zoom: 14.5, duration: 700 });
+    }
+    e.target.textContent = on ? "■ Assembling — tap parcels" : "Assemble parcels";
+    renderAssemblySummary(on ? "Tap INSPIRE parcels to build the site." : null);
+  });
+  panel.querySelector("#dcp-compile").addEventListener("click", () => openDcCompileModal());
+  renderAssemblySummary();
+  dcPanelHydrate(p);
+}
+
+async function dcPanelHydrate(p) {
+  const sb = getSupabase();
+  // Planning: the authority's data-centre decision record + who runs the council.
+  (async () => {
+    const el = document.getElementById("dcp-planning");
+    if (!el || !sb) return;
+    const eps = 0.002;
+    const bb = { w: Number(p.lng) - eps, s: Number(p.lat) - eps,
+                 e: Number(p.lng) + eps, n: Number(p.lat) + eps };
+    const get = ds => sb.rpc("features_in_bbox", { p_dataset: ds, ...bb, p_zoom: 8, lim: 12 })
+      .then(r => (r.data && r.data.features) || []).catch(() => []);
+    const [rates, control] = await Promise.all([get("planit_dc_rates"), get("council_control")]);
+    const pt = { type: "Feature", geometry: { type: "Point", coordinates: [Number(p.lng), Number(p.lat)] } };
+    const inPoly = f => { try { return turf.booleanPointInPolygon(pt, f); } catch (_) { return false; } };
+    const rate = rates.find(inPoly) || rates[0];
+    const ctl = control.find(inPoly) || control[0];
+    const row = (v, k) => `<div class="sp-row"><span class="sp-v">${v}</span><span class="sp-k">${escapeSift(k)}</span></div>`;
+    let html = "";
+    if (rate && rate.properties) {
+      const rp = rate.properties;
+      const dec = Number(rp.n_decided || 0), app = Number(rp.n_approved || 0);
+      html += row(`<strong>${dec >= 5 ? Math.round(100 * app / Math.max(1, dec)) + "% approved" : "too few decisions"}</strong>`,
+                  `data-centre applications since 2015 (${rp.n_apps || dec || 0} lodged, ${dec} decided)`);
+    } else html += `<p class="hint">No data-centre application history held for this authority.</p>`;
+    if (ctl && ctl.properties)
+      html += row(`<strong>${escapeSift(ctl.properties.party || ctl.properties.control || "—")}</strong>`, "council control (May 2026 seats)");
+    html += row(`<strong>${escapeSift(p.lad_name || "—")}</strong>`, "planning authority");
+    el.innerHTML = html;
+  })();
+
+  // Terrain: 13x13 elevation grid over the cell from open-meteo (free, CORS).
+  (async () => {
+    const el = document.getElementById("dcp-terrain");
+    if (!el) return;
+    try {
+      const lat0 = Number(p.lat), lng0 = Number(p.lng);
+      const dLat = 0.0045, dLng = 0.0045 / Math.cos(lat0 * Math.PI / 180);
+      const N = 13, lats = [], lngs = [];
+      for (let iy = 0; iy < N; iy++) for (let ix = 0; ix < N; ix++) {
+        lats.push((lat0 - dLat + iy * 2 * dLat / (N - 1)).toFixed(5));
+        lngs.push((lng0 - dLng + ix * 2 * dLng / (N - 1)).toFixed(5));
+      }
+      const els = [];
+      for (let off = 0; off < N * N; off += 90) {
+        const r = await fetch("https://api.open-meteo.com/v1/elevation?latitude=" +
+          lats.slice(off, off + 90).join(",") + "&longitude=" + lngs.slice(off, off + 90).join(","));
+        const j = await r.json();
+        els.push(...(j.elevation || []));
+      }
+      if (els.length < N * N) throw new Error("short elevation response");
+      const cs = 1000 / (N - 1);   // ~83 m spacing over the 1 km cell
+      let zmin = 1e9, zmax = -1e9, sSum = 0, sMax = 0, nS = 0;
+      for (let iy = 0; iy < N; iy++) for (let ix = 0; ix < N; ix++) {
+        const z = els[iy * N + ix];
+        if (z < zmin) zmin = z; if (z > zmax) zmax = z;
+        if (ix > 0 && iy > 0) {
+          const gx = (z - els[iy * N + ix - 1]) / cs, gy = (z - els[(iy - 1) * N + ix]) / cs;
+          const sl = Math.sqrt(gx * gx + gy * gy) * 100;
+          sSum += sl; nS++; if (sl > sMax) sMax = sl;
+        }
+      }
+      dcDeep.terrain = { els, N, zmin, zmax };
+      // 1 m contours over the cell, marching squares on the coarse grid
+      let segs = "";
+      const X = ix => 8 + ix * (184 / (N - 1)), Y = iy => 8 + (N - 1 - iy) * (104 / (N - 1));
+      for (let lvl = Math.ceil(zmin); lvl <= Math.floor(zmax); lvl++) {
+        const major = lvl % 5 === 0;
+        for (let iy = 0; iy < N - 1; iy++) for (let ix = 0; ix < N - 1; ix++) {
+          const c4 = [[ix, iy], [ix + 1, iy], [ix + 1, iy + 1], [ix, iy + 1]]
+            .map(([a, b]) => ({ x: X(a) + (a === ix ? 0 : 0), ix: a, iy: b, z: els[b * N + a] }));
+          const pts2 = [];
+          for (let e2 = 0; e2 < 4; e2++) {
+            const a = c4[e2], b2 = c4[(e2 + 1) % 4];
+            if ((a.z < lvl) !== (b2.z < lvl)) {
+              const t2 = (lvl - a.z) / (b2.z - a.z || 1);
+              pts2.push([X(a.ix) + (X(b2.ix) - X(a.ix)) * t2, Y(a.iy) + (Y(b2.iy) - Y(a.iy)) * t2]);
+            }
+          }
+          if (pts2.length === 2)
+            segs += `<line x1="${pts2[0][0].toFixed(1)}" y1="${pts2[0][1].toFixed(1)}" x2="${pts2[1][0].toFixed(1)}" y2="${pts2[1][1].toFixed(1)}" stroke="rgba(141,110,66,${major ? 0.75 : 0.35})" stroke-width="${major ? 1.1 : 0.7}"/>`;
+        }
+      }
+      const meanSl = nS ? sSum / nS : 0;
+      const row = (v, k) => `<div class="sp-row"><span class="sp-v">${v}</span><span class="sp-k">${k}</span></div>`;
+      el.innerHTML =
+        row(`<strong>${zmin.toFixed(0)}–${zmax.toFixed(0)} m</strong> (range ${(zmax - zmin).toFixed(0)} m)`, "elevation across the cell") +
+        row(`<strong>${meanSl.toFixed(1)}% mean · ${sMax.toFixed(0)}% max</strong>${sMax > 8 ? " ⚠" : " ✓"}`, "slope at ~83 m resolution") +
+        `<svg viewBox="0 0 200 120" class="dcp-contours" role="img" aria-label="1 m contours across the cell">
+           <rect x="8" y="8" width="184" height="104" fill="#f4f7f4" stroke="#c8d0c8"/>${segs}
+         </svg>
+         <p class="hint">1 m contours, open-meteo Copernicus DEM. Data-hall pads want &lt;2% finished grade — the generator costs the earthworks.</p>`;
+    } catch (err) {
+      el.innerHTML = `<p class="hint">Terrain service unreachable (${escapeSift(String(err.message || err))}).</p>`;
+    }
+  })();
+}
+
+// ---- DC compile view --------------------------------------------------------
+// Same premise as the resi compile: assembled plots on the left, the campus
+// arithmetic on the right, driven by MW. Defaults follow current UK campus
+// benchmarks and are dialled in the modal.
+const _dcCompileState = { netPct: 70, mwPerHa: 10, pue: 1.25,
+                          costPerMw: 9.5, valuePerMw: 12 };
+function openDcCompileModal() {
+  const feats = assemblySiteFeatures();
+  if (!feats.length) {
+    renderAssemblySummary("Assemble at least one parcel first.");
+    return;
+  }
+  const totHa = feats.reduce((s, f) => s + (Number(f.properties.area_ha) || 0), 0);
+  let m = document.getElementById("dc-compile-modal");
+  if (!m) { m = document.createElement("div"); m.id = "dc-compile-modal"; document.body.appendChild(m); }
+  const name = deep.assembly.name || (dcDeep.cell && dcDeep.cell.lad_name ? dcDeep.cell.lad_name + " DC campus" : "DC campus");
+  m.innerHTML = `
+    <div class="cm-card">
+      <div class="cm-head">
+        <div><span class="cm-kicker">Compiled DC site · ${feats.length} parcel${feats.length === 1 ? "" : "s"} · ${totHa.toFixed(2)} ha gross</span>
+          <h3>${escapeSift(name)}</h3></div>
+        <button type="button" id="dcm-close" class="cm-close" aria-label="Close">×</button>
+      </div>
+      <div class="cm-cols">
+        <div class="cm-left">
+          <div id="dcm-plan">${_sitePlanSVG(feats)}</div>
+          <div class="cm-dials">
+            <label><span>Net developable <small>% of gross</small></span>
+              <input type="number" id="dcm-netpct" min="30" max="95" step="1" value="${_dcCompileState.netPct}"></label>
+            <label><span>IT density <small>MW / net ha</small></span>
+              <input type="number" id="dcm-mwha" min="3" max="40" step="1" value="${_dcCompileState.mwPerHa}"></label>
+            <label><span>Design PUE</span>
+              <input type="number" id="dcm-pue" min="1.05" max="1.6" step="0.05" value="${_dcCompileState.pue}"></label>
+            <label><span>Capex <small>£M / MW IT</small></span>
+              <input type="number" id="dcm-cost" min="4" max="16" step="0.5" value="${_dcCompileState.costPerMw}"></label>
+            <label><span>Value <small>£M / MW IT</small></span>
+              <input type="number" id="dcm-value" min="4" max="25" step="0.5" value="${_dcCompileState.valuePerMw}"></label>
+          </div>
+          <button type="button" id="dcm-layout" class="plot-mode-btn">Generative DC layout →</button>
+        </div>
+        <div class="cm-right"><div id="dcm-out"></div></div>
+      </div>
+    </div>`;
+  const recompute = () => {
+    const g = id => Number(m.querySelector(id).value) || 0;
+    _dcCompileState.netPct = Math.max(30, Math.min(95, g("#dcm-netpct")));
+    _dcCompileState.mwPerHa = Math.max(3, Math.min(40, g("#dcm-mwha")));
+    _dcCompileState.pue = Math.max(1.05, Math.min(1.6, g("#dcm-pue")));
+    _dcCompileState.costPerMw = g("#dcm-cost");
+    _dcCompileState.valuePerMw = g("#dcm-value");
+    const st = _dcCompileState;
+    const netHa = totHa * st.netPct / 100;
+    const itMw = netHa * st.mwPerHa;
+    const gridMw = itMw * st.pue;
+    const capex = itMw * st.costPerMw;
+    const value = itMw * st.valuePerMw;
+    const margin = capex > 0 ? (value - capex) / capex * 100 : 0;
+    const money = v => "£" + (v >= 1000 ? (v / 1000).toFixed(1) + "bn" : v.toFixed(0) + "m");
+    const cell = (v, l, cls) => `<div class="cm-cell${cls ? " " + cls : ""}"><b>${v}</b><span>${l}</span></div>`;
+    m.querySelector("#dcm-out").innerHTML = `<div class="cm-grid">`
+      + cell(itMw.toFixed(0) + " MW", "IT load capacity")
+      + cell(gridMw.toFixed(0) + " MW", `grid demand @ PUE ${st.pue}`)
+      + cell(netHa.toFixed(1) + " ha", "net developable")
+      + cell((itMw / Math.max(0.01, totHa)).toFixed(1) + " MW/ha", "IT density (gross)")
+      + cell(Math.max(1, Math.round(itMw / 32)) + "", "data halls (≈32 MW each)")
+      + cell(Math.round(itMw * 520).toLocaleString() + " m²", "indicative GEA")
+      + cell(money(capex), "capex (shell + fit)")
+      + cell(money(value), "stabilised value")
+      + cell(margin.toFixed(0) + "%", "margin on capex", margin >= 20 ? "cm-sg" : margin >= 8 ? "cm-sa" : "cm-sr")
+      + `</div>
+      <p class="hint">Screening arithmetic only — the layout generator draws the campus and
+      re-derives capacity from what actually fits; grid demand is the number for the DNO conversation.</p>`;
+  };
+  ["#dcm-netpct", "#dcm-mwha", "#dcm-pue", "#dcm-cost", "#dcm-value"].forEach(id =>
+    m.querySelector(id).addEventListener("input", recompute));
+  m.querySelector("#dcm-close").addEventListener("click", () => { m.hidden = true; });
+  m.addEventListener("click", e => { if (e.target === m) m.hidden = true; });
+  m.querySelector("#dcm-layout").addEventListener("click", async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true; b.textContent = "Loading DC layout engine…";
+    try {
+      const mod = await import("./dcgen.js?v=dc1");
+      let site = feats[0];
+      for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
+      let exclusions = [];
+      try {
+        const sb = getSupabase();
+        const bb = turf.bbox(site);
+        const { data } = await sb.rpc("constraints_in_bbox", {
+          p_kinds: ["flood_zone_3", "flood_zone_2", "ancient_woodland",
+                    "scheduled_monument", "sssi", "sac", "spa", "ramsar"],
+          w: bb[0] - 0.001, s: bb[1] - 0.001, e: bb[2] + 0.001, n: bb[3] + 0.001,
+          p_zoom: 15 });
+        for (const f of (data && data.features) || []) {
+          const clipped = _turfIntersect(site, f);
+          if (clipped) exclusions.push({ kind: (f.properties || {}).kind || "constraint",
+                                         geometry: clipped.geometry });
+        }
+      } catch (err2) { console.warn("dc exclusions unavailable", err2); }
+      mod.openDcGen({
+        site, name, exclusions,
+        netPct: _dcCompileState.netPct, mwPerHa: _dcCompileState.mwPerHa,
+        pue: _dcCompileState.pue, costPerMw: _dcCompileState.costPerMw,
+        valuePerMw: _dcCompileState.valuePerMw,
+        onAdopt: ({ itMw }) => {
+          const inMw = m.querySelector("#dcm-mwha");
+          if (!inMw) return;
+          const netHa = totHa * (_dcCompileState.netPct || 70) / 100;
+          inMw.value = Math.max(3, Math.min(40, Math.round(itMw / Math.max(0.01, netHa))));
+          inMw.dispatchEvent(new Event("input"));
+        },
+      });
+      b.disabled = false; b.textContent = "Generative DC layout →";
+    } catch (err) {
+      console.error("dcgen load failed", err);
+      b.textContent = "DC layout engine failed to load";
+    }
+  });
+  recompute();
+  m.hidden = false;
+}
+window._dcTest = { openDcPanel, openDcCompileModal,
+  _seedAssembly: (feats) => {
+    deep.assembly.mode = "parcels";
+    deep.assembly.parcels = new Map(feats.map((f, i) =>
+      ["T" + i, { key: "T" + i, feat: f, areaHa: turf.area(f) / 1e4 }]));
+  } };
+
 wirePbsaBox();            // PBSA sift (university rail access, box 3)
 wireOtherDataToggle();    // reveals the two above + the DC layers branch
 wirePortfolioBox();       // Portfolio scorer (priority-1 tool)
