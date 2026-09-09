@@ -616,10 +616,20 @@ function generateCandidate(site, params, genome) {
     arr.push([x, y, hw * hw]);
   };
   for (const r of roads) {
-    const hw = STREETS[r.type].corridor / 2;
-    for (const p of r.pts) rPush(p[0], p[1], hw);
+    const hw = STREETS[r.type].corridor / 2 + 0.15;   // small safety margin
+    const pts2 = r.pts;
+    for (let i = 0; i < pts2.length; i++) {
+      rPush(pts2[i][0], pts2[i][1], hw);
+      if (i + 1 < pts2.length) {
+        const seg = Math.hypot(pts2[i + 1][0] - pts2[i][0], pts2[i + 1][1] - pts2[i][1]);
+        const nSub = Math.ceil(seg / 2.2);
+        for (let s2 = 1; s2 < nSub; s2++)
+          rPush(pts2[i][0] + (pts2[i + 1][0] - pts2[i][0]) * s2 / nSub,
+                pts2[i][1] + (pts2[i + 1][1] - pts2[i][1]) * s2 / nSub, hw);
+      }
+    }
   }
-  for (const hd of heads) rPush(hd[0], hd[1], HEAD_R);
+  for (const hd of heads) rPush(hd[0], hd[1], HEAD_R + 0.15);
   const onRoad = (x, y) => {
     const ix = Math.floor(x / RCELL), iy = Math.floor(y / RCELL);
     for (let a = ix - 1; a <= ix + 1; a++)
@@ -688,18 +698,20 @@ function generateCandidate(site, params, genome) {
     return order;
   };
 
+  // every plot edge is sampled (~3 m) so a street can never thread between
+  // the corner test points of a deep plot
+  const ptBad = (px, py) => !inAnyPoly(px, py, site.polys) || onRoad(px, py)
+    || inAnyPoly(px, py, site.exclusionPolys);
   const tryQuad = (quad) => {
-    for (let i = 0; i < 4; i++)
-      if (!inAnyPoly(quad[i][0], quad[i][1], site.polys)) return false;
     const cx = (quad[0][0] + quad[2][0]) / 2, cy = (quad[0][1] + quad[2][1]) / 2;
-    if (!inAnyPoly(cx, cy, site.polys)) return false;
-    // no homes in exclusion zones (flood, heritage, habitat)
-    for (let i = 0; i < 4; i++)
-      if (inAnyPoly(quad[i][0], quad[i][1], site.exclusionPolys)) return false;
-    if (inAnyPoly(cx, cy, site.exclusionPolys)) return false;
-    if (onRoad(cx, cy)) return false;
-    for (let i = 0; i < 4; i++)
-      if (onRoad(quad[i][0], quad[i][1])) return false;
+    if (ptBad(cx, cy)) return false;
+    for (let i = 0; i < 4; i++) {
+      const a = quad[i], b = quad[(i + 1) % 4];
+      const eL = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const nS = Math.max(1, Math.ceil(eL / 3));
+      for (let s2 = 0; s2 <= nS; s2++)
+        if (ptBad(a[0] + (b[0] - a[0]) * s2 / nS, a[1] + (b[1] - a[1]) * s2 / nS)) return false;
+    }
     for (const l of lots) {
       const lx = (l.quad[0][0] + l.quad[2][0]) / 2, ly = (l.quad[0][1] + l.quad[2][1]) / 2;
       if (Math.hypot(cx - lx, cy - ly) > 60) continue;
@@ -746,7 +758,7 @@ function generateCandidate(site, params, genome) {
     const road = roads[ri];
     if (total >= targetUnits) break;
     const spec = STREETS[road.type];
-    const edge = spec.corridor / 2 + 0.3;
+    const edge = spec.corridor / 2 + 0.55;
     const { L, pointAt } = walker(road.pts);
     if (L < 14) continue;
     for (const side of [1, -1]) {
@@ -826,14 +838,12 @@ function generateCandidate(site, params, genome) {
   // from the pocket's core until the green-space floor is met. The traced,
   // smoothed outline reads as a deliberately shaped space filling its gap.
   const greens = [];              // [{ outline: [[x,y]...], cells: [[cx,cy]...] }]
-  const GCELL = 6;
+  const GCELL = 5;
   const gKey = (ix, iy) => ix * 100000 + iy;
   const greenMask = new Set();
   const inGreen = (x, y) => greenMask.has(
     gKey(Math.floor((x - site.minX) / GCELL), Math.floor((y - site.minY) / GCELL)));
-  {
-    const reserveTarget = params.greenPct / 100 * site.areaM2;
-    if (reserveTarget > 60) {
+  const carveGreens = (reserveTarget, maxN, minSeed, minArea, lotHitFn) => {
       const gCols = Math.ceil((site.maxX - site.minX) / GCELL) + 1;
       const gRows = Math.ceil((site.maxY - site.minY) / GCELL) + 1;
       const open = new Set();
@@ -841,8 +851,21 @@ function generateCandidate(site, params, genome) {
         for (let iy = 0; iy < gRows; iy++) {
           const cx = site.minX + (ix + 0.5) * GCELL, cy = site.minY + (iy + 0.5) * GCELL;
           if (!inAnyPoly(cx, cy, site.polys)) continue;
-          if (onRoad(cx, cy) || lotHit(cx, cy, null) >= 0) continue;
+          if (onRoad(cx, cy)) continue;
           if (inAnyPoly(cx, cy, site.exclusionPolys)) continue;
+          if (greenMask.has(gKey(ix, iy))) continue;
+          if (lotHitFn(cx, cy, null) >= 0) {
+            // mop-up pass (minSeed 0): a cell straddling a fence still counts
+            // when a quarter-point is clear — greens draw underneath plots,
+            // so the sliver is claimed without visual overlap
+            if (minSeed > 0) continue;
+            const q = 0.28 * GCELL;
+            let clear = false;
+            for (const [qa, qb] of [[q, q], [-q, q], [q, -q], [-q, -q]])
+              if (lotHitFn(cx + qa, cy + qb, null) < 0 && !onRoad(cx + qa, cy + qb)
+                  && inAnyPoly(cx + qa, cy + qb, site.polys)) { clear = true; break; }
+            if (!clear) continue;
+          }
           open.add(gKey(ix, iy));
         }
       // distance-to-developed-land transform over the open cells
@@ -871,10 +894,11 @@ function generateCandidate(site, params, genome) {
       const byDepth = [...depth.entries()].sort((a, b) => b[1] - a[1]);
       let reserved = 0;
       for (const [seed, sd] of byDepth) {
-        if (reserved >= reserveTarget || greens.length >= 3) break;
-        if (sd < 2 || greenMask.has(seed)) continue;
-        // BFS out from the pocket core; interior cells only, so the green
-        // hugs its gap instead of leaking down cracks between gardens
+        if (reserved >= reserveTarget || greens.length >= maxN) break;
+        if ((minSeed > 0 && sd < minSeed) || greenMask.has(seed)) continue;
+        // BFS out from the pocket core; the interior-depth gate (reserve
+        // pass) keeps the green hugging its gap instead of leaking down
+        // cracks; the mop-up pass claims whole pockets
         const want = Math.min(reserveTarget - reserved,
                               Math.max(reserveTarget / 2, 500));
         const cells = new Set([seed]);
@@ -886,7 +910,7 @@ function generateCandidate(site, params, genome) {
             for (const [a, b] of DIRS) {
               const nk = gKey(ix + a, iy + b);
               if (open.has(nk) && !cells.has(nk) && !greenMask.has(nk)
-                  && (depth.get(nk) || 0) >= 1) {
+                  && (depth.get(nk) || 0) >= (minSeed > 1 ? 1 : 0)) {
                 cells.add(nk); nf.push(nk);
                 if (cells.size * GCELL * GCELL >= want) break;
               }
@@ -895,7 +919,7 @@ function generateCandidate(site, params, genome) {
           }
           ring2 = nf;
         }
-        if (cells.size * GCELL * GCELL < 140) continue;   // too scrappy to gesture
+        if (cells.size * GCELL * GCELL < minArea) continue;   // too scrappy
         for (const k of cells) greenMask.add(k);
         reserved += cells.size * GCELL * GCELL;
         // trace the rectilinear boundary, then smooth it (Chaikin x2)
@@ -949,8 +973,9 @@ function generateCandidate(site, params, genome) {
           }),
         });
       }
-    }
-  }
+  };
+  const reserveWant = params.greenPct / 100 * site.areaM2;
+  if (reserveWant > 60) carveGreens(reserveWant, 3, 2, 140, lotHit);
 
   // --- garden infill: fan rear gardens into the leftover land ---------------
   // Each rear corner marches away from the street until it meets a street,
@@ -966,7 +991,7 @@ function generateCandidate(site, params, genome) {
   for (const l of lots) {
     const w0 = TYPES[l.type].w;
     const rear0 = l.type === "flat" ? Math.max(0, FLAT_PLOT_D - FLAT_BLD_D - 4) : gardenDepth;
-    let capExt = Math.min(16, Math.max(0, (gardenMaxOf(l) - rear0 * w0) / w0));
+    let capExt = Math.min(24, Math.max(0, (gardenMaxOf(l) - rear0 * w0) / w0));
     const per = [0, 0];
     if (capExt > 0.6) {
       for (let c = 0; c < 2; c++) {
@@ -980,7 +1005,7 @@ function generateCandidate(site, params, genome) {
           if (hit >= 0) {
             const o = lots[hit];
             // facing plot: meet in the middle; side neighbour: stop short
-            ext = (l.nx * o.nx + l.ny * o.ny < -0.2) ? Math.floor(d / 2) : Math.max(0, d - 2);
+            ext = (l.nx * o.nx + l.ny * o.ny < -0.2) ? Math.max(0, (d - 0.5) / 2) : Math.max(0, d - 2);
             break;
           }
           ext = d;
@@ -990,6 +1015,23 @@ function generateCandidate(site, params, genome) {
       // keep the fan believable — no wildly lopsided fences
       if (per[0] - per[1] > 7) per[0] = per[1] + 7;
       if (per[1] - per[0] > 7) per[1] = per[0] + 7;
+      // the rear EDGE between the grown corners must also stay clear — a
+      // street can cross it even when both corner rays were clean
+      const edgeOK = () => {
+        const a = [l.quad[3][0] + l.nx * per[0], l.quad[3][1] + l.ny * per[0]];
+        const b = [l.quad[2][0] + l.nx * per[1], l.quad[2][1] + l.ny * per[1]];
+        const eL2 = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        const nS = Math.max(1, Math.ceil(eL2 / 2.5));
+        for (let s2 = 0; s2 <= nS; s2++) {
+          const px = a[0] + (b[0] - a[0]) * s2 / nS, py = a[1] + (b[1] - a[1]) * s2 / nS;
+          if (!inAnyPoly(px, py, site.polys) || onRoad(px, py)
+              || inAnyPoly(px, py, site.exclusionPolys) || inGreen(px, py)) return false;
+        }
+        return true;
+      };
+      for (let guard = 0; guard < 20 && (per[0] > 0 || per[1] > 0) && !edgeOK(); guard++) {
+        per[0] = Math.max(0, per[0] - 1); per[1] = Math.max(0, per[1] - 1);
+      }
     }
     exts.push(per);
   }
@@ -1022,10 +1064,76 @@ function generateCandidate(site, params, genome) {
         const mx = (a.quad[2][0] + b.quad[3][0]) / 2;
         const my = (a.quad[2][1] + b.quad[3][1]) / 2;
         if (!weldOK(mx, my)) continue;
+        // the two re-routed rear edges must stay clear along their length
+        const segOK = (p, q) => {
+          const eL2 = Math.hypot(q[0] - p[0], q[1] - p[1]);
+          const nS = Math.max(1, Math.ceil(eL2 / 2.5));
+          for (let s2 = 0; s2 <= nS; s2++)
+            if (!weldOK(p[0] + (q[0] - p[0]) * s2 / nS, p[1] + (q[1] - p[1]) * s2 / nS)) return false;
+          return true;
+        };
+        if (!segOK(a.quad[3], [mx, my]) || !segOK([mx, my], b.quad[2])) continue;
         a.quad[2] = [mx, my]; b.quad[3] = [mx, my];
         a.quad[4] = a.quad[0].slice(); b.quad[4] = b.quad[0].slice();
       }
     }
+  }
+
+  // --- final invariant sweep ------------------------------------------------
+  // Production guarantee: no dwelling stands in a street, off-site, or in an
+  // exclusion zone. Any lot whose BUILDING still violates (should be none
+  // after the dense checks above) is dropped and the unit counts repaired.
+  {
+    const bldOK = l => {
+      const bq = bldQuad(l).quad;
+      for (let i = 0; i < 4; i++) {
+        const a = bq[i], b = bq[(i + 1) % 4];
+        const eL2 = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        const nS = Math.max(1, Math.ceil(eL2 / 2.5));
+        for (let s2 = 0; s2 <= nS; s2++) {
+          const px = a[0] + (b[0] - a[0]) * s2 / nS, py = a[1] + (b[1] - a[1]) * s2 / nS;
+          if (!inAnyPoly(px, py, site.polys) || onRoad(px, py)
+              || inAnyPoly(px, py, site.exclusionPolys)) return false;
+        }
+      }
+      return true;
+    };
+    for (let i = lots.length - 1; i >= 0; i--) {
+      if (bldOK(lots[i])) continue;
+      const l = lots[i];
+      if (l.type === "flat") { placed.flat -= l.units; total -= l.units; }
+      else { placed[l.type]--; total--; }
+      lots.splice(i, 1);
+    }
+  }
+
+  // --- mop-up greens: every sizeable leftover pocket becomes deliberate -----
+  // After growth and welding, any remaining pocket over ~140 m² is claimed as
+  // a shaped shared green, so nothing on the plan reads as unclaimed land.
+  {
+    const lgrid2 = new Map();
+    lots.forEach((l, idx) => {
+      let x0 = 1e12, y0 = 1e12, x1 = -1e12, y1 = -1e12;
+      for (let i = 0; i < 4; i++) {
+        const p = l.quad[i];
+        if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+        if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+      }
+      for (let a = Math.floor(x0 / LCELL); a <= Math.floor(x1 / LCELL); a++)
+        for (let b = Math.floor(y0 / LCELL); b <= Math.floor(y1 / LCELL); b++) {
+          const k = a * 100000 + b;
+          let arr = lgrid2.get(k); if (!arr) lgrid2.set(k, arr = []);
+          arr.push(idx);
+        }
+    });
+    const lotHit2 = (x, y, self) => {
+      const arr = lgrid2.get(lgKey(x, y));
+      if (!arr) return -1;
+      for (const idx of arr)
+        if (lots[idx] !== self && inRing(x, y, lots[idx].quad)) return idx;
+      return -1;
+    };
+    carveGreens(site.areaM2, 96, 0, 90, lotHit2);
   }
 
   // --- greens, pond, trees --------------------------------------------------
@@ -1123,12 +1231,29 @@ function decorate(cand, site) {
       if (free) trees.push([px, py]);
     }
   }
-  // tree clusters dress the reserved shared greens
-  for (const gr of cand.greens || []) {
-    const step2 = Math.max(1, Math.floor(gr.cells.length / 6));
-    for (let i = 0; i < gr.cells.length; i += step2)
-      trees.push([gr.cells[i][0] + (rnd() - 0.5) * 3,
-                  gr.cells[i][1] + (rnd() - 0.5) * 3]);
+  // tree clusters dress the shared greens — planted only on ground that is
+  // genuinely clear of every plot (mop-up cells can straddle fence lines),
+  // sparsely (≈1 per 90 m² of green, max 5 per green)
+  {
+    const clearOfLots = (x, y) => {
+      for (const l of cand.lots) {
+        const dx = x - l.quad[0][0], dy = y - l.quad[0][1];
+        if (dx * dx + dy * dy > 4900) continue;
+        if (inRing(x, y, l.quad)) return false;
+      }
+      return true;
+    };
+    let planted = 0;
+    for (const gr of cand.greens || []) {
+      if (planted > 60) break;
+      let n2 = Math.min(5, Math.floor(gr.cells.length * 25 / 90 / 25) + 1);
+      for (let i = 0; i < gr.cells.length && n2 > 0; i++) {
+        const c2 = gr.cells[(i * 7 + 3) % gr.cells.length];
+        const px = c2[0] + (rnd() - 0.5) * 2.4, py = c2[1] + (rnd() - 0.5) * 2.4;
+        if (!clearOfLots(px, py)) continue;
+        trees.push([px, py]); planted++; n2--;
+      }
+    }
   }
   cand.trees = trees;
   return cand;
@@ -1601,6 +1726,7 @@ export function openLayoutGen(ctx) {
     grid.querySelectorAll(".lg-cell").forEach(cell =>
       cell.addEventListener("click", () => { focusIdx = +cell.dataset.i; render(); }));
     const show = focusIdx != null ? pop[focusIdx] : (best || pop[0]);
+    window.__lgShow = show; window.__lgSite = site;   // harness/debug hooks
     if (show) {
       decorate(show, site);
       computeSun(show, site);
@@ -1802,3 +1928,6 @@ export function openLayoutGen(ctx) {
   resetPop();
   setRunning(true);
 }
+
+// test/harness access to internal geometry helpers (no runtime cost)
+export const _test = { bldQuad, inPoly, inRing, ringArea, quadOverlap };
