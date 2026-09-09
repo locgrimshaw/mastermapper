@@ -37,7 +37,7 @@ const HEAD_R = 8.6;            // turning head radius (refuse truck sweep)
 const HOUSE_DEPTH = 9.2;
 const FRONT_GARDEN = 5.2;      // holds a 2.6 × 5.0 driveway
 const TYPES = {
-  det:  { w: 10.5, m2: 115, label: "Detached", color: "#e8590c", valMult: 1.06 },
+  det:  { w: 12.2, m2: 115, label: "Detached", color: "#e8590c", valMult: 1.06 },
   semi: { w: 6.7,  m2: 92,  label: "Semi",     color: "#f59f00", valMult: 1.00 },
   terr: { w: 5.3,  m2: 82,  label: "Terrace",  color: "#fab005", valMult: 0.94 },
   flat: { w: 26.0, m2: 58,  label: "Flats",    color: "#7048e8", valMult: 0.90 },
@@ -187,7 +187,8 @@ function bldQuad(l) {
   const w0 = TYPES[l.type].w;
   const fd = (l.type === "flat" ? 4 : FRONT_GARDEN) + (l.jit || 0);
   const bd = l.type === "flat" ? FLAT_BLD_D : HOUSE_DEPTH;
-  const m = l.runId ? 0.05 : 0.7;
+  // detached homes read detached: a real side margin, not a party-wall gap
+  const m = l.runId ? 0.05 : (l.type === "det" ? 2.3 : 0.7);
   const b0 = [p0[0] + tx * m + nx * fd, p0[1] + ty * m + ny * fd];
   const b1 = [b0[0] + tx * (w0 - 2 * m), b0[1] + ty * (w0 - 2 * m)];
   const b2 = [b1[0] + nx * bd, b1[1] + ny * bd];
@@ -782,9 +783,140 @@ function generateCandidate(site, params, genome) {
     }
   }
 
+  // --- shared amenity green reserve -----------------------------------------
+  // Before gardens fan out to swallow the leftover land, reserve deliberate
+  // shared green pockets (the green-space dial is a floor): the clearest
+  // interior spots, kept free of any garden growth.
+  const LCELL = 16, lgrid = new Map();
+  const lgKey = (x, y) => Math.floor(x / LCELL) * 100000 + Math.floor(y / LCELL);
+  lots.forEach((l, idx) => {
+    let x0 = 1e12, y0 = 1e12, x1 = -1e12, y1 = -1e12;
+    for (let i = 0; i < 4; i++) {
+      const p = l.quad[i];
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+    }
+    for (let a = Math.floor(x0 / LCELL); a <= Math.floor(x1 / LCELL); a++)
+      for (let b = Math.floor(y0 / LCELL); b <= Math.floor(y1 / LCELL); b++) {
+        const k = a * 100000 + b;
+        let arr = lgrid.get(k); if (!arr) lgrid.set(k, arr = []);
+        arr.push(idx);
+      }
+  });
+  const lotHit = (x, y, self) => {
+    const arr = lgrid.get(lgKey(x, y));
+    if (!arr) return -1;
+    for (const idx of arr)
+      if (lots[idx] !== self && inRing(x, y, lots[idx].quad)) return idx;
+    return -1;
+  };
+  const greens = [];
+  {
+    const reserveTarget = params.greenPct / 100 * site.areaM2;
+    const stepG = Math.max(10, site.diag / 42);
+    const pockets = [];
+    for (let gx = site.minX + 6; gx < site.maxX; gx += stepG)
+      for (let gy = site.minY + 6; gy < site.maxY; gy += stepG) {
+        if (!inAnyPoly(gx, gy, site.polys)) continue;
+        if (onRoad(gx, gy) || lotHit(gx, gy, null) >= 0) continue;
+        if (inAnyPoly(gx, gy, site.exclusionPolys)) continue;
+        let cl = Math.min(24, distToBoundary(gx, gy, site.allRings));
+        // clearance vs streets (bounded grid search) and plot corners
+        for (let a = Math.floor(gx / RCELL) - 3; a <= Math.floor(gx / RCELL) + 3 && cl > 4; a++)
+          for (let b = Math.floor(gy / RCELL) - 3; b <= Math.floor(gy / RCELL) + 3; b++) {
+            const arr = rgrid.get(a * 100000 + b);
+            if (!arr) continue;
+            for (const sp of arr) {
+              const d = Math.hypot(gx - sp[0], gy - sp[1]) - Math.sqrt(sp[2]);
+              if (d < cl) cl = d;
+            }
+          }
+        for (let a = Math.floor(gx / LCELL) - 2; a <= Math.floor(gx / LCELL) + 2 && cl > 4; a++)
+          for (let b = Math.floor(gy / LCELL) - 2; b <= Math.floor(gy / LCELL) + 2; b++) {
+            const arr = lgrid.get(a * 100000 + b);
+            if (!arr) continue;
+            for (const idx of arr)
+              for (let i2 = 0; i2 < 4; i2++) {
+                const d = Math.hypot(gx - lots[idx].quad[i2][0], gy - lots[idx].quad[i2][1]);
+                if (d < cl) cl = d;
+              }
+          }
+        if (cl >= 8) pockets.push([gx, gy, cl]);
+      }
+    pockets.sort((a, b) => b[2] - a[2]);
+    let reserved = 0;
+    for (const [gx, gy, cl] of pockets) {
+      if (reserved >= reserveTarget || greens.length >= 4) break;
+      if (greens.some(gr => Math.hypot(gx - gr.x, gy - gr.y) < gr.r + cl)) continue;
+      const r = Math.min(cl - 1.2, 20);
+      greens.push({ x: gx, y: gy, r });
+      reserved += Math.PI * r * r;
+    }
+  }
+  const inGreen = (x, y) => {
+    for (const gr of greens) {
+      const dx = x - gr.x, dy = y - gr.y;
+      if (dx * dx + dy * dy < (gr.r + 1.2) * (gr.r + 1.2)) return true;
+    }
+    return false;
+  };
+
+  // --- garden infill: fan rear gardens into the leftover land ---------------
+  // Each rear corner marches away from the street until it meets a street,
+  // the site edge, an exclusion, a reserved green, the garden-max cap, or an
+  // opposing plot (where facing gardens split the gap so fences meet in the
+  // middle). Plots become trapezoids that fill the block — no phantom
+  // developable land left on show.
+  const gardenMaxOf = l =>
+    l.type === "flat" ? l.units * 22
+      : Math.max(params.gardenMin + 30, params.gardenMax || 240)
+        * (l.type === "det" ? 1.35 : l.type === "terr" ? 0.8 : 1);
+  const exts = [];
+  for (const l of lots) {
+    const w0 = TYPES[l.type].w;
+    const rear0 = l.type === "flat" ? Math.max(0, FLAT_PLOT_D - FLAT_BLD_D - 4) : gardenDepth;
+    let capExt = Math.min(16, Math.max(0, (gardenMaxOf(l) - rear0 * w0) / w0));
+    const per = [0, 0];
+    if (capExt > 0.6) {
+      for (let c = 0; c < 2; c++) {
+        const corner = l.quad[c === 0 ? 3 : 2];   // rear-left, rear-right
+        let ext = 0;
+        for (let d = 1; d <= capExt; d += 1) {
+          const px = corner[0] + l.nx * d, py = corner[1] + l.ny * d;
+          if (!inAnyPoly(px, py, site.polys) || onRoad(px, py)
+              || inAnyPoly(px, py, site.exclusionPolys) || inGreen(px, py)) break;
+          const hit = lotHit(px, py, l);
+          if (hit >= 0) {
+            const o = lots[hit];
+            // facing plot: meet in the middle; side neighbour: stop short
+            ext = (l.nx * o.nx + l.ny * o.ny < -0.2) ? Math.floor(d / 2) : Math.max(0, d - 2);
+            break;
+          }
+          ext = d;
+        }
+        per[c] = ext;
+      }
+      // keep the fan believable — no wildly lopsided fences
+      if (per[0] - per[1] > 7) per[0] = per[1] + 7;
+      if (per[1] - per[0] > 7) per[1] = per[0] + 7;
+    }
+    exts.push(per);
+  }
+  lots.forEach((l, i) => {
+    const [eL, eR] = exts[i];
+    if (eL <= 0 && eR <= 0) return;
+    l.quad[3] = [l.quad[3][0] + l.nx * eL, l.quad[3][1] + l.ny * eL];
+    l.quad[2] = [l.quad[2][0] + l.nx * eR, l.quad[2][1] + l.ny * eR];
+    l.quad[4] = l.quad[0].slice();
+  });
+
   // --- greens, pond, trees --------------------------------------------------
   const lotArea = lots.reduce((a, l) => a + ringArea(l.quad), 0);
   const greenArea = Math.max(0, site.areaM2 - roadArea - lotArea);
+  const houseGardens = lots.filter(l => l.type !== "flat")
+    .map(l => Math.max(0, ringArea(l.quad) - TYPES[l.type].w * (FRONT_GARDEN + HOUSE_DEPTH)));
+  const avgGardenReal = houseGardens.length
+    ? houseGardens.reduce((a, v) => a + v, 0) / houseGardens.length : 0;
 
   const roadLen = roads.reduce((a, r) => a + polylineLen(r.pts), 0);
   // Garden aspect: the rear garden faces away from the street (+normal).
@@ -794,11 +926,12 @@ function generateCandidate(site, params, genome) {
     ? houseLots.filter(l => l.ny < -0.34).length / houseLots.length * 100 : 0;
   const stats = statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea,
                            site, params, gardenDepth, southPct, deadEnds, junctions,
+                           avgGarden: avgGardenReal,
                            flatBlocks: lots.filter(l => l.type === "flat").length });
   // pond + street trees are display dressing, filled in lazily by decorate()
   // so the evolution loop never pays for them — see decorate() below.
   return { genome, roads, roadClip: null, fullPolys, carrPolys, heads, lots,
-           stats, pond: null, trees: [], gardenDepth, ctrl };
+           greens, stats, pond: null, trees: [], gardenDepth, ctrl };
 }
 
 // Display-only dressing (SuDS pond siting + street trees). Deferred out of
@@ -872,11 +1005,19 @@ function decorate(cand, site) {
       if (free) trees.push([px, py]);
     }
   }
+  // tree clusters dress the reserved shared greens
+  for (const gr of cand.greens || []) {
+    const n2 = Math.max(2, Math.round(gr.r / 4));
+    for (let i = 0; i < n2; i++) {
+      const a2 = rnd() * 2 * Math.PI, rr = 2 + rnd() * Math.max(1, gr.r - 4);
+      trees.push([gr.x + rr * Math.cos(a2), gr.y + rr * Math.sin(a2)]);
+    }
+  }
   cand.trees = trees;
   return cand;
 }
 
-function statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea, site, params, gardenDepth, southPct, deadEnds, junctions, flatBlocks }) {
+function statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea, site, params, gardenDepth, southPct, deadEnds, junctions, flatBlocks, avgGarden: avgGardenIn }) {
   const siteHa = site.areaM2 / 1e4;
   const houses = placed.det + placed.semi + placed.terr;
   // Gross-to-net honesty: what share of the gross site is actually developed
@@ -893,9 +1034,9 @@ function statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea, site, 
   const greenPct = greenArea / site.areaM2;
   const parking = Math.round(houses * (params.parkRatio ?? 2))
     + Math.ceil(placed.flat * 1.25) + Math.ceil(total * 0.25); // + visitor 0.25/home
-  const avgGarden = houses > 0
+  const avgGarden = avgGardenIn != null ? avgGardenIn : (houses > 0
     ? (placed.det * TYPES.det.w + placed.semi * TYPES.semi.w + placed.terr * TYPES.terr.w)
-      * gardenDepth / houses : 0;
+      * gardenDepth / houses : 0);
   let gia = 0, gdv = 0, build = 0;
   const psm = (params.ppm2 || 3500) * ((params.assumptions.salesAdjPct || 100) / 100);
   const costH = (params.assumptions.buildPm2House || 1800) * (params.assumptions.costIndexFactor || 1);
@@ -954,6 +1095,17 @@ function svgOf(cand, site, w, h, detail) {
   out += (cand.roadClip || cand.fullPolys).map(p => `<path d="${path(p)}" fill="#e3e7ea" fill-rule="evenodd"/>`).join("");
   for (const cp of cand.carrPolys)
     out += `<path d="${path(cp)}" fill="#c4cad1"/>`;
+  // reserved shared amenity greens (kept clear of garden growth)
+  for (const gr of cand.greens || []) {
+    const ring = [];
+    for (let i = 0; i <= 26; i++) {
+      const a2 = i / 26 * 2 * Math.PI;
+      const rr = gr.r * (1 + 0.09 * Math.sin(a2 * 3 + gr.x));
+      ring.push([gr.x + rr * Math.cos(a2), gr.y + rr * Math.sin(a2)]);
+    }
+    ring.push(ring[0].slice());
+    out += `<path d="${path([ring])}" fill="#9ed9a6" stroke="#69bd77" stroke-width="${detail ? 0.8 : 0.3}" stroke-dasharray="3 2"/>`;
+  }
   // gardens / plots (rear gardens with under 2h equinox sun read duller)
   for (const l of cand.lots) {
     const shaded = detail && l._sun != null && l._sun < 2 && l.type !== "flat";
@@ -1127,7 +1279,7 @@ export function openLayoutGen(ctx) {
     density: ctx.density || 35, netPct: ctx.netPct || 80,
     flatsPct: Math.round(ctx.assumptions.flatMixPct ?? 20),
     detPct: 30, terrPct: 20,
-    gardenMin: 80, greenPct: 10, organic: 0.7, parkRatio: 2,
+    gardenMin: 80, gardenMax: 240, greenPct: 10, organic: 0.7, parkRatio: 2,
     ppm2: ctx.ppm2, assumptions: ctx.assumptions || {},
   };
 
@@ -1269,6 +1421,8 @@ export function openLayoutGen(ctx) {
             <input type="range" id="lg-terr" min="0" max="80" step="5" value="${params.terrPct}"></label>
           <label><span>Garden min <b id="lg-gv">${params.gardenMin}</b> m²</span>
             <input type="range" id="lg-garden" min="30" max="150" step="10" value="${params.gardenMin}"></label>
+          <label><span>Garden max <b id="lg-gmv">${params.gardenMax}</b> m²</span>
+            <input type="range" id="lg-gmax" min="120" max="420" step="20" value="${params.gardenMax}"></label>
           <label><span>Green space <b id="lg-grv">${params.greenPct}</b>% floor</span>
             <input type="range" id="lg-green" min="0" max="30" step="2" value="${params.greenPct}"></label>
           <label><span>Street character <b id="lg-ov">organic</b></span>
@@ -1286,15 +1440,22 @@ export function openLayoutGen(ctx) {
               <li>Streets: 5.5 m carriageway + 2 m footways (primary), 4.8 m
                 secondary, shared-surface lanes — Manual for Streets tones.</li>
               <li>Turning heads sized for an 11.2 m refuse vehicle.</li>
-              <li>Frontages: det 10.5 m · semi 6.7 m · terrace 5.3 m; rear
-                gardens from the amenity dial (Essex Design Guide benchmark
-                100 m²); back-to-back privacy reported vs 21 m minimum.</li>
+              <li>Frontages: det 12.2 m (house set in ≥2.3 m each side — truly
+                detached) · semi 6.7 m · terrace 5.3 m; back-to-back privacy
+                reported vs 21 m minimum.</li>
+              <li>Rear gardens fan out to fill the block between the min and
+                max dials (Essex Design Guide benchmark 100 m²; detached
+                +35%, terraces −20%), meeting opposing fences midway — no
+                phantom developable land left on the plan.</li>
+              <li>Flats get communal amenity gardens at ~22 m²/unit behind
+                the parking court.</li>
               <li>Parking: dial per house on-plot + 0.25 visitor/home
                 (typical SPD rates); flats 1.25/unit in courts.</li>
               <li>Exclusion zones: flood zones 2/3, ancient woodland, SSSI/SAC/
                 SPA/Ramsar, scheduled monuments — no homes placed within.</li>
-              <li>Green space floor + SuDS pond on larger sites (Schedule 3
-                expectation).</li>
+              <li>Green space floor reserved as deliberate shared greens
+                (dashed pockets, tree-planted) before gardens grow, plus a
+                SuDS pond on larger sites (Schedule 3 expectation).</li>
             </ul>
           </details>
           <p class="lg-note">Capacity & massing study — not an engineering
@@ -1311,6 +1472,7 @@ export function openLayoutGen(ctx) {
             <span><i style="background:${TYPES.flat.color}"></i>flats</span>
             <span><i style="background:#d8f5dd;border:1px solid #96d9a5"></i>garden</span>
             <span><i style="background:#b7e4c1"></i>green</span>
+            <span><i style="background:#9ed9a6;border:1px dashed #69bd77"></i>shared green</span>
             <span><i style="background:#c4cad1"></i>street</span>
             <span><i style="background:#74c0fc"></i>SuDS pond</span>
             <span><i style="background:#37b24d;border-radius:50%"></i>tree</span>
@@ -1425,6 +1587,7 @@ export function openLayoutGen(ctx) {
   slider("#lg-det", "detPct", "#lg-dtv");
   slider("#lg-terr", "terrPct", "#lg-tv");
   slider("#lg-garden", "gardenMin", "#lg-gv");
+  slider("#lg-gmax", "gardenMax", "#lg-gmv");
   slider("#lg-green", "greenPct", "#lg-grv");
   slider("#lg-park", "parkRatio", "#lg-pv");
   {
