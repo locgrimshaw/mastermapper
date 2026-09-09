@@ -5221,6 +5221,23 @@ function wireInteractions() {
       }
     }
 
+    // 3c. Data-centre sift cell. MUST run through this dispatcher, not a
+    // map.on("click", "dc-hi-fill") handler: MapLibre does not synthesise a
+    // click from a tap on touch devices, so the layer-specific handler this
+    // replaces left the sift squares unselectable on iPad — the same failure
+    // the station dots had. Sits above the LSOA zones because the sift is a
+    // mode the user has explicitly turned on.
+    if (DC.active && map.getLayer("dc-hi-fill")) {
+      let hits = null;
+      try { hits = map.queryRenderedFeatures(box, { layers: ["dc-hi-fill"] }); } catch (_) {}
+      if (hits && hits.length) {
+        dbg("tap → dc cell", hits.length);
+        openDcPanel(hits[0].properties);
+        setDrawer(false);
+        return true;
+      }
+    }
+
     // 4. LSOA zone — unless a deep dive is open (you're working inside one).
     if (!deep.active && map.getLayer("lsoa-fill")) {
       let hits = null;
@@ -16526,10 +16543,8 @@ async function dcActivate(on) {
   if (!map.getLayer("dc-hi-fill")) {
     map.addLayer({ id: "dc-hi-fill", type: "fill", source: "dc-hi-src",
                    minzoom: 9, paint: {} }, before);
-    map.on("click", "dc-hi-fill", (e) => {
-      const f = e.features && e.features[0];
-      if (f) openDcPanel(f.properties);
-    });
+    // (cell selection is handled by the unified handleMapTap dispatcher, so it
+    //  works on touch as well as desktop — no layer-specific click handler.)
     map.on("mouseenter", "dc-hi-fill", () => { map.getCanvas().style.cursor = "pointer"; });
     map.on("mouseleave", "dc-hi-fill", () => { map.getCanvas().style.cursor = ""; });
   }
