@@ -738,7 +738,12 @@ function generateCandidate(site, params, genome) {
     return { L, pointAt };
   };
 
-  for (const road of roads) {
+  // Two passes: full-depth plots first, then a corner-fill sweep at reduced
+  // depth so bends and site corners take a house with a shallower-but-wider
+  // garden instead of leaving conspicuous developable-looking pockets.
+  const placePass = (depthF) => {
+  for (let ri = 0; ri < roads.length; ri++) {
+    const road = roads[ri];
     if (total >= targetUnits) break;
     const spec = STREETS[road.type];
     const edge = spec.corridor / 2 + 0.3;
@@ -753,9 +758,11 @@ function generateCandidate(site, params, genome) {
         let placedHere = false;
         const order = runLeft > 0 ? [runType] : biased(pos);
         for (const type of order) {
+          if (depthF < 1 && type === "flat") continue;
           const tw = TYPES[type].w;
           if (s + tw > L - 2) continue;
-          const depth = type === "flat" ? FLAT_PLOT_D : plotDepth;
+          const depth = type === "flat" ? FLAT_PLOT_D
+            : Math.max(FRONT_GARDEN + HOUSE_DEPTH + 3.5, plotDepth * depthF);
           const quad = mkQuad(pos, tx, ty, nx, ny, tw, edge, depth);
           if (!tryQuad(quad)) continue;
           let thisRun = null;
@@ -768,6 +775,7 @@ function generateCandidate(site, params, genome) {
           } else runLeft = 0;
           const flatInfo = type === "flat" ? pickFlatUnits() : null;
           lots.push({ quad, type, side, runId: thisRun,
+                      row: ri * 2 + (side > 0 ? 1 : 0), spos: s,
                       front: [quad[0], quad[1]], tx, ty, nx, ny,
                       units: flatInfo ? flatInfo.units : 1,
                       storeys: flatInfo ? flatInfo.storeys : 2,
@@ -782,6 +790,9 @@ function generateCandidate(site, params, genome) {
       }
     }
   }
+  };
+  placePass(1);
+  placePass(0.55);
 
   // --- shared amenity green reserve -----------------------------------------
   // Before gardens fan out to swallow the leftover land, reserve deliberate
@@ -810,56 +821,136 @@ function generateCandidate(site, params, genome) {
       if (lots[idx] !== self && inRing(x, y, lots[idx].quad)) return idx;
     return -1;
   };
-  const greens = [];
+  // Shaped greens, not blobs: rasterise the undeveloped land onto a 6 m cell
+  // grid, find the deepest interior pockets, and grow each green cell-by-cell
+  // from the pocket's core until the green-space floor is met. The traced,
+  // smoothed outline reads as a deliberately shaped space filling its gap.
+  const greens = [];              // [{ outline: [[x,y]...], cells: [[cx,cy]...] }]
+  const GCELL = 6;
+  const gKey = (ix, iy) => ix * 100000 + iy;
+  const greenMask = new Set();
+  const inGreen = (x, y) => greenMask.has(
+    gKey(Math.floor((x - site.minX) / GCELL), Math.floor((y - site.minY) / GCELL)));
   {
     const reserveTarget = params.greenPct / 100 * site.areaM2;
-    const stepG = Math.max(10, site.diag / 42);
-    const pockets = [];
-    for (let gx = site.minX + 6; gx < site.maxX; gx += stepG)
-      for (let gy = site.minY + 6; gy < site.maxY; gy += stepG) {
-        if (!inAnyPoly(gx, gy, site.polys)) continue;
-        if (onRoad(gx, gy) || lotHit(gx, gy, null) >= 0) continue;
-        if (inAnyPoly(gx, gy, site.exclusionPolys)) continue;
-        let cl = Math.min(24, distToBoundary(gx, gy, site.allRings));
-        // clearance vs streets (bounded grid search) and plot corners
-        for (let a = Math.floor(gx / RCELL) - 3; a <= Math.floor(gx / RCELL) + 3 && cl > 4; a++)
-          for (let b = Math.floor(gy / RCELL) - 3; b <= Math.floor(gy / RCELL) + 3; b++) {
-            const arr = rgrid.get(a * 100000 + b);
-            if (!arr) continue;
-            for (const sp of arr) {
-              const d = Math.hypot(gx - sp[0], gy - sp[1]) - Math.sqrt(sp[2]);
-              if (d < cl) cl = d;
-            }
-          }
-        for (let a = Math.floor(gx / LCELL) - 2; a <= Math.floor(gx / LCELL) + 2 && cl > 4; a++)
-          for (let b = Math.floor(gy / LCELL) - 2; b <= Math.floor(gy / LCELL) + 2; b++) {
-            const arr = lgrid.get(a * 100000 + b);
-            if (!arr) continue;
-            for (const idx of arr)
-              for (let i2 = 0; i2 < 4; i2++) {
-                const d = Math.hypot(gx - lots[idx].quad[i2][0], gy - lots[idx].quad[i2][1]);
-                if (d < cl) cl = d;
-              }
-          }
-        if (cl >= 8) pockets.push([gx, gy, cl]);
+    if (reserveTarget > 60) {
+      const gCols = Math.ceil((site.maxX - site.minX) / GCELL) + 1;
+      const gRows = Math.ceil((site.maxY - site.minY) / GCELL) + 1;
+      const open = new Set();
+      for (let ix = 0; ix < gCols; ix++)
+        for (let iy = 0; iy < gRows; iy++) {
+          const cx = site.minX + (ix + 0.5) * GCELL, cy = site.minY + (iy + 0.5) * GCELL;
+          if (!inAnyPoly(cx, cy, site.polys)) continue;
+          if (onRoad(cx, cy) || lotHit(cx, cy, null) >= 0) continue;
+          if (inAnyPoly(cx, cy, site.exclusionPolys)) continue;
+          open.add(gKey(ix, iy));
+        }
+      // distance-to-developed-land transform over the open cells
+      const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      const depth = new Map();
+      let frontier = [];
+      for (const k of open) {
+        const ix = Math.floor(k / 100000), iy = k % 100000;
+        if (!DIRS.every(([a, b]) => open.has(gKey(ix + a, iy + b)))) {
+          depth.set(k, 0); frontier.push(k);
+        }
       }
-    pockets.sort((a, b) => b[2] - a[2]);
-    let reserved = 0;
-    for (const [gx, gy, cl] of pockets) {
-      if (reserved >= reserveTarget || greens.length >= 4) break;
-      if (greens.some(gr => Math.hypot(gx - gr.x, gy - gr.y) < gr.r + cl)) continue;
-      const r = Math.min(cl - 1.2, 20);
-      greens.push({ x: gx, y: gy, r });
-      reserved += Math.PI * r * r;
+      let dd = 0;
+      while (frontier.length) {
+        dd++;
+        const nf = [];
+        for (const k of frontier) {
+          const ix = Math.floor(k / 100000), iy = k % 100000;
+          for (const [a, b] of DIRS) {
+            const nk = gKey(ix + a, iy + b);
+            if (open.has(nk) && !depth.has(nk)) { depth.set(nk, dd); nf.push(nk); }
+          }
+        }
+        frontier = nf;
+      }
+      const byDepth = [...depth.entries()].sort((a, b) => b[1] - a[1]);
+      let reserved = 0;
+      for (const [seed, sd] of byDepth) {
+        if (reserved >= reserveTarget || greens.length >= 3) break;
+        if (sd < 2 || greenMask.has(seed)) continue;
+        // BFS out from the pocket core; interior cells only, so the green
+        // hugs its gap instead of leaking down cracks between gardens
+        const want = Math.min(reserveTarget - reserved,
+                              Math.max(reserveTarget / 2, 500));
+        const cells = new Set([seed]);
+        let ring2 = [seed];
+        while (cells.size * GCELL * GCELL < want && ring2.length) {
+          const nf = [];
+          for (const k of ring2) {
+            const ix = Math.floor(k / 100000), iy = k % 100000;
+            for (const [a, b] of DIRS) {
+              const nk = gKey(ix + a, iy + b);
+              if (open.has(nk) && !cells.has(nk) && !greenMask.has(nk)
+                  && (depth.get(nk) || 0) >= 1) {
+                cells.add(nk); nf.push(nk);
+                if (cells.size * GCELL * GCELL >= want) break;
+              }
+            }
+            if (cells.size * GCELL * GCELL >= want) break;
+          }
+          ring2 = nf;
+        }
+        if (cells.size * GCELL * GCELL < 140) continue;   // too scrappy to gesture
+        for (const k of cells) greenMask.add(k);
+        reserved += cells.size * GCELL * GCELL;
+        // trace the rectilinear boundary, then smooth it (Chaikin x2)
+        const edges = new Map();
+        for (const k of cells) {
+          const ix = Math.floor(k / 100000), iy = k % 100000;
+          const x0 = site.minX + ix * GCELL, y0 = site.minY + iy * GCELL;
+          const segs = [];
+          if (!cells.has(gKey(ix, iy - 1))) segs.push([[x0, y0], [x0 + GCELL, y0]]);
+          if (!cells.has(gKey(ix + 1, iy))) segs.push([[x0 + GCELL, y0], [x0 + GCELL, y0 + GCELL]]);
+          if (!cells.has(gKey(ix, iy + 1))) segs.push([[x0 + GCELL, y0 + GCELL], [x0, y0 + GCELL]]);
+          if (!cells.has(gKey(ix - 1, iy))) segs.push([[x0, y0 + GCELL], [x0, y0]]);
+          for (const sg of segs) {
+            const key2 = sg[0][0].toFixed(1) + "," + sg[0][1].toFixed(1);
+            let arr2 = edges.get(key2); if (!arr2) edges.set(key2, arr2 = []);
+            arr2.push(sg);
+          }
+        }
+        let outline = null;
+        const startKeys = [...edges.keys()];
+        for (const sk of startKeys) {
+          const first = (edges.get(sk) || []).pop();
+          if (!first) continue;
+          const loop = [first[0]];
+          let cur = first[1];
+          for (let guard = 0; guard < 4000; guard++) {
+            loop.push(cur);
+            const ck = cur[0].toFixed(1) + "," + cur[1].toFixed(1);
+            const nxt = (edges.get(ck) || []).pop();
+            if (!nxt) break;
+            cur = nxt[1];
+            if (ck === sk) break;
+          }
+          if (!outline || loop.length > outline.length) outline = loop;
+        }
+        if (!outline || outline.length < 4) continue;
+        const chaikin = pts => {
+          const o2 = [];
+          for (let i = 0; i < pts.length; i++) {
+            const a = pts[i], b = pts[(i + 1) % pts.length];
+            o2.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+            o2.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+          }
+          return o2;
+        };
+        greens.push({
+          outline: chaikin(chaikin(outline)),
+          cells: [...cells].map(k => {
+            const ix = Math.floor(k / 100000), iy = k % 100000;
+            return [site.minX + (ix + 0.5) * GCELL, site.minY + (iy + 0.5) * GCELL];
+          }),
+        });
+      }
     }
   }
-  const inGreen = (x, y) => {
-    for (const gr of greens) {
-      const dx = x - gr.x, dy = y - gr.y;
-      if (dx * dx + dy * dy < (gr.r + 1.2) * (gr.r + 1.2)) return true;
-    }
-    return false;
-  };
 
   // --- garden infill: fan rear gardens into the leftover land ---------------
   // Each rear corner marches away from the street until it meets a street,
@@ -909,6 +1000,33 @@ function generateCandidate(site, params, genome) {
     l.quad[2] = [l.quad[2][0] + l.nx * eR, l.quad[2][1] + l.ny * eR];
     l.quad[4] = l.quad[0].slice();
   });
+
+  // --- fence welding: neighbouring gardens share a side boundary ------------
+  // Adjacent plots on the same street side fan their side fences to a common
+  // point, closing the wedge gaps that curvature opens between rectangles —
+  // the plan reads as one continuous run of curtilage, like a drawn scheme.
+  {
+    const rows = new Map();
+    for (const l of lots) {
+      let arr = rows.get(l.row); if (!arr) rows.set(l.row, arr = []);
+      arr.push(l);
+    }
+    const weldOK = (x, y) => inAnyPoly(x, y, site.polys) && !onRoad(x, y)
+      && !inAnyPoly(x, y, site.exclusionPolys) && !inGreen(x, y);
+    for (const arr of rows.values()) {
+      arr.sort((a, b) => a.spos - b.spos);
+      for (let i = 0; i + 1 < arr.length; i++) {
+        const a = arr[i], b = arr[i + 1];
+        const gap = Math.hypot(b.quad[0][0] - a.quad[1][0], b.quad[0][1] - a.quad[1][1]);
+        if (gap > 6) continue;
+        const mx = (a.quad[2][0] + b.quad[3][0]) / 2;
+        const my = (a.quad[2][1] + b.quad[3][1]) / 2;
+        if (!weldOK(mx, my)) continue;
+        a.quad[2] = [mx, my]; b.quad[3] = [mx, my];
+        a.quad[4] = a.quad[0].slice(); b.quad[4] = b.quad[0].slice();
+      }
+    }
+  }
 
   // --- greens, pond, trees --------------------------------------------------
   const lotArea = lots.reduce((a, l) => a + ringArea(l.quad), 0);
@@ -1007,11 +1125,10 @@ function decorate(cand, site) {
   }
   // tree clusters dress the reserved shared greens
   for (const gr of cand.greens || []) {
-    const n2 = Math.max(2, Math.round(gr.r / 4));
-    for (let i = 0; i < n2; i++) {
-      const a2 = rnd() * 2 * Math.PI, rr = 2 + rnd() * Math.max(1, gr.r - 4);
-      trees.push([gr.x + rr * Math.cos(a2), gr.y + rr * Math.sin(a2)]);
-    }
+    const step2 = Math.max(1, Math.floor(gr.cells.length / 6));
+    for (let i = 0; i < gr.cells.length; i += step2)
+      trees.push([gr.cells[i][0] + (rnd() - 0.5) * 3,
+                  gr.cells[i][1] + (rnd() - 0.5) * 3]);
   }
   cand.trees = trees;
   return cand;
@@ -1095,17 +1212,9 @@ function svgOf(cand, site, w, h, detail) {
   out += (cand.roadClip || cand.fullPolys).map(p => `<path d="${path(p)}" fill="#e3e7ea" fill-rule="evenodd"/>`).join("");
   for (const cp of cand.carrPolys)
     out += `<path d="${path(cp)}" fill="#c4cad1"/>`;
-  // reserved shared amenity greens (kept clear of garden growth)
-  for (const gr of cand.greens || []) {
-    const ring = [];
-    for (let i = 0; i <= 26; i++) {
-      const a2 = i / 26 * 2 * Math.PI;
-      const rr = gr.r * (1 + 0.09 * Math.sin(a2 * 3 + gr.x));
-      ring.push([gr.x + rr * Math.cos(a2), gr.y + rr * Math.sin(a2)]);
-    }
-    ring.push(ring[0].slice());
-    out += `<path d="${path([ring])}" fill="#9ed9a6" stroke="#69bd77" stroke-width="${detail ? 0.8 : 0.3}" stroke-dasharray="3 2"/>`;
-  }
+  // reserved shared amenity greens: shaped spaces filling their pockets
+  for (const gr of cand.greens || [])
+    out += `<path d="${path([gr.outline])}" fill="#9ed9a6" stroke="#69bd77" stroke-width="${detail ? 0.8 : 0.3}" stroke-dasharray="3 2"/>`;
   // gardens / plots (rear gardens with under 2h equinox sun read duller)
   for (const l of cand.lots) {
     const shaded = detail && l._sun != null && l._sun < 2 && l.type !== "flat";
