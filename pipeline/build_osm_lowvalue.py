@@ -223,7 +223,8 @@ def classify(t, area=0.0, near_parking=False, big_parking=False):
     # --- 4. retail sheds & parks -------------------------------------------
     # Three gates, because OSM's retail tags describe SHOPS and DISTRICTS, not
     # redevelopment opportunities (see the note at the top of this file).
-    is_retailish = (lu == "retail" or bld in ("retail", "supermarket") or shop)
+    is_retailish = (lu in ("retail", "commercial")
+                    or bld in ("retail", "supermarket", "commercial") or shop)
     if is_retailish:
         if shop in NEVER_RETAIL_SHOPS:
             return None, None                  # department stores are landmarks
@@ -243,17 +244,21 @@ def classify(t, area=0.0, near_parking=False, big_parking=False):
         #     nearby parking — that put 11,054 districts, six of them in the
         #     West End, into the layer. Districts go through gate (d) instead.
         if area >= MIN_RETAIL_SHED_M2 and near_parking:
-            if bld in ("retail", "supermarket"):
+            if bld in ("retail", "supermarket", "commercial"):
                 return "osm_retail", bld
             if shop in ("supermarket", "furniture", "hardware"):
                 return "osm_retail", shop
-        # (d) a LARGE unnamed retail district with a LARGE car park: the
-        #     out-of-town signature. Catches Fosse Park and its like, which
-        #     carry no "retail park" in the name; no city centre can fake it.
-        if lu == "retail" and area >= MIN_RETAIL_DISTRICT_M2 and big_parking:
+        # (d) a LARGE retail/commercial district with a LARGE car park: the
+        #     out-of-town signature no city centre can fake. Some major retail
+        #     parks are mapped as landuse=commercial rather than retail, and
+        #     many carry no "retail park" in the name, so both land uses are
+        #     eligible HERE ONLY — never on ordinary nearby parking.
+        if lu in ("retail", "commercial") and area >= MIN_RETAIL_DISTRICT_M2 and big_parking:
             return "osm_retail", "retail_park"
-        # anything else retail-tagged is a shop or a district, not a site
-        if lu == "retail" or bld in ("retail", "supermarket") or shop:
+        # anything else retail-tagged is a shop or a district, not a site.
+        # landuse=commercial falls through to the industrial branch below,
+        # where an unnamed commercial estate is still a legitimate lead.
+        if lu == "retail" or bld in ("retail", "supermarket", "commercial") or shop:
             return None, None
 
     # --- 5. industrial land & sheds ----------------------------------------
@@ -396,11 +401,11 @@ def main():
             # retail is the only class that needs the parking context, and the
             # lookup is not free — only pay for it on retail-tagged features
             ctx = big = False
-            if (t.get("landuse") == "retail" or t.get("shop")
-                    or t.get("building") in ("retail", "supermarket")):
+            if (t.get("landuse") in ("retail", "commercial") or t.get("shop")
+                    or t.get("building") in ("retail", "supermarket", "commercial")):
                 lon0, la0 = _centroid(polys)
                 ctx = near(lon0, la0)
-                if t.get("landuse") == "retail" and area >= MIN_RETAIL_DISTRICT_M2:
+                if t.get("landuse") in ("retail", "commercial") and area >= MIN_RETAIL_DISTRICT_M2:
                     big = near(lon0, la0, DISTRICT_PARKING_R_M, MIN_DISTRICT_PARKING_M2)
             cls, subtype = classify(t, area, ctx, big)
             if not cls:

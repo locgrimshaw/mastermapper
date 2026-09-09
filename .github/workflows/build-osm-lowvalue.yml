@@ -77,8 +77,8 @@ jobs:
           osmium tags-filter data/raw/uk.osm.pbf \
             w/landuse r/landuse \
             w/amenity=parking,fuel,recycling r/amenity=parking,fuel,recycling \
-            w/building=industrial,warehouse,factory,manufacture,hangar,retail,supermarket,kiosk \
-            r/building=industrial,warehouse,factory,manufacture,hangar,retail,supermarket,kiosk \
+            w/building=industrial,warehouse,factory,manufacture,hangar,retail,supermarket,kiosk,commercial \
+            r/building=industrial,warehouse,factory,manufacture,hangar,retail,supermarket,kiosk,commercial \
             w/man_made=works,gasometer,storage_tank,silo,water_works,wastewater_plant \
             r/man_made=works,gasometer,storage_tank,silo,water_works,wastewater_plant \
             w/leisure=golf_course,driving_range,track,water_park,marina \

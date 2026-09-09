@@ -78,6 +78,12 @@ add("biggest West End car park", {"amenity": "parking", "parking": "surface"}, 6
 # genuine out-of-town retail park and must survive.
 add("Fosse-style district", {"landuse": "retail"}, 250, -1.1955, 52.5855, "osm_retail")
 add("Fosse-style car park", {"amenity": "parking", "parking": "surface"}, 140, -1.1938, 52.5855, "osm_parking")
+# Some major retail parks are mapped landuse=commercial, not retail. Large +
+# large car park must qualify; a city commercial block must not.
+add("commercial retail park", {"landuse": "commercial"}, 250, -1.4500, 53.4000, "osm_retail")
+add("its car park", {"amenity": "parking", "parking": "surface"}, 140, -1.4483, 53.4000, "osm_parking")
+add("city commercial block", {"landuse": "commercial"}, 120, -0.0900, 51.5150, None)
+add("city service parking", {"amenity": "parking", "parking": "surface"}, 60, -0.0895, 51.5150, "osm_parking")
 add("tiny car park", {"amenity": "parking", "parking": "surface"}, 28, -0.1315, 51.5134, None)
 
 # --- industrial: low-rise kept, multi-storey dropped ----------------------
