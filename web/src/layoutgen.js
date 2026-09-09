@@ -1029,8 +1029,29 @@ export function openLayoutGen(ctx) {
   const t = T();
   if (!t) { alert("Geometry library not loaded yet — try again in a moment."); return; }
 
+  // Assembled sites inherit hairline slivers and seams from imperfect parcel
+  // geometry — neighbouring INSPIRE plots that almost, but not quite, abut.
+  // Those slits read as site boundary, so streets refuse to cross them and
+  // the network fragments. A small morphological closing (buffer out, then
+  // back in) welds any gap narrower than ~2.5 m before the generator starts;
+  // thin genuine features survive (closing fills gaps, it never erodes).
+  let siteFeat = ctx.site;
+  try {
+    const grown = t.buffer(siteFeat, 0.00125, { units: "kilometers" });
+    const closed = t.buffer(grown, -0.00125, { units: "kilometers" });
+    if (closed && closed.geometry
+        && (closed.geometry.type === "Polygon" || closed.geometry.type === "MultiPolygon")
+        && t.area(closed) < t.area(siteFeat) * 1.05) {
+      try {
+        // buffering leaves dense arc vertices; a ~0.2 m simplify trims them
+        const s2 = t.simplify(closed, { tolerance: 0.000002, highQuality: false, mutate: false });
+        siteFeat = (s2 && s2.geometry) ? s2 : closed;
+      } catch (_) { siteFeat = closed; }
+    }
+  } catch (_) { /* weld is best-effort; raw geometry still works */ }
+
   // Project to local metres once; precompute everything candidates share.
-  const g = ctx.site.geometry;
+  const g = siteFeat.geometry;
   const polys4326 = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
   let lat0 = 0, n = 0;
   for (const poly of polys4326) for (const p of poly[0]) { lat0 += p[1]; n++; }
@@ -1040,8 +1061,12 @@ export function openLayoutGen(ctx) {
   for (const poly of polys4326) for (const p of poly[0]) {
     ox = Math.min(ox, p[0] * kx); oy = Math.min(oy, p[1] * ky);
   }
-  const polys = polys4326.map(poly =>
-    poly.map(ring => ring.map(p => [p[0] * kx - ox, p[1] * ky - oy])));
+  const polys = polys4326
+    .map(poly => poly.map(ring => ring.map(p => [p[0] * kx - ox, p[1] * ky - oy])))
+    // drop micro-holes and debris fragments left over from parcel geometry
+    .map(poly => poly.filter((ring, i) => i === 0 || ringArea(ring) > 30))
+    .filter(poly => ringArea(poly[0]) > 80);
+  if (!polys.length) { alert("Site geometry too small to lay out."); return; }
   const areaM2 = polys.reduce((a, p) => a + polyArea(p), 0);
   let minX = 1e12, maxX = -1e12, minY = 1e12, maxY = -1e12;
   for (const poly of polys) for (const ring of poly) for (const p of ring) {
