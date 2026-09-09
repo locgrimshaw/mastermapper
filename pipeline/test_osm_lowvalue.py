@@ -70,6 +70,14 @@ add("unnamed retail district", {"landuse": "retail"}, 70, -0.1549, 51.5135, None
 add("small city car park", {"amenity": "parking", "parking": "surface"}, 25, -0.1544, 51.5135, None)
 # A big-box building beside a SMALL car park must not qualify either.
 add("box by tiny car park", {"building": "retail"}, 60, -0.1320, 51.5134, None)
+# The biggest surface car park actually in the West End is 4,585 m2. Even
+# beside one that size, a retail district must not qualify.
+add("W1 district, 4.6k car park", {"landuse": "retail"}, 120, -0.1600, 51.5090, None)
+add("biggest West End car park", {"amenity": "parking", "parking": "surface"}, 68, -0.1595, 51.5090, "osm_parking")
+# Fosse Park style: a LARGE unnamed retail district with a LARGE car park is a
+# genuine out-of-town retail park and must survive.
+add("Fosse-style district", {"landuse": "retail"}, 250, -1.1955, 52.5855, "osm_retail")
+add("Fosse-style car park", {"amenity": "parking", "parking": "surface"}, 140, -1.1938, 52.5855, "osm_parking")
 add("tiny car park", {"amenity": "parking", "parking": "surface"}, 28, -0.1315, 51.5134, None)
 
 # --- industrial: low-rise kept, multi-storey dropped ----------------------

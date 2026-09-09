@@ -84,6 +84,15 @@ RETAIL_PARKING_R_M = 70.0
 MIN_RETAIL_SHED_M2 = 1500.0
 # The car park has to look like a shed's car park, not a city service yard.
 MIN_SHED_PARKING_M2 = 1000.0
+# An unnamed landuse=retail DISTRICT can still be a genuine out-of-town retail
+# park ("Fosse Park" does not contain the words "retail park"). It qualifies
+# only on an out-of-town signature that city centres cannot fake. Measured:
+# the largest surface car park in the West End is 4,585 m2, while Fosse Park
+# has several over 18,000 m2 — so 8,000 m2 separates them with room to spare,
+# and the West End districts that slipped through were all under 5,200 m2.
+MIN_RETAIL_DISTRICT_M2 = 15000.0
+MIN_DISTRICT_PARKING_M2 = 8000.0
+DISTRICT_PARKING_R_M = 150.0
 
 # Names that positively identify an out-of-town retail format.
 RETAIL_PARK_RE = re.compile(
@@ -159,7 +168,7 @@ def is_lowrise(t):
     return True
 
 
-def classify(t, area=0.0, near_parking=False):
+def classify(t, area=0.0, near_parking=False, big_parking=False):
     """OSM tags -> (dataset class, subtype) or (None, None). First match wins."""
     lu = t.get("landuse")
     bld = t.get("building")
@@ -230,15 +239,19 @@ def classify(t, area=0.0, near_parking=False):
             return "osm_retail", shop
         # (c) a large low-rise box WITH its own surface parking beside it.
         #     Prime high-street retail fails this: no adjacent surface car park.
-        #     NOTE: landuse=retail is deliberately NOT eligible here. It is a
-        #     land-use DISTRICT covering whole retail quarters, and letting it
-        #     qualify on nearby parking put 11,054 districts — including six
-        #     in the West End — into the layer. It qualifies by name only.
+        #     NOTE: a landuse=retail DISTRICT is not eligible on ordinary
+        #     nearby parking — that put 11,054 districts, six of them in the
+        #     West End, into the layer. Districts go through gate (d) instead.
         if area >= MIN_RETAIL_SHED_M2 and near_parking:
             if bld in ("retail", "supermarket"):
                 return "osm_retail", bld
             if shop in ("supermarket", "furniture", "hardware"):
                 return "osm_retail", shop
+        # (d) a LARGE unnamed retail district with a LARGE car park: the
+        #     out-of-town signature. Catches Fosse Park and its like, which
+        #     carry no "retail park" in the name; no city centre can fake it.
+        if lu == "retail" and area >= MIN_RETAIL_DISTRICT_M2 and big_parking:
+            return "osm_retail", "retail_park"
         # anything else retail-tagged is a shop or a district, not a site
         if lu == "retail" or bld in ("retail", "supermarket") or shop:
             return None, None
@@ -382,12 +395,14 @@ def main():
                 continue
             # retail is the only class that needs the parking context, and the
             # lookup is not free — only pay for it on retail-tagged features
-            ctx = False
+            ctx = big = False
             if (t.get("landuse") == "retail" or t.get("shop")
                     or t.get("building") in ("retail", "supermarket")):
                 lon0, la0 = _centroid(polys)
                 ctx = near(lon0, la0)
-            cls, subtype = classify(t, area, ctx)
+                if t.get("landuse") == "retail" and area >= MIN_RETAIL_DISTRICT_M2:
+                    big = near(lon0, la0, DISTRICT_PARKING_R_M, MIN_DISTRICT_PARKING_M2)
+            cls, subtype = classify(t, area, ctx, big)
             if not cls:
                 continue
 
