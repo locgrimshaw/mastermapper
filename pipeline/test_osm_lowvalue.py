@@ -60,6 +60,17 @@ add("car dealership", {"shop": "car", "name": "Motor Group"}, 50, O[0] + 0.016, 
 add("petrol station", {"amenity": "fuel", "shop": "convenience"}, 40, O[0] + 0.020, O[1], "osm_retail")
 add("garden centre", {"shop": "garden_centre"}, 60, O[0] + 0.024, O[1], "osm_retail")
 add("isolated box, no parking", {"building": "retail"}, 80, O[0] + 0.030, O[1], None)
+# --- residual West End failures found in the LOADED data after fix v1 ------
+# An unnamed landuse=retail district with a small city car park nearby must
+# NOT qualify: a land-use district is not a site, whatever is parked near it.
+add("unnamed retail district", {"landuse": "retail"}, 70, -0.1549, 51.5135, None)
+# (these two are also below the 1,000 m2 feature floor, so they are excluded
+#  as features too — they exist only in the parking index, where their size
+#  is what disqualifies them from validating a shed)
+add("small city car park", {"amenity": "parking", "parking": "surface"}, 25, -0.1544, 51.5135, None)
+# A big-box building beside a SMALL car park must not qualify either.
+add("box by tiny car park", {"building": "retail"}, 60, -0.1320, 51.5134, None)
+add("tiny car park", {"amenity": "parking", "parking": "surface"}, 28, -0.1315, 51.5134, None)
 
 # --- industrial: low-rise kept, multi-storey dropped ----------------------
 add("warehouse 1-storey", {"building": "warehouse", "building:levels": "1"}, 90, O[0], O[1] + 0.01, "osm_industrial")

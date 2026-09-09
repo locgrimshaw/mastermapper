@@ -82,6 +82,8 @@ MAX_SHED_HEIGHT_M = 11.0
 # retail does not — this is the discriminator that keeps Oxford Street out.
 RETAIL_PARKING_R_M = 70.0
 MIN_RETAIL_SHED_M2 = 1500.0
+# The car park has to look like a shed's car park, not a city service yard.
+MIN_SHED_PARKING_M2 = 1000.0
 
 # Names that positively identify an out-of-town retail format.
 RETAIL_PARK_RE = re.compile(
@@ -228,11 +230,15 @@ def classify(t, area=0.0, near_parking=False):
             return "osm_retail", shop
         # (c) a large low-rise box WITH its own surface parking beside it.
         #     Prime high-street retail fails this: no adjacent surface car park.
+        #     NOTE: landuse=retail is deliberately NOT eligible here. It is a
+        #     land-use DISTRICT covering whole retail quarters, and letting it
+        #     qualify on nearby parking put 11,054 districts — including six
+        #     in the West End — into the layer. It qualifies by name only.
         if area >= MIN_RETAIL_SHED_M2 and near_parking:
-            if bld in ("retail", "supermarket") or shop in ("supermarket", "furniture", "hardware"):
-                return "osm_retail", (bld or shop)
-            if lu == "retail":
-                return "osm_retail", "retail_land"
+            if bld in ("retail", "supermarket"):
+                return "osm_retail", bld
+            if shop in ("supermarket", "furniture", "hardware"):
+                return "osm_retail", shop
         # anything else retail-tagged is a shop or a district, not a site
         if lu == "retail" or bld in ("retail", "supermarket") or shop:
             return None, None
@@ -314,19 +320,28 @@ def build_parking_index(path):
             if not polys:
                 continue
             lon, lat = _centroid(polys)
-            grid.setdefault((int(lon * 1000), int(lat * 1000)), []).append((lon, lat))
+            a = sum(poly_area_m2(p, lat) for p in polys)
+            grid.setdefault((int(lon * 1000), int(lat * 1000)), []).append((lon, lat, a))
             n += 1
     print(f"parking index: {n:,} surface car parks")
     return grid
 
 
 def near_parking_fn(grid):
-    def near(lon, lat, radius_m=RETAIL_PARKING_R_M):
+    """Is there a car park of at least `min_area` within `radius_m`?
+
+    Size matters as much as proximity: a retail shed's car park is thousands
+    of square metres, while a West End block may have a small service yard
+    mapped nearby. Requiring a SUBSTANTIAL car park is what separates them.
+    """
+    def near(lon, lat, radius_m=RETAIL_PARKING_R_M, min_area=MIN_SHED_PARKING_M2):
         kx = 111320.0 * math.cos(math.radians(lat))
         gx, gy = int(lon * 1000), int(lat * 1000)
         for ax in (gx - 1, gx, gx + 1):
             for ay in (gy - 1, gy, gy + 1):
-                for (plon, plat) in grid.get((ax, ay), ()):
+                for (plon, plat, pa) in grid.get((ax, ay), ()):
+                    if pa < min_area:
+                        continue
                     if math.hypot((plon - lon) * kx, (plat - lat) * 110540.0) <= radius_m:
                         return True
         return False
