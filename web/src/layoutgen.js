@@ -595,7 +595,7 @@ function statsFor({ placed, total, roadArea, roadLen, greenArea, site, params, g
 
 function scoreOf(st, params) {
   const greenPen = Math.max(0, params.greenPct / 100 - st.greenPct) * 400;
-  const mixPen = st.mixDev * 120;
+  const mixPen = st.mixDev * 180;
   const roadPen = Math.max(0, st.roadPerUnit - 8) * 4;
   if (params.objective === "target") {
     const targetGross = params.density * params.netPct / 100;
@@ -627,7 +627,7 @@ function svgOf(cand, site, w, h, detail) {
     const stroke = l.type === "flat" ? "#b197fc" : "#96d9a5";
     out += `<path d="${path([l.quad])}" fill="${fill}" stroke="${stroke}" stroke-width="${detail ? 0.7 : 0.25}"/>`;
   }
-  // driveways + houses
+  // driveways, parking courts, then houses (shadow + body + ridge)
   for (const l of cand.lots) {
     const { tx, ty, nx, ny } = l;
     const p0 = l.quad[0];
@@ -639,6 +639,20 @@ function svgOf(cand, site, w, h, detail) {
       dq.push(dq[0].slice());
       out += `<path d="${path([dq])}" fill="#cfd5da"/>`;
     }
+    if (detail && l.type === "flat") {
+      // rear parking court with marked bays
+      const c0 = [p0[0] + tx * 1.5 + nx * (FLAT_BLD_D + 5.5), p0[1] + ty * 1.5 + ny * (FLAT_BLD_D + 5.5)];
+      const cw = TYPES.flat.w - 3, cd = 5.5;
+      const c1 = [c0[0] + tx * cw, c0[1] + ty * cw];
+      const c2 = [c1[0] + nx * cd, c1[1] + ny * cd];
+      const c3 = [c0[0] + nx * cd, c0[1] + ny * cd];
+      out += `<path d="${path([[c0, c1, c2, c3, c0]])}" fill="#cfd5da"/>`;
+      for (let b = 2.6; b < cw; b += 2.6) {
+        const q0 = [c0[0] + tx * b, c0[1] + ty * b];
+        const q1 = [q0[0] + nx * cd, q0[1] + ny * cd];
+        out += `<line x1="${X(q0[0]).toFixed(1)}" y1="${Y(q0[1]).toFixed(1)}" x2="${X(q1[0]).toFixed(1)}" y2="${Y(q1[1]).toFixed(1)}" stroke="#ffffff" stroke-width="0.6"/>`;
+      }
+    }
     const w0 = TYPES[l.type].w;
     const fd = (l.type === "flat" ? 4 : FRONT_GARDEN) + (l.jit || 0);
     const bd = l.type === "flat" ? FLAT_BLD_D : HOUSE_DEPTH;
@@ -647,7 +661,19 @@ function svgOf(cand, site, w, h, detail) {
     const b1 = [b0[0] + tx * (w0 - 2 * m), b0[1] + ty * (w0 - 2 * m)];
     const b2 = [b1[0] + nx * bd, b1[1] + ny * bd];
     const b3 = [b0[0] + nx * bd, b0[1] + ny * bd];
+    if (detail) {
+      const sh = 0.9;   // soft SE shadow gives the plan depth
+      const s0 = [b0[0] + sh, b0[1] - sh], s1 = [b1[0] + sh, b1[1] - sh],
+            s2 = [b2[0] + sh, b2[1] - sh], s3 = [b3[0] + sh, b3[1] - sh];
+      out += `<path d="${path([[s0, s1, s2, s3, s0]])}" fill="rgba(33,37,41,0.28)"/>`;
+    }
     out += `<path d="${path([[b0, b1, b2, b3, b0]])}" fill="${TYPES[l.type].color}"${detail ? ` stroke="#ffffff" stroke-width="0.45"` : ""}/>`;
+    if (detail && l.type !== "flat") {
+      // roof ridge along the frontage axis
+      const r0 = [(b0[0] + b3[0]) / 2 + tx * 0.6, (b0[1] + b3[1]) / 2 + ty * 0.6];
+      const r1 = [(b1[0] + b2[0]) / 2 - tx * 0.6, (b1[1] + b2[1]) / 2 - ty * 0.6];
+      out += `<line x1="${X(r0[0]).toFixed(1)}" y1="${Y(r0[1]).toFixed(1)}" x2="${X(r1[0]).toFixed(1)}" y2="${Y(r1[1]).toFixed(1)}" stroke="rgba(255,255,255,0.55)" stroke-width="0.8"/>`;
+    }
   }
   if (cand.pond)
     out += `<path d="${path([cand.pond[0] ? cand.pond[0] : cand.pond])}" fill="#74c0fc" stroke="#4dabf7" stroke-width="1"/>`;
