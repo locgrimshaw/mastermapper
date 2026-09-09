@@ -429,7 +429,8 @@ function svgOf(cand, site, w, h, detail) {
 }
 
 // ---- the tool ---------------------------------------------------------------
-let _dcgSession = null;
+// Per-site sessions (up to four) so hopping between campuses resumes each.
+const _dcgSessions = new Map();
 
 export function openDcGen(ctx) {
   const t = T();
@@ -444,16 +445,18 @@ export function openDcGen(ctx) {
     for (let i = 0; i < c2.length; i += 7) h2 = (h2 * 31 + c2.charCodeAt(i)) | 0;
     return "dc" + h2 + ":" + c2.length;
   })();
-  const saved = _dcgSession && _dcgSession.sig === sig ? _dcgSession : null;
+  const saved = _dcgSessions.get(sig) || null;
 
-  const params = saved ? saved.params : {
+  const baseParams = {
     objective: "target",
     targetMw: Math.max(10, Math.round(siteHa * (ctx.netPct || 70) / 100 * (ctx.mwPerHa || 10))),
     cooling: "air", storeys: 2, hallSize: siteHa > 12 ? "L" : siteHa > 5 ? "M" : "S",
     setback: 20, greenPct: 35, variation: 0.5, uniform: false, entrances: [],
     pue: ctx.pue || 1.25, costPerMw: ctx.costPerMw || 11, valuePerMw: ctx.valuePerMw || 15,
   };
-  if (saved) { params.pue = ctx.pue || params.pue; }
+  const params = saved ? saved.params
+    : ctx.savedParams ? Object.assign(baseParams, ctx.savedParams) : baseParams;
+  if (!params.entrances) params.entrances = [];
 
   fetchTerrain(site).then(t2 => { site.terrain = t2; render(); })
     .catch(err => console.warn("terrain unavailable", err));
@@ -587,6 +590,7 @@ export function openDcGen(ctx) {
           <div class="lg-gen">gen <b id="dcg-gen">0</b></div>
           <canvas id="dcg-spark" width="190" height="34"></canvas>
           <button type="button" id="dcg-adopt" class="plot-mode-btn">Adopt into appraisal</button>
+          <button type="button" id="dcg-save" class="plot-mode-btn">★ Save campus to map</button>
           <button type="button" id="dcg-export" class="ghost">Export GeoJSON</button>
           <details class="lg-std"><summary>Benchmarks applied ⓘ</summary>
             <ul>
@@ -779,7 +783,11 @@ export function openDcGen(ctx) {
     resetPop();
   });
 
-  const stash = () => { _dcgSession = { sig, pop, best, gen, bestHist, focusIdx, params }; };
+  const stash = () => {
+    _dcgSessions.delete(sig);
+    _dcgSessions.set(sig, { sig, pop, best, gen, bestHist, focusIdx, params });
+    if (_dcgSessions.size > 4) _dcgSessions.delete(_dcgSessions.keys().next().value);
+  };
   const closeTool = () => { setRunning(false); stash(); m.hidden = true; };
   m.querySelector("#dcg-close").addEventListener("click", closeTool);
   m.addEventListener("click", e => { if (e.target === m) closeTool(); });
@@ -791,9 +799,7 @@ export function openDcGen(ctx) {
     setRunning(false); stash();
     m.hidden = true;
   });
-  m.querySelector("#dcg-export").addEventListener("click", () => {
-    const cand = m._exportCand;
-    if (!cand) return;
+  const campusFC = (cand) => {
     decorate(cand, site);
     const toLL = p => [(p[0] + site.ox) / site.kx, (p[1] + site.oy) / site.ky];
     const ringLL = ring => ring.map(toLL);
@@ -816,7 +822,30 @@ export function openDcGen(ctx) {
     for (const tr of cand.trees)
       feats.push({ type: "Feature", properties: { kind: "tree" },
         geometry: { type: "Point", coordinates: toLL(tr) } });
-    const blob = new Blob([JSON.stringify({ type: "FeatureCollection", features: feats })],
+    return { type: "FeatureCollection", features: feats };
+  };
+
+  m.querySelector("#dcg-save").addEventListener("click", () => {
+    const cand = m._exportCand;
+    if (!cand || !ctx.onSaveLayout) return;
+    const st = cand.stats;
+    const { assumptions: _aa, ...psnap } = params;
+    ctx.onSaveLayout({
+      fc: campusFC(cand),
+      stats: { itMw: st.itMw, gridMw: st.gridMw, halls: st.halls, hallMix: st.hallMix,
+               gea: st.gea, mwHa: st.mwHa, coverage: st.coverage, greenPct: st.greenPct,
+               capex: st.capex, value: st.value, margin: st.margin, parking: st.parking },
+      params: psnap,
+    });
+    const b2 = m.querySelector("#dcg-save");
+    b2.textContent = "✓ Saved — shown on the map";
+    setTimeout(() => { b2.textContent = "★ Save campus to map"; }, 2600);
+  });
+
+  m.querySelector("#dcg-export").addEventListener("click", () => {
+    const cand = m._exportCand;
+    if (!cand) return;
+    const blob = new Blob([JSON.stringify(campusFC(cand))],
       { type: "application/geo+json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);

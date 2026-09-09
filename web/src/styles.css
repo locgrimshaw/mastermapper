@@ -3060,3 +3060,17 @@ footer {
 .lg-controls .lg-check { flex-direction: row !important; align-items: center; gap: 6px !important; }
 .lg-controls .lg-check input { margin: 0; }
 #lg-ent.active, #dcg-ent.active { background: #e8590c; color: #fff; border-color: #e8590c; }
+
+/* ---- DC panel polish ---- */
+#dc-panel .dcp-head { padding-bottom: 10px; }
+.dcp-pill { display: inline-block; margin-top: 8px; padding: 4px 12px; border-radius: 999px;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.01em; }
+.dcp-pill.ok { background: #d3f9d8; color: #2b8a3e; border: 1px solid #8ce99a; }
+.dcp-pill.bad { background: #ffe3e3; color: #c92a2a; border: 1px solid #ffa8a8; }
+#dc-panel .cm-grid.dcp-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 4px 0 6px; }
+#dc-panel .cm-cell b { font-size: 15px; }
+#dc-panel .sp-h { display: flex; align-items: baseline; gap: 6px; border-bottom: 2px solid #e7ecef;
+  padding-bottom: 4px; margin-bottom: 8px; }
+#dc-panel .sp-h small { font-weight: 400; text-transform: none; letter-spacing: 0; color: #868e96; }
+.dcp-chips span.dcp-ok { background: #ebfbee; border-color: #b2f2bb; color: #2b8a3e; }
+.dcp-chips span.dcp-bad { background: #fff0f0; border-color: #ffc9c9; color: #c92a2a; font-weight: 600; }

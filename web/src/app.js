@@ -7274,6 +7274,15 @@ function developableDwellings() {
 // cursor and flag the footer attribution.
 // turf v7 takes a FeatureCollection where v6 took two arguments — the app
 // vendors v7 but stays tolerant of either.
+function _turfDifference(a, b) {
+  if (!window.turf) return null;
+  try {
+    const r = turf.difference(turf.featureCollection([a, b]));
+    if (r) return r;
+  } catch (_) {}
+  try { return turf.difference(a, b) || null; } catch (_) { return null; }
+}
+
 function _turfIntersect(a, b) {
   if (!window.turf) return null;
   try {
@@ -8406,6 +8415,18 @@ function renderSavedLayoutsOnMap() {
       filter: ["==", ["get", "kind"], "building"],
       paint: { "fill-color": _SL_BTYPE_COLORS, "fill-opacity": 0.95,
                "fill-outline-color": "#ffffff" } });
+    map.addLayer({ id: "sl-hall", type: "fill", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "data_hall"],
+      paint: { "fill-color": "#274b6d", "fill-opacity": 0.95, "fill-outline-color": "#ffffff" } });
+    map.addLayer({ id: "sl-yard", type: "fill", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "plant_yard"],
+      paint: { "fill-color": "#ccd3da", "fill-opacity": 0.8 } }, "sl-hall");
+    map.addLayer({ id: "sl-sub", type: "fill", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "substation"],
+      paint: { "fill-color": "#f3d19c", "fill-opacity": 0.9, "fill-outline-color": "#a87900" } });
+    map.addLayer({ id: "sl-park", type: "fill", source: "saved-layouts",
+      filter: ["==", ["get", "kind"], "parking"],
+      paint: { "fill-color": "#cfd5da", "fill-opacity": 0.85 } });
     map.addLayer({ id: "sl-tree", type: "circle", source: "saved-layouts",
       filter: ["==", ["get", "kind"], "tree"],
       paint: { "circle-color": "#37b24d", "circle-radius":
@@ -8424,7 +8445,9 @@ function renderSavedLayoutsChip() {
   chip.innerHTML = `<b>Saved layouts</b>` + _savedLayouts.map(sl => `
     <div class="sl-row" data-id="${sl.id}">
       <span class="sl-name" title="${sl.name}">${sl.name}</span>
-      <span class="sl-meta">${sl.stats.units} homes · ${sl.stats.density.toFixed(1)}/ha</span>
+      <span class="sl-meta">${sl.type === "dc"
+        ? sl.stats.itMw.toFixed(0) + " MW · " + sl.stats.halls + " halls"
+        : sl.stats.units + " homes · " + sl.stats.density.toFixed(1) + "/ha"}</span>
       <button type="button" data-act="zoom" title="Zoom to layout">◎</button>
       <button type="button" data-act="gen" title="Continue in generator">✎</button>
       <button type="button" data-act="wf" title="Viability waterfall">£</button>
@@ -8439,9 +8462,9 @@ function renderSavedLayoutsChip() {
     if (btn.dataset.act === "zoom") {
       try { map.fitBounds(turf.bbox(sl.fc), { padding: 60, maxZoom: 17 }); } catch (_) {}
     } else if (btn.dataset.act === "wf") {
-      openLayoutWaterfall(sl);
+      if (sl.type === "dc") openDcValueCard(sl); else openLayoutWaterfall(sl);
     } else if (btn.dataset.act === "gen") {
-      openSavedLayoutGenerator(sl);
+      if (sl.type === "dc") openSavedDcGenerator(sl); else openSavedLayoutGenerator(sl);
     } else if (btn.dataset.act === "del") {
       _savedLayouts = _savedLayouts.filter(s => s.id !== id);
       persistSavedLayouts(_savedLayouts);
@@ -8453,7 +8476,11 @@ map.on("load", () => { try { renderSavedLayoutsOnMap(); } catch (e) { console.wa
 // harness/debug access
 window._slTest = {
   add: (e) => saveLayoutEntry(e),
-  gen: (id) => openSavedLayoutGenerator(_savedLayouts.find(s => s.id === id)),
+  gen: (id) => {
+    const sl = _savedLayouts.find(s => s.id === id);
+    if (!sl) return;
+    if (sl.type === "dc") openSavedDcGenerator(sl); else openSavedLayoutGenerator(sl);
+  },
   list: () => _savedLayouts, wf: (id) => openLayoutWaterfall(_savedLayouts.find(s => s.id === id)),
 };
 
@@ -8467,7 +8494,7 @@ async function openSavedLayoutGenerator(sl) {
     return;
   }
   try {
-    const mod = await import("./layoutgen.js?v=ws149");
+    const mod = await import("./layoutgen.js?v=ws150");
     let site = sl.site[0];
     for (let i = 1; i < sl.site.length; i++) site = _turfUnion(site, sl.site[i]);
     const totHa = sl.site.reduce((s2, f) => s2 + (Number(f.properties.area_ha) || 0), 0)
@@ -8510,6 +8537,85 @@ async function openSavedLayoutGenerator(sl) {
   } catch (err) {
     console.error("saved-layout generator reopen failed", err);
   }
+}
+
+// Reopen the DC generator on a saved campus, dials restored; re-saving
+// updates the same entry (same site signature).
+async function openSavedDcGenerator(sl) {
+  if (!sl.site || !sl.site.length) {
+    alert("This campus was saved before reopening was supported — rebuild it once from the DC compile view and re-save.");
+    return;
+  }
+  try {
+    const mod = await import("./dcgen.js?v=dc4");
+    let site = sl.site[0];
+    for (let i = 1; i < sl.site.length; i++) site = _turfUnion(site, sl.site[i]);
+    let exclusions = [];
+    try {
+      const sb = getSupabase();
+      const bb = turf.bbox(site);
+      const { data } = await sb.rpc("constraints_in_bbox", {
+        p_kinds: ["flood_zone_3", "flood_zone_2", "ancient_woodland",
+                  "scheduled_monument", "sssi", "sac", "spa", "ramsar"],
+        w: bb[0] - 0.001, s: bb[1] - 0.001, e: bb[2] + 0.001, n: bb[3] + 0.001,
+        p_zoom: 15 });
+      for (const f of (data && data.features) || []) {
+        const clipped = _turfIntersect(site, f);
+        if (clipped) exclusions.push({ kind: (f.properties || {}).kind || "constraint",
+                                       geometry: clipped.geometry });
+      }
+    } catch (err2) { console.warn("dc exclusions unavailable", err2); }
+    const lp = sl.layoutParams || {};
+    mod.openDcGen({
+      site, name: sl.name, exclusions,
+      pue: lp.pue || 1.25, costPerMw: lp.costPerMw || 11, valuePerMw: lp.valuePerMw || 15,
+      savedParams: sl.layoutParams || null,
+      onSaveLayout: ({ fc, stats, params }) => {
+        saveLayoutEntry({
+          id: sl.id, type: "dc", sig: sl.sig,
+          name: sl.name.replace(/ · \d+$/, ""),
+          created: Date.now(),
+          fc, stats,
+          layoutParams: params || sl.layoutParams || null,
+          site: sl.site,
+        });
+      },
+    });
+  } catch (err) { console.error("saved DC reopen failed", err); }
+}
+
+// DC campus value card: the campus arithmetic for a saved option.
+function openDcValueCard(sl) {
+  const money = v => "£" + (v >= 1000 ? (v / 1000).toFixed(1) + "bn" : v.toFixed(0) + "m");
+  let m2 = document.getElementById("wf-modal");
+  if (!m2) { m2 = document.createElement("div"); m2.id = "wf-modal"; document.body.appendChild(m2); }
+  const st = sl.stats;
+  const cls = st.margin >= 20 ? "cm-sg" : st.margin >= 8 ? "cm-sa" : "cm-sr";
+  const cell = (v, l, c) => `<div class="cm-cell${c ? " " + c : ""}"><b>${v}</b><span>${l}</span></div>`;
+  m2.innerHTML = `
+    <div class="cm-card" style="max-width:640px">
+      <div class="cm-head">
+        <div><span class="cm-kicker">Saved DC campus · value summary</span>
+          <h3>${escapeSift(sl.name)}</h3></div>
+        <button type="button" id="wf-close" class="cm-close" aria-label="Close">×</button>
+      </div>
+      <div class="cm-grid" style="margin:10px 0">
+        ${cell(st.itMw.toFixed(0) + " MW", "IT load")}
+        ${cell(st.gridMw.toFixed(0) + " MW", "grid demand")}
+        ${cell(st.hallMix || st.halls, "data halls")}
+        ${cell(Math.round(st.gea).toLocaleString() + " m²", "GEA")}
+        ${cell(st.mwHa.toFixed(1) + " MW/ha", "IT density (gross)")}
+        ${cell(st.greenPct.toFixed(0) + "%", "landscape / open")}
+        ${cell(money(st.capex), "capex")}
+        ${cell(money(st.value), "stabilised value")}
+        ${cell(st.margin.toFixed(0) + "%", "margin on capex", cls)}
+      </div>
+      <p class="hint">Screening arithmetic from the campus generator's dials (capex/value per MW).
+      Reopen the generator (✎) to change assumptions and re-save.</p>
+    </div>`;
+  m2.hidden = false;
+  m2.querySelector("#wf-close").onclick = () => { m2.hidden = true; };
+  m2.onclick = (e) => { if (e.target === m2) m2.hidden = true; };
 }
 
 // Full development appraisal waterfall for one saved layout, run through the
@@ -8675,7 +8781,7 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws149");
+      const mod = await import("./layoutgen.js?v=ws150");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       // Hard constraints INSIDE the site become no-build exclusion zones in
@@ -16625,52 +16731,86 @@ function dcFailsJs(c, p) {
 const _dcKm = v => { const x = Number(v); return x >= 255 || isNaN(x) ? null : x / 10; };
 const _dcKmTxt = v => { const k = _dcKm(v); return k == null ? "beyond 25 km / no data" : k.toFixed(1) + " km"; };
 
+function dcPanelMapCleanup() {
+  for (const id of ["dcp-dev-fill", "dcp-dev-line", "dcp-arrow-line", "dcp-arrow-head",
+                    "dcp-arrow-label", "dcp-cell-line"])
+    if (map.getLayer(id)) map.removeLayer(id);
+  for (const id of ["dcp-dev-src", "dcp-arrow-src", "dcp-cell-src"])
+    if (map.getSource(id)) map.removeSource(id);
+}
+
+function dcCellSquare(p) {
+  const dLat = 0.0045, dLng = 0.0045 / Math.cos(Number(p.lat) * Math.PI / 180);
+  const lng = Number(p.lng), lat = Number(p.lat);
+  return { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[
+    [lng - dLng, lat - dLat], [lng + dLng, lat - dLat],
+    [lng + dLng, lat + dLat], [lng - dLng, lat + dLat], [lng - dLng, lat - dLat]]] } };
+}
+
 function openDcPanel(p) {
   const panel = document.getElementById("dc-panel");
   if (!panel || !p) return;
   dcDeep.cell = p;
   const fails = dcFailsJs(DC.crit, p);
   const pass = fails.length === 0;
-  const pc = (k) => { const v = Number(p[k]); return v < 0 ? "—" : v + "%"; };
+  const cell = (v, l, cls) => `<div class="cm-cell${cls ? " " + cls : ""}"><b>${v}</b><span>${l}</span></div>`;
+  const kmCell = (v, l) => {
+    const k = _dcKm(v);
+    const cls = k == null ? "" : k <= 2 ? "cm-sg" : k <= 6 ? "cm-sa" : "cm-sr";
+    return cell(k == null ? ">25 km" : k.toFixed(1) + " km", l, cls);
+  };
+  const chip = (label, v, max) => {
+    const n = Number(v);
+    const bad = n > max;
+    return `<span class="${n < 0 ? "" : bad ? "dcp-bad" : "dcp-ok"}">${label} ${n < 0 ? "—" : n + "%"}</span>`;
+  };
+  const waterStat = { 0: "green — water available", 1: "yellow — restricted",
+                      2: "red — over-licensed", 3: "grey — over-abstracted" }[Number(p.water_stat)] || "no CAMS data";
   const row = (v, k) => `<div class="sp-row"><span class="sp-v">${v}</span><span class="sp-k">${escapeSift(k)}</span></div>`;
-  const waterStat = { 0: "green (water available)", 1: "yellow (restricted)",
-                      2: "red (over-licensed)", 3: "grey (over-abstracted)" }[Number(p.water_stat)] || "no CAMS data";
   panel.innerHTML = `
-    <div class="uni-head">
+    <div class="uni-head dcp-head">
       <button class="fd-close dcp-close" aria-label="Close">×</button>
-      <div class="fd-district">Data-centre site · ${escapeSift(p.lad_name || "")}</div>
-      <div class="fd-sub">1 km cell ${escapeSift(p.cell_id || "")} ·
-        <span class="dcp-verdict ${pass ? "ok" : "bad"}">${pass ? "passes current sift" : "fails: " + escapeSift(fails.join(", "))}</span></div>
+      <div class="fd-district">Data-centre site</div>
+      <div class="fd-sub">${escapeSift(p.lad_name || "")} · 1 km cell ${escapeSift(p.cell_id || "")}</div>
+      <div class="dcp-pill ${pass ? "ok" : "bad"}">${pass ? "✓ passes the current sift"
+        : "✗ fails: " + escapeSift(fails.join(", "))}</div>
     </div>
     <div class="uni-body">
+      <div class="sp-sec"><div class="sp-h">Developable envelope</div>
+        <div id="dcp-dev"><p class="hint">Stripping mapped hard constraints…</p></div>
+      </div>
       <div class="sp-sec"><div class="sp-h">Power &amp; grid</div>
-        ${row(`<strong>${_dcKmTxt(p.d_sub132)}</strong>`, "nearest 132 kV+ substation")}
-        ${row(`<strong>${_dcKmTxt(p.d_sub275)}</strong>`, "nearest 275/400 kV substation")}
-        ${row(`<strong>${_dcKmTxt(p.d_line132)}</strong>`, "nearest 132 kV+ overhead line")}
-        ${row(`<strong>${_dcKmTxt(p.d_dno20)}</strong>`, "DNO site with ≥20 MW headroom")}
-        ${row(`<strong>${_dcKmTxt(p.d_dno50)}</strong>`, "DNO site with ≥50 MW headroom")}
-        ${row(`<strong>${Number(p.gsp_mw) > 0 ? (Number(p.gsp_mw) * 100).toLocaleString() + " MW" : "≈ none recorded"}</strong>`, "queued at the local GSP")}
-        <p class="hint">Distances from OSM grid geometry and DNO open-data headroom; the connection offer is always the real gate — treat these as screening.</p>
+        <div class="cm-grid dcp-grid">
+          ${kmCell(p.d_sub132, "132 kV+ substation")}
+          ${kmCell(p.d_sub275, "275/400 kV substation")}
+          ${kmCell(p.d_line132, "132 kV+ line")}
+          ${kmCell(p.d_dno20, "DNO ≥20 MW headroom")}
+          ${kmCell(p.d_dno50, "DNO ≥50 MW headroom")}
+          ${cell(Number(p.gsp_mw) > 0 ? (Number(p.gsp_mw) * 100).toLocaleString() + " MW" : "≈0",
+                 "queued at local GSP", Number(p.gsp_mw) * 100 > 2000 ? "cm-sr" : "cm-sg")}
+        </div>
+        <p class="hint">Arrows on the map point to the nearest 132 kV+ substation and
+        the nearest 20k+ town. Screening only — the connection offer is the real gate.</p>
       </div>
       <div class="sp-sec"><div class="sp-h">Planning status</div><div id="dcp-planning"><p class="hint">Reading authority picture…</p></div></div>
-      <div class="sp-sec"><div class="sp-h">Constraint cover (share of cell)</div>
+      <div class="sp-sec"><div class="sp-h">Constraint cover <small>(share of cell — red exceeds sift threshold)</small></div>
         <div class="dcp-chips">
-          <span>built ${pc("built_pct")}</span><span>transport ${pc("transp_pct")}</span>
-          <span>water ${pc("water_pct")}</span><span>protected ${pc("prot_pct")}</span>
-          <span>heritage/AONB ${pc("herit_pct")}</span><span>FZ3 ${pc("fz3_pct")}</span>
-          <span>FZ2 ${pc("fz2_pct")}</span><span>green belt ${pc("gb_pct")}</span>
-          <span>ALC 1-2 ${pc("alc12_pct")}</span>
-          <span>${Number(p.aqma) ? "inside AQMA" : "no AQMA"}</span>
+          ${chip("built", p.built_pct, 10)}${chip("transport", p.transp_pct, 20)}
+          ${chip("water", p.water_pct, 20)}${chip("protected", p.prot_pct, 5)}
+          ${chip("heritage/AONB", p.herit_pct, 10)}${chip("FZ3", p.fz3_pct, 10)}
+          ${chip("FZ2", p.fz2_pct, 10)}${chip("green belt", p.gb_pct, 25)}
+          ${chip("ALC 1-2", p.alc12_pct, 25)}
+          <span class="${Number(p.aqma) ? "dcp-bad" : "dcp-ok"}">${Number(p.aqma) ? "inside AQMA" : "no AQMA"}</span>
         </div>
       </div>
-      <div class="sp-sec"><div class="sp-h">Water &amp; environment</div>
+      <div class="sp-sec"><div class="sp-h">Water, heat &amp; labour</div>
         ${row(`<strong>${waterStat}</strong>`, "abstraction status (CAMS)")}
         ${row(`<strong>${_dcKmTxt(p.d_heat)}</strong>`, "nearest heat network (waste-heat offtake)")}
-        ${row(`<strong>${_dcKmTxt(p.d_set20)}</strong>`, "nearest 20k+ settlement (labour, latency)")}
+        ${row(`<strong id="dcp-town-row">${_dcKmTxt(p.d_set20)}</strong>`, "nearest 20k+ town (labour, latency)")}
       </div>
       <div class="sp-sec"><div class="sp-h">Terrain (granular)</div><div id="dcp-terrain"><p class="hint">Sampling elevations…</p></div></div>
       <div class="sp-sec"><div class="sp-h">Assemble a site</div>
-        <p class="hint">Pick the land parcels for the campus exactly as in the resi workflow — zoom in past z13, press assemble, tap parcels.</p>
+        <p class="hint">Pick the land parcels for the campus exactly as in the resi workflow — zoom past z13, press assemble, tap parcels.</p>
         <div class="dd-plot-modes">
           <button type="button" id="dcp-assemble" class="plot-mode-btn">${deep.assembly.active && deep.assembly.mode === "parcels" ? "■ Assembling — tap parcels" : "Assemble parcels"}</button>
           <button type="button" id="dcp-compile" class="plot-mode-btn">Compile DC site →</button>
@@ -16682,6 +16822,7 @@ function openDcPanel(p) {
   panel.setAttribute("aria-hidden", "false");
   panel.querySelector(".dcp-close").addEventListener("click", () => {
     panel.classList.remove("open"); panel.setAttribute("aria-hidden", "true");
+    dcPanelMapCleanup();
   });
   panel.querySelector("#dcp-assemble").addEventListener("click", async (e) => {
     const on = !(deep.assembly.active && deep.assembly.mode === "parcels");
@@ -16697,8 +16838,126 @@ function openDcPanel(p) {
   });
   panel.querySelector("#dcp-compile").addEventListener("click", () => openDcCompileModal());
   renderAssemblySummary();
+
+  // zoom the map to the cell, leaving room for the panel
+  const sq = dcCellSquare(p);
+  try {
+    map.fitBounds(turf.bbox(sq), { padding: { top: 60, bottom: 60, left: 60, right: 380 },
+                                   maxZoom: 15, duration: 900 });
+  } catch (_) {}
+  dcPanelAnnotateMap(p, sq);
   dcPanelHydrate(p);
 }
+
+// Map annotations for the open cell: dashed cell outline, purple developable
+// area (cell minus mapped hard constraints), and bearing arrows with distance
+// labels to the nearest 132 kV+ substation and nearest 20k+ town.
+async function dcPanelAnnotateMap(p, sq) {
+  dcPanelMapCleanup();
+  // Add every source/layer up front (empty where data is still in flight) and
+  // fill them with setData — sources added mid-flyTo can silently fail to
+  // tile their data, while setData on a live source is always safe.
+  map.addSource("dcp-cell-src", { type: "geojson", data: sq });
+  map.addLayer({ id: "dcp-cell-line", type: "line", source: "dcp-cell-src",
+    paint: { "line-color": "#0b7285", "line-width": 2, "line-dasharray": [3, 2] } });
+  map.addSource("dcp-dev-src", { type: "geojson",
+    data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({ id: "dcp-dev-fill", type: "fill", source: "dcp-dev-src",
+    paint: { "fill-color": "#7048e8", "fill-opacity": 0.22 } });
+  map.addLayer({ id: "dcp-dev-line", type: "line", source: "dcp-dev-src",
+    paint: { "line-color": "#7048e8", "line-width": 1.6 } });
+  map.addSource("dcp-arrow-src", { type: "geojson",
+    data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({ id: "dcp-arrow-line", type: "line", source: "dcp-arrow-src",
+    filter: ["==", ["geometry-type"], "LineString"],
+    paint: { "line-color": ["get", "color"], "line-width": 2.4, "line-dasharray": [2, 1.4] } });
+  map.addLayer({ id: "dcp-arrow-head", type: "symbol", source: "dcp-arrow-src",
+    filter: ["==", ["coalesce", ["get", "head"], 0], 1],
+    layout: { "text-field": "▲", "text-size": 16,
+              "text-font": ["Noto Sans Regular"],
+              "text-rotate": ["coalesce", ["to-number", ["get", "rot"]], 0],
+              "text-allow-overlap": true, "text-ignore-placement": true },
+    paint: { "text-color": ["coalesce", ["get", "color"], "#e8590c"] } });
+  map.addLayer({ id: "dcp-arrow-label", type: "symbol", source: "dcp-arrow-src",
+    filter: ["!=", ["coalesce", ["get", "label"], ""], ""],
+    layout: { "text-field": ["coalesce", ["get", "label"], ""], "text-size": 12,
+              "text-font": ["Noto Sans Bold"],
+              "text-offset": [0, -0.9], "text-allow-overlap": true },
+    paint: { "text-color": ["coalesce", ["get", "color"], "#333"],
+             "text-halo-color": "#ffffff", "text-halo-width": 1.6 } });
+  const sb = getSupabase();
+  // developable envelope: subtract mapped hard constraints from the cell
+  (async () => {
+    const el = () => document.getElementById("dcp-dev");
+    try {
+      const bb = turf.bbox(sq);
+      const { data } = await sb.rpc("constraints_in_bbox", {
+        p_kinds: ["flood_zone_3", "flood_zone_2", "ancient_woodland", "scheduled_monument",
+                  "sssi", "sac", "spa", "ramsar", "conservation_area"],
+        w: bb[0] - 0.001, s: bb[1] - 0.001, e: bb[2] + 0.001, n: bb[3] + 0.001, p_zoom: 13 });
+      let dev = sq;
+      let nCut = 0;
+      for (const f of (data && data.features) || []) {
+        const d2 = _turfDifference(dev, f);
+        if (d2) { dev = d2; nCut++; }
+        if (!dev) break;
+      }
+      if (!dev) dev = sq;
+      const devHa = turf.area(dev) / 1e4;
+      if (dcDeep.cell !== p) return;   // stale
+      const s2 = map.getSource("dcp-dev-src");
+      if (s2) s2.setData(dev);
+      const built = Math.max(0, Number(p.built_pct));
+      if (el()) el().innerHTML = `<div class="cm-grid dcp-grid">`
+        + `<div class="cm-cell cm-sg"><b>${devHa.toFixed(0)} ha</b><span>clear of mapped hard constraints (purple)</span></div>`
+        + `<div class="cm-cell"><b>${built >= 0 ? built + "%" : "—"}</b><span>built cover to net off further</span></div>`
+        + `</div><p class="hint">Purple on the map = this 100 ha cell minus flood zones 2-3, habitat/heritage designations and conservation areas${nCut ? ` (${nCut} cut${nCut === 1 ? "" : "s"})` : " (none mapped here)"}.</p>`;
+    } catch (err) {
+      if (el()) el().innerHTML = `<p class="hint">Constraint service unreachable.</p>`;
+    }
+  })();
+  // arrows to nearest substation + town
+  (async () => {
+    try {
+      const { data } = await sb.rpc("dc_cell_context", { p_lng: Number(p.lng), p_lat: Number(p.lat) });
+      if (!data || dcDeep.cell !== p) return;
+      const from = [Number(p.lng), Number(p.lat)];
+      const feats = [];
+      const mk = (t, label, color) => {
+        if (!t || t.lng == null) return;
+        const to = [Number(t.lng), Number(t.lat)];
+        const dx = to[0] - from[0], dy = to[1] - from[1];
+        const bearing = Math.atan2(dx * Math.cos(from[1] * Math.PI / 180), dy) * 180 / Math.PI;
+        feats.push({ type: "Feature", properties: { color, head: 0, rot: 0, label: "" },
+          geometry: { type: "LineString", coordinates: [from, to] } });
+        feats.push({ type: "Feature", properties: { color, head: 1, rot: bearing, label: "" },
+          geometry: { type: "Point", coordinates: to } });
+        feats.push({ type: "Feature",
+          properties: { color, head: 0, rot: 0, label: `${label} · ${Number(t.km).toFixed(1)} km` },
+          geometry: { type: "Point", coordinates: [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2] } });
+      };
+      mk(data.sub, "132 kV substation", "#e8590c");
+      mk(data.town, (data.town && data.town.name) ? data.town.name : "nearest town", "#1971c2");
+      // sync the 132 kV card to the live measured figure
+      if (data.sub && data.sub.km != null) {
+        const cards = document.querySelectorAll("#dc-panel .dcp-grid .cm-cell");
+        for (const c2 of cards)
+          if (/132 kV\+ substation/i.test(c2.textContent)) {
+            const k = Number(data.sub.km);
+            c2.querySelector("b").textContent = k.toFixed(1) + " km";
+            c2.className = "cm-cell " + (k <= 2 ? "cm-sg" : k <= 6 ? "cm-sa" : "cm-sr");
+            break;
+          }
+      }
+      const townEl = document.getElementById("dcp-town-row");
+      if (townEl && data.town) townEl.textContent =
+        `${Number(data.town.km).toFixed(1)} km — ${data.town.name || "town"} (${Number(data.town.pop).toLocaleString()} pop)`;
+      const s3 = map.getSource("dcp-arrow-src");
+      if (s3) s3.setData({ type: "FeatureCollection", features: feats });
+    } catch (err) { console.warn("dc_cell_context unavailable", err); }
+  })();
+}
+
 
 async function dcPanelHydrate(p) {
   const sb = getSupabase();
@@ -16878,7 +17137,7 @@ function openDcCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading DC layout engine…";
     try {
-      const mod = await import("./dcgen.js?v=dc2");
+      const mod = await import("./dcgen.js?v=dc4");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       let exclusions = [];
@@ -16901,6 +17160,20 @@ function openDcCompileModal() {
         netPct: _dcCompileState.netPct, mwPerHa: _dcCompileState.mwPerHa,
         pue: _dcCompileState.pue, costPerMw: _dcCompileState.costPerMw,
         valuePerMw: _dcCompileState.valuePerMw,
+        onSaveLayout: ({ fc, stats, params }) => {
+          saveLayoutEntry({
+            id: "sl" + Date.now().toString(36),
+            type: "dc",
+            sig: siteSigOf(feats),
+            name: name || "DC campus",
+            created: Date.now(),
+            fc, stats,
+            layoutParams: params || null,
+            site: feats.map(f => ({ type: "Feature",
+              properties: { area_ha: Number(f.properties.area_ha) || 0 },
+              geometry: f.geometry })),
+          });
+        },
         onAdopt: ({ itMw }) => {
           const inMw = m.querySelector("#dcm-mwha");
           if (!inMw) return;
