@@ -56,6 +56,12 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
           df -h /
 
+      # Cheap guard before the 1.8 GB download: the classifier's West End
+      # regression cases (Oxford Street, Selfridges, Fortnum & Mason) must all
+      # still be excluded, or the run is not worth doing.
+      - name: Classifier regression test
+        run: python pipeline/test_osm_lowvalue.py
+
       - name: Extract candidate polygons from OSM
         env:
           OSM_SRC: ${{ inputs.osm_pbf_url }}

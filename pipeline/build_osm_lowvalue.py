@@ -29,6 +29,17 @@ Golf courses, driving ranges and garden centres are large and low-value but
 are NOT previously developed land unless they carry permanent structures, so
 they get their own class flagged `pdl: false` rather than being mixed in.
 
+RETAIL IS THE HARD ONE, and the first cut got it badly wrong. `landuse=retail`
+in OSM is a DISTRICT tag: it blankets Oxford Street, Regent Street and Mayfair
+as "retail land". `building=retail` covers every shop in the country, and
+`shop=department_store` is Selfridges and Fortnum & Mason. A first pass that
+took those at face value labelled the most valuable retail pitch in Europe as
+underutilised. A retail shed is not a shop — it is a LARGE, LOW-RISE,
+FREE-STANDING box with its own surface car park, so the classifier now demands
+that evidence: an out-of-town format, or a big low-rise footprint with parking
+beside it, or a name that says retail park. Prime high-street retail has no
+adjacent surface parking and is rarely under three storeys, so it drops out.
+
 INPUT   GeoJSON Text Sequence (one Feature per line) written by:
             osmium tags-filter <extract>.osm.pbf \
               w/landuse w/amenity=parking w/building w/man_made w/leisure \
@@ -49,6 +60,7 @@ layers so it can be stripped if the licence ever becomes awkward.
 
 import csv
 import json
+import re
 import math
 import os
 import sys
@@ -61,6 +73,27 @@ OUT = Path(os.environ.get("OSM_LV_OUT") or (ROOT / "supabase" / "datasets_import
 # Smallest site worth showing. 1,000 m² keeps the lock-up court and the
 # corner car park (both genuine infill candidates) and drops garage plots.
 MIN_AREA_M2 = float(os.environ.get("OSM_LV_MIN_AREA", "1000"))
+
+# A shed is low-rise. Anything at or above this is a building, not a shed, and
+# is dropped from the shed classes outright (OSM building:levels / height).
+MAX_SHED_LEVELS = 3
+MAX_SHED_HEIGHT_M = 11.0
+# Free-standing retail carries its own surface parking. Prime high-street
+# retail does not — this is the discriminator that keeps Oxford Street out.
+RETAIL_PARKING_R_M = 70.0
+MIN_RETAIL_SHED_M2 = 1500.0
+
+# Names that positively identify an out-of-town retail format.
+RETAIL_PARK_RE = re.compile(
+    r"retail park|shopping park|retail centre|retail center|trade park|"
+    r"trading estate|outlet|superstore|leisure park|business park", re.I)
+
+# Formats that are inherently out-of-town/low-rise whatever else they carry.
+BIG_BOX_SHOPS = {"doityourself", "garden_centre", "trade", "wholesale",
+                 "car", "caravan", "agrarian", "builders_merchant"}
+# Prime assets that must never be classed as underutilised: a department store
+# is a landmark, not a shed.
+NEVER_RETAIL_SHOPS = {"department_store", "mall"}
 
 # NPPF Annex B exclusions + obvious non-candidates. Checked FIRST.
 EXCLUDE_LANDUSE = {
@@ -85,7 +118,46 @@ CLASS_META = {
 }
 
 
-def classify(t):
+def levels_of(t):
+    """Storeys from OSM, or None. building:levels is sparse but reliable."""
+    for k in ("building:levels", "levels"):
+        v = t.get(k)
+        if v is None:
+            continue
+        try:
+            return int(float(str(v).split(";")[0].split(",")[0]))
+        except Exception:
+            pass
+    h = height_of(t)
+    if h is not None:
+        return max(1, int(round(h / 3.2)))
+    return None
+
+
+def height_of(t):
+    for k in ("height", "building:height"):
+        v = t.get(k)
+        if v is None:
+            continue
+        try:
+            return float(str(v).replace("m", "").strip())
+        except Exception:
+            pass
+    return None
+
+
+def is_lowrise(t):
+    """True unless OSM positively says this is a multi-storey building."""
+    lv = levels_of(t)
+    if lv is not None and lv >= MAX_SHED_LEVELS:
+        return False
+    h = height_of(t)
+    if h is not None and h >= MAX_SHED_HEIGHT_M:
+        return False
+    return True
+
+
+def classify(t, area=0.0, near_parking=False):
     """OSM tags -> (dataset class, subtype) or (None, None). First match wins."""
     lu = t.get("landuse")
     bld = t.get("building")
@@ -133,29 +205,49 @@ def classify(t):
             return None, None
         return "osm_parking", ("park_and_ride" if t.get("park_ride") not in (None, "no") else pk)
 
+    # --- 3b. filling stations: small, self-contained, classic infill --------
+    if amen == "fuel":
+        return "osm_retail", "fuel"
+
     # --- 4. retail sheds & parks -------------------------------------------
-    if lu == "retail":
-        return "osm_retail", "retail_land"
-    if bld in ("retail", "supermarket", "kiosk"):
-        return "osm_retail", bld
-    if shop in ("supermarket", "doityourself", "department_store", "furniture",
-                "car", "trade", "wholesale", "hardware"):
-        return "osm_retail", shop
+    # Three gates, because OSM's retail tags describe SHOPS and DISTRICTS, not
+    # redevelopment opportunities (see the note at the top of this file).
+    is_retailish = (lu == "retail" or bld in ("retail", "supermarket") or shop)
+    if is_retailish:
+        if shop in NEVER_RETAIL_SHOPS:
+            return None, None                  # department stores are landmarks
+        if not is_lowrise(t):
+            return None, None                  # 3+ storeys is a building, not a shed
+        nm = t.get("name") or ""
+        # (a) the name says out-of-town format — the only case where the
+        #     landuse=retail DISTRICT tag can be trusted on its own
+        if RETAIL_PARK_RE.search(nm):
+            return "osm_retail", "retail_park"
+        # (b) formats that are inherently big-box wherever they sit
+        if shop in BIG_BOX_SHOPS:
+            return "osm_retail", shop
+        # (c) a large low-rise box WITH its own surface parking beside it.
+        #     Prime high-street retail fails this: no adjacent surface car park.
+        if area >= MIN_RETAIL_SHED_M2 and near_parking:
+            if bld in ("retail", "supermarket") or shop in ("supermarket", "furniture", "hardware"):
+                return "osm_retail", (bld or shop)
+            if lu == "retail":
+                return "osm_retail", "retail_land"
+        # anything else retail-tagged is a shop or a district, not a site
+        if lu == "retail" or bld in ("retail", "supermarket") or shop:
+            return None, None
 
     # --- 5. industrial land & sheds ----------------------------------------
     if lu == "industrial":
         return "osm_industrial", "industrial_land"
     if bld in ("industrial", "warehouse", "factory", "manufacture", "hangar"):
-        return "osm_industrial", bld
+        return ("osm_industrial", bld) if is_lowrise(t) else (None, None)
 
     # --- 6. large low-density leisure — explicitly NOT PDL -----------------
     if leis in ("golf_course", "driving_range", "track", "water_park", "marina"):
         return "osm_leisure_lowdensity", leis
     if shop == "garden_centre":
         return "osm_leisure_lowdensity", "garden_centre"
-    if amen == "fuel":
-        return "osm_retail", "fuel"
-
     return None, None
 
 
@@ -188,10 +280,65 @@ def wkt_polys(polys):
         "(" + ",".join(ring(r) for r in poly) + ")" for poly in polys) + ")"
 
 
+def _centroid(polys):
+    r = polys[0][0]
+    n = max(1, len(r) - 1)
+    return sum(p[0] for p in r[:n]) / n, sum(p[1] for p in r[:n]) / n
+
+
+def build_parking_index(path):
+    """Pass 1 — surface car park centroids on a ~100 m grid.
+
+    Free-standing retail has its own parking; prime high-street retail does
+    not. That single fact is what keeps Oxford Street out of the shed class,
+    so the parking pass runs before anything is classified.
+    """
+    grid, n = {}, 0
+    with path.open() as fh:
+        for line in fh:
+            line = line.strip().lstrip("\x1e")
+            if not line or line[0] != "{" or '"parking"' not in line:
+                continue
+            try:
+                f = json.loads(line)
+            except Exception:
+                continue
+            t = f.get("properties") or {}
+            if t.get("amenity") != "parking":
+                continue
+            if (t.get("parking") or "surface") in ("multi-storey", "underground", "rooftop"):
+                continue
+            g = f.get("geometry") or {}
+            gt = g.get("type")
+            polys = [g["coordinates"]] if gt == "Polygon" else g.get("coordinates") if gt == "MultiPolygon" else None
+            if not polys:
+                continue
+            lon, lat = _centroid(polys)
+            grid.setdefault((int(lon * 1000), int(lat * 1000)), []).append((lon, lat))
+            n += 1
+    print(f"parking index: {n:,} surface car parks")
+    return grid
+
+
+def near_parking_fn(grid):
+    def near(lon, lat, radius_m=RETAIL_PARKING_R_M):
+        kx = 111320.0 * math.cos(math.radians(lat))
+        gx, gy = int(lon * 1000), int(lat * 1000)
+        for ax in (gx - 1, gx, gx + 1):
+            for ay in (gy - 1, gy, gy + 1):
+                for (plon, plat) in grid.get((ax, ay), ()):
+                    if math.hypot((plon - lon) * kx, (plat - lat) * 110540.0) <= radius_m:
+                        return True
+        return False
+    return near
+
+
 def main():
     if not SRC.exists():
         sys.exit(f"missing input {SRC} — run the osmium export step first")
     OUT.parent.mkdir(parents=True, exist_ok=True)
+
+    near = near_parking_fn(build_parking_index(SRC))
 
     counts, kept, seen = {}, 0, set()
     with SRC.open() as fh, OUT.open("w", newline="") as out:
@@ -214,13 +361,19 @@ def main():
             else:
                 continue
             t = f.get("properties") or {}
-            cls, subtype = classify(t)
-            if not cls:
-                continue
-
             lat0 = polys[0][0][0][1]
             area = sum(poly_area_m2(p, lat0) for p in polys)
             if area < MIN_AREA_M2:
+                continue
+            # retail is the only class that needs the parking context, and the
+            # lookup is not free — only pay for it on retail-tagged features
+            ctx = False
+            if (t.get("landuse") == "retail" or t.get("shop")
+                    or t.get("building") in ("retail", "supermarket")):
+                lon0, la0 = _centroid(polys)
+                ctx = near(lon0, la0)
+            cls, subtype = classify(t, area, ctx)
+            if not cls:
                 continue
 
             oid = str(t.get("@id") or t.get("id") or t.get("osm_id") or f"L{lineno}")
