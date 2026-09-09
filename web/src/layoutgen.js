@@ -180,6 +180,179 @@ function distToBoundary(x, y, rings) {
   return d;
 }
 
+// Building footprint for a lot — one source of truth for the renderer and
+// the solar engine. Returns the closed quad plus eaves-ish height.
+function bldQuad(l) {
+  const { tx, ty, nx, ny } = l;
+  const p0 = l.quad[0];
+  const w0 = TYPES[l.type].w;
+  const fd = (l.type === "flat" ? 4 : FRONT_GARDEN) + (l.jit || 0);
+  const bd = l.type === "flat" ? FLAT_BLD_D : HOUSE_DEPTH;
+  const m = l.runId ? 0.05 : 0.7;
+  const b0 = [p0[0] + tx * m + nx * fd, p0[1] + ty * m + ny * fd];
+  const b1 = [b0[0] + tx * (w0 - 2 * m), b0[1] + ty * (w0 - 2 * m)];
+  const b2 = [b1[0] + nx * bd, b1[1] + ny * bd];
+  const b3 = [b0[0] + nx * bd, b0[1] + ny * bd];
+  return { quad: [b0, b1, b2, b3, b0.slice()], h: l.type === "flat" ? 9.5 : 7.8 };
+}
+
+// ---- solar: equinox garden sun-hours ---------------------------------------
+// First-order BRE-style check at the equinox (declination 0): for each rear
+// garden midpoint, hourly 08:00-16:00, is the sun blocked by any nearby
+// building? alt = asin(cos phi * cos H); shadow reach = h / tan(alt).
+function _rayHitsQuad(px, py, dx, dy, maxT, quad) {
+  for (let i = 0; i < 4; i++) {
+    const ax = quad[i][0], ay = quad[i][1];
+    const ex = quad[i + 1][0] - ax, ey = quad[i + 1][1] - ay;
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-9) continue;
+    const t = ((ax - px) * ey - (ay - py) * ex) / den;
+    const u = ((ax - px) * dy - (ay - py) * dx) / den;
+    if (t > 0.05 && t <= maxT && u >= 0 && u <= 1) return true;
+  }
+  return false;
+}
+function computeSun(cand, site) {
+  if (cand._sun) return cand._sun;
+  const phi = (site.lat0 || 52) * Math.PI / 180;
+  const blds = cand.lots.map(l => {
+    const b = bldQuad(l);
+    return { quad: b.quad, h: b.h,
+             cx: (b.quad[0][0] + b.quad[2][0]) / 2,
+             cy: (b.quad[0][1] + b.quad[2][1]) / 2 };
+  });
+  const hoursLit = [];
+  for (const l of cand.lots) {
+    if (l.type === "flat") continue;
+    const gd = cand.gardenDepth || 11;
+    const gDist = FRONT_GARDEN + HOUSE_DEPTH + gd * 0.55;
+    const gp = [l.quad[0][0] + l.tx * TYPES[l.type].w / 2 + l.nx * gDist,
+                l.quad[0][1] + l.ty * TYPES[l.type].w / 2 + l.ny * gDist];
+    let lit = 0;
+    for (let h = 8; h <= 16; h++) {
+      const H = (h - 12) * 15 * Math.PI / 180;
+      const alt = Math.asin(Math.cos(phi) * Math.cos(H));
+      if (alt <= 0.06) continue;
+      const A = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi));
+      const ux = -Math.sin(A), uy = -Math.cos(A);   // toward the sun
+      let blocked = false;
+      for (const b of blds) {
+        if (Math.hypot(b.cx - gp[0], b.cy - gp[1]) > 46) continue;
+        if (_rayHitsQuad(gp[0], gp[1], ux, uy, b.h / Math.tan(alt), b.quad)) {
+          blocked = true; break;
+        }
+      }
+      if (!blocked) lit++;
+    }
+    l._sun = lit;
+    hoursLit.push(lit);
+  }
+  hoursLit.sort((a, b) => a - b);
+  cand._sun = {
+    median: hoursLit.length ? hoursLit[Math.floor(hoursLit.length / 2)] : 0,
+    pct3: hoursLit.length ? hoursLit.filter(v => v >= 3).length / hoursLit.length * 100 : 0,
+  };
+  return cand._sun;
+}
+
+// ---- terrain: elevations, contours, earthworks -----------------------------
+// Elevation grid from the free open-meteo API (no key, CORS), sampled over
+// the site bbox. Everything degrades gracefully to "no terrain".
+async function fetchTerrain(site) {
+  const step = Math.max(20, Math.min(45, site.diag / 15));
+  const nx = Math.min(18, Math.max(4, Math.ceil((site.maxX - site.minX) / step) + 2));
+  const ny = Math.min(18, Math.max(4, Math.ceil((site.maxY - site.minY) / step) + 2));
+  const x0 = site.minX - step, y0 = site.minY - step;
+  const lats = [], lngs = [];
+  for (let j = 0; j < ny; j++)
+    for (let i = 0; i < nx; i++) {
+      lngs.push(((x0 + i * step) + site.ox) / site.kx);
+      lats.push(((y0 + j * step) + site.oy) / site.ky);
+    }
+  const z = new Array(nx * ny).fill(null);
+  for (let off = 0; off < lats.length; off += 90) {
+    const la = lats.slice(off, off + 90).map(v => v.toFixed(5)).join(",");
+    const lo = lngs.slice(off, off + 90).map(v => v.toFixed(5)).join(",");
+    const r = await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${la}&longitude=${lo}`);
+    if (!r.ok) throw new Error("elevation HTTP " + r.status);
+    const j2 = await r.json();
+    (j2.elevation || []).forEach((v, k) => { z[off + k] = v; });
+  }
+  if (z.some(v => v == null || isNaN(v))) throw new Error("elevation gaps");
+  // contour segments (marching squares, 1 m interval)
+  const zmin = Math.min(...z), zmax = Math.max(...z);
+  const contours = [];
+  for (let lev = Math.ceil(zmin); lev <= Math.floor(zmax); lev++) {
+    for (let j = 0; j < ny - 1; j++)
+      for (let i = 0; i < nx - 1; i++) {
+        const za = z[j * nx + i], zb = z[j * nx + i + 1],
+              zc = z[(j + 1) * nx + i + 1], zd = z[(j + 1) * nx + i];
+        const pts2 = [];
+        const edge = (v1, v2, x1, y1, x2, y2) => {
+          if ((v1 < lev) !== (v2 < lev)) {
+            const t = (lev - v1) / (v2 - v1);
+            pts2.push([x1 + (x2 - x1) * t, y1 + (y2 - y1) * t]);
+          }
+        };
+        const X1 = x0 + i * step, X2 = x0 + (i + 1) * step;
+        const Y1 = y0 + j * step, Y2 = y0 + (j + 1) * step;
+        edge(za, zb, X1, Y1, X2, Y1);
+        edge(zb, zc, X2, Y1, X2, Y2);
+        edge(zc, zd, X2, Y2, X1, Y2);
+        edge(zd, za, X1, Y2, X1, Y1);
+        if (pts2.length === 2) contours.push(pts2);
+      }
+  }
+  // slope stats over in-site cells
+  let maxS = 0, sumS = 0, nS = 0;
+  for (let j = 0; j < ny - 1; j++)
+    for (let i = 0; i < nx - 1; i++) {
+      const cx2 = x0 + (i + 0.5) * step, cy2 = y0 + (j + 0.5) * step;
+      if (!inAnyPoly(cx2, cy2, site.polys)) continue;
+      const sx2 = (z[j * nx + i + 1] - z[j * nx + i]) / step;
+      const sy2 = (z[(j + 1) * nx + i] - z[j * nx + i]) / step;
+      const s2 = Math.hypot(sx2, sy2) * 100;
+      maxS = Math.max(maxS, s2); sumS += s2; nS++;
+    }
+  const zAt = (x, y) => {
+    const fi = Math.max(0, Math.min(nx - 1.001, (x - x0) / step));
+    const fj = Math.max(0, Math.min(ny - 1.001, (y - y0) / step));
+    const i = Math.floor(fi), j = Math.floor(fj), u = fi - i, v = fj - j;
+    return z[j * nx + i] * (1 - u) * (1 - v) + z[j * nx + i + 1] * u * (1 - v)
+         + z[(j + 1) * nx + i] * (1 - u) * v + z[(j + 1) * nx + i + 1] * u * v;
+  };
+  return { zAt, contours, meanSlope: nS ? sumS / nS : 0, maxSlope: maxS, zmin, zmax };
+}
+
+function computeEarthworks(cand, site) {
+  if (cand._earth != null) return cand._earth;
+  const terr = site.terrain;
+  if (!terr) return null;
+  let vol = 0;
+  for (const road of cand.roads) {
+    const spec = STREETS[road.type];
+    const zs = road.pts.map(p => terr.zAt(p[0], p[1]));
+    const smooth = zs.map((_, i) => {
+      let s2 = 0, n2 = 0;
+      for (let k = -3; k <= 3; k++)
+        if (zs[i + k] != null) { s2 += zs[i + k]; n2++; }
+      return s2 / n2;
+    });
+    for (let i = 1; i < road.pts.length; i++) {
+      const seg = Math.hypot(road.pts[i][0] - road.pts[i - 1][0],
+                             road.pts[i][1] - road.pts[i - 1][1]);
+      vol += Math.abs(zs[i] - smooth[i]) * spec.corridor * seg;
+    }
+  }
+  for (const l of cand.lots) {
+    const zsq = l.quad.slice(0, 4).map(p => terr.zAt(p[0], p[1]));
+    const range = Math.max(...zsq) - Math.min(...zsq);
+    vol += ringArea(l.quad) * range / 4;
+  }
+  cand._earth = Math.round(vol);
+  return cand._earth;
+}
+
 // ---- candidate generation --------------------------------------------------
 // Every DISJOINT part of the site gets its own mini street network — a
 // scattered-parcel assembly must not leave outlying parcels unserved. The main
@@ -218,7 +391,8 @@ function buildPartNetwork(part, site, params, genome, rnd, E0, roads, heads, roa
     }
     if (pts.length > 5) {
       pts.push(pts[0].slice());
-      roads.push({ pts, type: "lane", part });
+      pts.push(pts[0].slice());
+      roads.push({ pts, type: "lane", part, openStart: false, openEnd: false });
       for (const p of pts) roadSamples.push(p);
     }
     return E;
@@ -232,9 +406,18 @@ function buildPartNetwork(part, site, params, genome, rnd, E0, roads, heads, roa
   }
   const C = part.centroid;
   const amp = part.diag * 0.14 * params.organic;
-  const c1 = [E[0] + (C[0] - E[0]) * 0.45 + genome.b1x * amp, E[1] + (C[1] - E[1]) * 0.45 + genome.b1y * amp];
-  const c2 = [C[0] + (Fp[0] - C[0]) * 0.5 + genome.b2x * amp, C[1] + (Fp[1] - C[1]) * 0.5 + genome.b2y * amp];
-  const Fin = [Fp[0] + (C[0] - Fp[0]) * 0.25, Fp[1] + (C[1] - Fp[1]) * 0.25];
+  let c1 = [E[0] + (C[0] - E[0]) * 0.45 + genome.b1x * amp, E[1] + (C[1] - E[1]) * 0.45 + genome.b1y * amp];
+  let c2 = [C[0] + (Fp[0] - C[0]) * 0.5 + genome.b2x * amp, C[1] + (Fp[1] - C[1]) * 0.5 + genome.b2y * amp];
+  let Fin = [Fp[0] + (C[0] - Fp[0]) * 0.25, Fp[1] + (C[1] - Fp[1]) * 0.25];
+  // Manual street editing: dragged handles override the derived controls.
+  if (isMain && genome.ov) {
+    if (genome.ov.E) E = genome.ov.E.slice();
+    if (genome.ov.c1) c1 = genome.ov.c1.slice();
+    if (genome.ov.c2) c2 = genome.ov.c2.slice();
+    if (genome.ov.F) Fin = genome.ov.F.slice();
+  }
+  if (isMain && genome._ctrlOut)
+    genome._ctrlOut.main = { E: E.slice(), c1: c1.slice(), c2: c2.slice(), F: Fin.slice() };
   let spine = catmullRom([E, c1, c2, Fin], 6);
   spine = spine.filter((p, i) => i === 0 || inPoly(p[0], p[1], part.poly) ||
                                  distToBoundary(p[0], p[1], rings) < 2);
@@ -260,8 +443,10 @@ function buildPartNetwork(part, site, params, genome, rnd, E0, roads, heads, roa
          distToBoundary(spine[spine.length - 1][0], spine[spine.length - 1][1], rings) < plotDepth * 0.55)
     spine.pop();
   if (spine.length > 3) {
-    roads.push({ pts: spine, type: isMain ? "primary" : "secondary", part });
-    if (polylineLen(spine) > 40) heads.push(spine[spine.length - 1]);
+    // start = the site/part access (no head there); far end joins the
+    // connectivity pass — it snaps to the loop when one is near.
+    roads.push({ pts: spine, type: isMain ? "primary" : "secondary", part,
+                 openStart: false, openEnd: true });
     for (const p of spine) roadSamples.push(p);
   } else return E;
 
@@ -294,7 +479,8 @@ function buildPartNetwork(part, site, params, genome, rnd, E0, roads, heads, roa
     let run = [];
     const flush = () => {
       if (run.length > 14 && polylineLen(run) > 60) {
-        roads.push({ pts: run, type: "secondary", part });
+        roads.push({ pts: run, type: "secondary", part,
+                     openStart: true, openEnd: true });
         for (const p of run) roadSamples.push(p);
       }
       run = [];
@@ -332,9 +518,8 @@ function buildPartNetwork(part, site, params, genome, rnd, E0, roads, heads, roa
         pts.push([px, py]);
       }
       if (polylineLen(pts) >= 22) {
-        roads.push({ pts, type: "lane", part });
+        roads.push({ pts, type: "lane", part, openStart: false, openEnd: true });
         for (const p of pts) roadSamples.push(p);
-        heads.push(pts[pts.length - 1]);
       }
     }
   }
@@ -349,9 +534,58 @@ function generateCandidate(site, params, genome) {
 
   const roads = [], heads = [], roadSamples = [];
   const mainPart = site.parts.find(p => p.main);
-  const E = mainPart.boundary[Math.floor(genome.tE * mainPart.boundary.length) % mainPart.boundary.length];
+  const E = (genome.ov && genome.ov.E) ? genome.ov.E
+    : mainPart.boundary[Math.floor(genome.tE * mainPart.boundary.length) % mainPart.boundary.length];
+  genome._ctrlOut = {};
   for (const part of site.parts)
     buildPartNetwork(part, site, params, genome, rnd, E, roads, heads, roadSamples, plotDepth);
+  const ctrl = genome._ctrlOut.main || null;
+  delete genome._ctrlOut;
+
+  // --- connectivity pass ----------------------------------------------------
+  // Connected networks beat dead-ends (Building for a Healthy Life): every
+  // open road end looks for another street of the SAME part within reach and,
+  // when a straight in-site connector exists, joins it as a junction. Only
+  // ends that genuinely cannot connect keep a turning head, and those are
+  // counted and penalised.
+  const CONNECT_R = 46;
+  let deadEnds = 0, junctions = 0;
+  const tryConnect = (road, endIdx) => {
+    const p = road.pts[endIdx === 0 ? 0 : road.pts.length - 1];
+    let best = null, bestD = CONNECT_R;
+    for (const other of roads) {
+      if (other === road || other.part !== road.part) continue;
+      for (const q of other.pts) {
+        const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        if (d > 6 && d < bestD) { bestD = d; best = q; }
+      }
+    }
+    if (!best) return false;
+    // the connector must stay inside the part
+    const steps = Math.max(2, Math.ceil(bestD / 4));
+    const conn = [];
+    for (let s2 = 1; s2 <= steps; s2++) {
+      const q = [p[0] + (best[0] - p[0]) * s2 / steps,
+                 p[1] + (best[1] - p[1]) * s2 / steps];
+      if (s2 < steps && !inPoly(q[0], q[1], road.part.poly)) return false;
+      conn.push(q);
+    }
+    if (endIdx === 0) road.pts.unshift(...conn.reverse());
+    else road.pts.push(...conn);
+    for (const q of conn) roadSamples.push(q);
+    junctions++;
+    return true;
+  };
+  for (const road of roads) {
+    if (road.openStart && !tryConnect(road, 0)) {
+      road.openStart = false;
+      if (polylineLen(road.pts) > 24) { heads.push(road.pts[0]); deadEnds++; }
+    }
+    if (road.openEnd && !tryConnect(road, 1)) {
+      road.openEnd = false;
+      if (polylineLen(road.pts) > 24) { heads.push(road.pts[road.pts.length - 1]); deadEnds++; }
+    }
+  }
 
   // --- corridors (full ribbons + carriageways) ------------------------------
   const fullPolys = [], carrPolys = [];
@@ -559,13 +793,13 @@ function generateCandidate(site, params, genome) {
   const southPct = houseLots.length
     ? houseLots.filter(l => l.ny < -0.34).length / houseLots.length * 100 : 0;
   const stats = statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea,
-                           site, params, gardenDepth, southPct,
+                           site, params, gardenDepth, southPct, deadEnds, junctions,
                            flatBlocks: lots.filter(l => l.type === "flat").length });
   return { genome, roads, roadClip, carrPolys, heads, lots, pond, trees, stats,
-           gardenDepth };
+           gardenDepth, ctrl };
 }
 
-function statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea, site, params, gardenDepth, southPct, flatBlocks }) {
+function statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea, site, params, gardenDepth, southPct, deadEnds, junctions, flatBlocks }) {
   const siteHa = site.areaM2 / 1e4;
   const houses = placed.det + placed.semi + placed.terr;
   // Gross-to-net honesty: what share of the gross site is actually developed
@@ -608,13 +842,14 @@ function statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea, site, 
            roadPerUnit: total > 0 ? roadLen / total : 0,
            parking, avgGarden, gia, gdv, cost, poc, flatBlocks, houses,
            netDevPct, backToBack, southPct,
+           deadEnds: deadEnds || 0, junctions: junctions || 0,
            exclHa: (site.exclusionArea || 0) / 1e4 };
 }
 
 function scoreOf(st, params) {
   const greenPen = Math.max(0, params.greenPct / 100 - st.greenPct) * 400;
   const mixPen = st.mixDev * 180;
-  const roadPen = Math.max(0, st.roadPerUnit - 8) * 4;
+  const roadPen = Math.max(0, st.roadPerUnit - 8) * 4 + (st.deadEnds || 0) * 7;
   if (params.objective === "target") {
     const targetGross = params.density * params.netPct / 100;
     return 1000 - Math.abs(st.density - targetGross) * 14 - mixPen - greenPen - roadPen;
@@ -642,9 +877,10 @@ function svgOf(cand, site, w, h, detail) {
   out += cand.roadClip.map(p => `<path d="${path(p)}" fill="#e3e7ea" fill-rule="evenodd"/>`).join("");
   for (const cp of cand.carrPolys)
     out += `<path d="${path(cp)}" fill="#c4cad1"/>`;
-  // gardens / plots
+  // gardens / plots (rear gardens with under 2h equinox sun read duller)
   for (const l of cand.lots) {
-    const fill = l.type === "flat" ? "#e5dbff" : "#d8f5dd";
+    const shaded = detail && l._sun != null && l._sun < 2 && l.type !== "flat";
+    const fill = l.type === "flat" ? "#e5dbff" : (shaded ? "#cfdccf" : "#d8f5dd");
     const stroke = l.type === "flat" ? "#b197fc" : "#96d9a5";
     out += `<path d="${path([l.quad])}" fill="${fill}" stroke="${stroke}" stroke-width="${detail ? 0.7 : 0.25}"/>`;
   }
@@ -674,14 +910,8 @@ function svgOf(cand, site, w, h, detail) {
         out += `<line x1="${X(q0[0]).toFixed(1)}" y1="${Y(q0[1]).toFixed(1)}" x2="${X(q1[0]).toFixed(1)}" y2="${Y(q1[1]).toFixed(1)}" stroke="#ffffff" stroke-width="0.6"/>`;
       }
     }
-    const w0 = TYPES[l.type].w;
-    const fd = (l.type === "flat" ? 4 : FRONT_GARDEN) + (l.jit || 0);
-    const bd = l.type === "flat" ? FLAT_BLD_D : HOUSE_DEPTH;
-    const m = l.runId ? 0.05 : 0.7;   // runs read as one continuous block
-    const b0 = [p0[0] + tx * m + nx * fd, p0[1] + ty * m + ny * fd];
-    const b1 = [b0[0] + tx * (w0 - 2 * m), b0[1] + ty * (w0 - 2 * m)];
-    const b2 = [b1[0] + nx * bd, b1[1] + ny * bd];
-    const b3 = [b0[0] + nx * bd, b0[1] + ny * bd];
+    const bq = bldQuad(l);
+    const [b0, b1, b2, b3] = bq.quad;
     if (detail) {
       const sh = 0.9;   // soft SE shadow gives the plan depth
       const s0 = [b0[0] + sh, b0[1] - sh], s1 = [b1[0] + sh, b1[1] - sh],
@@ -702,6 +932,13 @@ function svgOf(cand, site, w, h, detail) {
     for (const t of cand.trees)
       out += `<circle cx="${X(t[0]).toFixed(1)}" cy="${Y(t[1]).toFixed(1)}" r="${(1.9 * sc).toFixed(1)}" fill="#37b24d" opacity="0.75"/>`;
   out += site.polys.map(p => `<path d="${path(p)}" fill="none" stroke="#212529" stroke-width="${detail ? 1.6 : 0.8}" fill-rule="evenodd"/>`).join("");
+  if (detail && site.terrain) {
+    for (const seg of site.terrain.contours) {
+      const mx = (seg[0][0] + seg[1][0]) / 2, my = (seg[0][1] + seg[1][1]) / 2;
+      if (!inAnyPoly(mx, my, site.polys)) continue;
+      out += `<line x1="${X(seg[0][0]).toFixed(1)}" y1="${Y(seg[0][1]).toFixed(1)}" x2="${X(seg[1][0]).toFixed(1)}" y2="${Y(seg[1][1]).toFixed(1)}" stroke="rgba(141,110,66,0.4)" stroke-width="0.8"/>`;
+    }
+  }
   if (detail) {
     const bar = 50 * sc;
     out += `<line x1="${pad}" y1="${h - 6}" x2="${pad + bar}" y2="${h - 6}" stroke="#212529" stroke-width="2"/>
@@ -765,7 +1002,7 @@ export function openLayoutGen(ctx) {
     polys, allRings: polys.flatMap(p => p), parts, areaM2,
     minX, maxX, minY, maxY, diag: Math.hypot(maxX - minX, maxY - minY),
     feat: polys.length === 1 ? F(polys[0]) : MF(polys),
-    kx, ky, ox, oy,
+    kx, ky, ox, oy, lat0,
   };
   // Hard-constraint exclusion zones (flood, heritage, habitat) arrive already
   // clipped to the site: no dwelling, plot or pond may land in one.
@@ -794,6 +1031,12 @@ export function openLayoutGen(ctx) {
 
   const POP = 12;
   let pop = [], gen = 0, best = null, bestHist = [], running = false, timer = null, focusIdx = null;
+  let editMode = false, dragKey = null;
+
+  // Terrain loads in the background; layouts render immediately and the
+  // contours/slope/earthworks appear when the elevations arrive.
+  fetchTerrain(site).then(t => { site.terrain = t; render(); })
+    .catch(err => console.warn("terrain unavailable", err));
 
   const randGenome = () => ({
     tE: Math.random(), b1x: Math.random() * 2 - 1, b1y: Math.random() * 2 - 1,
@@ -878,6 +1121,7 @@ export function openLayoutGen(ctx) {
           <button type="button" id="lg-run" class="plot-mode-btn">▶ Evolve</button>
           <div class="lg-gen">gen <b id="lg-gen">0</b></div>
           <canvas id="lg-spark" width="170" height="34"></canvas>
+          <button type="button" id="lg-edit" class="ghost">✋ Edit streets</button>
           <button type="button" id="lg-adopt" class="plot-mode-btn">Adopt into appraisal</button>
           <button type="button" id="lg-export" class="ghost">Export GeoJSON</button>
           <details class="lg-std"><summary>Standards applied ⓘ</summary>
@@ -930,7 +1174,22 @@ export function openLayoutGen(ctx) {
       cell.addEventListener("click", () => { focusIdx = +cell.dataset.i; render(); }));
     const show = focusIdx != null ? pop[focusIdx] : (best || pop[0]);
     if (show) {
-      m.querySelector("#lg-best-svg").innerHTML = svgOf(show, site, 430, 360, true);
+      computeSun(show, site);
+      let bigSvg = svgOf(show, site, 430, 360, true);
+      if (editMode && show.ctrl) {
+        const pad = 14, w2 = 430, h2 = 360;
+        const sc2 = Math.min((w2 - 2 * pad) / Math.max(1, site.maxX - site.minX),
+                             (h2 - 2 * pad) / Math.max(1, site.maxY - site.minY));
+        const hX = x => pad + (x - site.minX) * sc2;
+        const hY = y => h2 - pad - (y - site.minY) * sc2;
+        let hs = "";
+        for (const k of ["E", "c1", "c2", "F"]) {
+          const p = show.ctrl[k];
+          hs += `<circle class="lg-handle" data-k="${k}" cx="${hX(p[0]).toFixed(1)}" cy="${hY(p[1]).toFixed(1)}" r="7" fill="rgba(76,110,245,0.85)" stroke="#fff" stroke-width="2" style="cursor:grab"/>`;
+        }
+        bigSvg = bigSvg.replace("</svg>", hs + "</svg>");
+      }
+      m.querySelector("#lg-best-svg").innerHTML = bigSvg;
       const st = show.stats;
       const cell = (v, l) => `<div class="cm-cell"><b>${v}</b><span>${l}</span></div>`;
       m.querySelector("#lg-best-stats").innerHTML = `<div class="cm-grid">`
@@ -947,7 +1206,9 @@ export function openLayoutGen(ctx) {
         + cell(st.southPct.toFixed(0) + "%", "S-facing gardens")
         + (st.exclHa > 0.005 ? cell(st.exclHa.toFixed(2) + " ha", "excluded (no-build)")
                              : cell(st.total > 0 ? Math.round(st.gia).toLocaleString() + " m²" : "—", "total GIA"))
-        + `</div><p class="lg-mix">${mixLbl(st)}${show.pond ? " · SuDS pond" : ""} · ${show.trees.length} street trees</p>`;
+        + `</div><p class="lg-mix">${mixLbl(st)}${show.pond ? " · SuDS pond" : ""} · ${show.trees.length} street trees · ${st.junctions} junction${st.junctions === 1 ? "" : "s"} · ${st.deadEnds} cul${st.deadEnds === 1 ? "" : "s"}-de-sac</p>`
+        + `<p class="lg-mix">☀ median garden sun ${show._sun.median} h (${show._sun.pct3.toFixed(0)}% ≥ 3 h, equinox)`
+        + (site.terrain ? ` · ⛰ slope mean ${site.terrain.meanSlope.toFixed(1)}% max ${site.terrain.maxSlope.toFixed(0)}%${site.terrain.maxSlope > 12 ? " ⚠" : ""} · earthworks ~${(computeEarthworks(show, site) || 0).toLocaleString()} m³` : " · ⛰ terrain loading…") + `</p>`;
       m._exportCand = show;
     }
     m.querySelector("#lg-gen").textContent = gen;
@@ -1005,6 +1266,57 @@ export function openLayoutGen(ctx) {
   m.querySelector("#lg-run").addEventListener("click", () => setRunning(!running));
   m.querySelector("#lg-close").addEventListener("click", () => { setRunning(false); m.hidden = true; });
   m.addEventListener("click", e => { if (e.target === m) { setRunning(false); m.hidden = true; } });
+  // Manual street shaping: pause evolution, drag the blue handles (entrance,
+  // two bends, far end) — the layout regenerates live around your street.
+  const bigBox = m.querySelector("#lg-best-svg");
+  const clientToLocal = (ev) => {
+    const svg = bigBox.querySelector("svg");
+    if (!svg) return null;
+    const r = svg.getBoundingClientRect();
+    const pad = 14, w2 = 430, h2 = 360;
+    const sc2 = Math.min((w2 - 2 * pad) / Math.max(1, site.maxX - site.minX),
+                         (h2 - 2 * pad) / Math.max(1, site.maxY - site.minY));
+    const vx = (ev.clientX - r.left) / r.width * w2;
+    const vy = (ev.clientY - r.top) / r.height * h2;
+    return [site.minX + (vx - pad) / sc2, site.minY + (h2 - pad - vy) / sc2];
+  };
+  m.querySelector("#lg-edit").addEventListener("click", () => {
+    editMode = !editMode;
+    m.querySelector("#lg-edit").classList.toggle("active", editMode);
+    m.querySelector("#lg-edit").textContent = editMode ? "✔ Done editing" : "✋ Edit streets";
+    if (editMode) {
+      setRunning(false);
+      if (focusIdx == null) focusIdx = 0;
+    }
+    render();
+  });
+  bigBox.addEventListener("pointerdown", (ev) => {
+    if (!editMode) return;
+    const t2 = ev.target.closest && ev.target.closest(".lg-handle");
+    if (!t2) return;
+    dragKey = t2.dataset.k;
+    ev.preventDefault();
+    bigBox.setPointerCapture && bigBox.setPointerCapture(ev.pointerId);
+  });
+  bigBox.addEventListener("pointermove", (ev) => {
+    if (!editMode || !dragKey) return;
+    const p = clientToLocal(ev);
+    if (!p) return;
+    const cand = pop[focusIdx != null ? focusIdx : 0];
+    if (!cand || !cand.ctrl) return;
+    const ov = { E: cand.ctrl.E, c1: cand.ctrl.c1, c2: cand.ctrl.c2, F: cand.ctrl.F };
+    ov[dragKey] = p;
+    const g2 = { ...cand.genome, ov };
+    const next = build(g2);
+    if (next) {
+      pop[focusIdx != null ? focusIdx : 0] = next;
+      render();
+    }
+  });
+  const endDrag = () => { dragKey = null; };
+  bigBox.addEventListener("pointerup", endDrag);
+  bigBox.addEventListener("pointercancel", endDrag);
+
   m.querySelector("#lg-adopt").addEventListener("click", () => {
     const cand = m._exportCand;
     if (!cand || !ctx.onAdopt) return;
