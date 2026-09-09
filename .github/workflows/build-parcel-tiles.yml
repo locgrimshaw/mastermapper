@@ -90,7 +90,18 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - name: Install GDAL
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq gdal-bin
+        run: |
+          # GitHub runners ship third-party apt repos (Google Chrome,
+          # Microsoft) that intermittently serve a bad package index and take
+          # `apt-get update` down with them — a hash-sum mismatch on
+          # dl.google.com failed this build once, 34 s in. Drop the repos we
+          # do not need, tolerate a partial update, and let the install (and
+          # the version check that follows) decide whether the step worked.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/microsoft-prod.list || true
+          sudo apt-get update -qq || sudo apt-get update -qq || true
+          sudo apt-get install -y -qq gdal-bin
+          ogr2ogr --version
       - uses: actions/download-artifact@v4
         with:
           name: la-list
@@ -142,7 +153,15 @@ jobs:
     steps:
       - name: Install tippecanoe
         run: |
-          sudo apt-get update -qq
+          # GitHub runners ship third-party apt repos (Google Chrome,
+          # Microsoft) that intermittently serve a bad package index and take
+          # `apt-get update` down with them — a hash-sum mismatch on
+          # dl.google.com failed this build once, 34 s in. Drop the repos we
+          # do not need, tolerate a partial update, and let the install (and
+          # the version check that follows) decide whether the step worked.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/microsoft-prod.list || true
+          sudo apt-get update -qq || sudo apt-get update -qq || true
           if ! sudo apt-get install -y -qq tippecanoe; then
             sudo apt-get install -y -qq build-essential libsqlite3-dev zlib1g-dev git
             git clone --depth 1 https://github.com/felt/tippecanoe /tmp/tippecanoe
