@@ -145,11 +145,15 @@ function generateCampus(site, params, genome) {
                  [genome.ox2 || 0, genome.oy2 || 0]);
   if (!halls.length) return null;
 
-  // substation sized to grid demand (1.2 ha / 100 MW × 1.5 reserve)
+  // substation sized to grid demand (1.2 ha / 100 MW × 1.5 reserve) — only
+  // when the connection lands inside the footprint (toggle); an off-site
+  // connection (adjacent DNO/TO compound or private wire) skips it entirely
+  // and hands the land back to the campus.
   const gridMw = itMw * params.pue;
   const subSide = Math.sqrt(gridMw / 100 * 12000 * 1.5);
+  const subReq = params.substation !== false;
   let sub = null;
-  {
+  if (subReq) {
     const tries = [];
     for (const h of halls) {
       const offD = h.d / 2 + YARD + subSide / 2 + ROAD_COR;
@@ -279,7 +283,7 @@ function generateCampus(site, params, genome) {
     itMw, gridMw, halls: halls.length, hallMix, gea,
     coverage: footprint / site.areaM2 * 100,
     mwHa: itMw / (site.areaM2 / 1e4),
-    greenPct: greenPct * 100, roadArea, subArea, subOk: !!sub,
+    greenPct: greenPct * 100, roadArea, subArea, subOk: !!sub, subReq,
     parking: park ? park.spaces : 0, fenceLen,
     capex, value, margin,
     fuelM3: Math.round(gridMw * 250 * 48 / 1000),   // 48 h @ 250 L/MW/h
@@ -290,7 +294,7 @@ function generateCampus(site, params, genome) {
 
 function scoreOf(st, params) {
   const greenPen = Math.max(0, params.greenPct - st.greenPct) * 30;
-  const subPen = st.subOk ? 0 : 400;
+  const subPen = st.subReq === false ? 0 : st.subOk ? 0 : 400;
   if (params.objective === "target")
     return 1000 - Math.abs(st.itMw - params.targetMw) * 4 - greenPen - subPen;
   if (params.objective === "value") return st.margin * 6 + st.itMw - greenPen - subPen;
@@ -451,7 +455,8 @@ export function openDcGen(ctx) {
     objective: "target",
     targetMw: Math.max(10, Math.round(siteHa * (ctx.netPct || 70) / 100 * (ctx.mwPerHa || 10))),
     cooling: "air", storeys: 2, hallSize: siteHa > 12 ? "L" : siteHa > 5 ? "M" : "S",
-    setback: 20, greenPct: 35, variation: 0.5, uniform: false, entrances: [],
+    setback: 20, greenPct: 35, variation: 0.5, uniform: false, substation: true,
+    entrances: [],
     pue: ctx.pue || 1.25, costPerMw: ctx.costPerMw || 11, valuePerMw: ctx.valuePerMw || 15,
   };
   const params = saved ? saved.params
@@ -579,6 +584,8 @@ export function openDcGen(ctx) {
             <input type="range" id="dcg-var" min="0" max="100" step="10" value="${Math.round((params.variation ?? 0.5) * 100)}"></label>
           <label class="lg-check"><input type="checkbox" id="dcg-uniform"${params.uniform ? " checked" : ""}>
             <span>Exact replication (uniform halls)</span></label>
+          <label class="lg-check"><input type="checkbox" id="dcg-sub"${params.substation === false ? "" : " checked"}>
+            <span>On-site substation in footprint</span></label>
           <button type="button" id="dcg-ent" class="ghost">📍 Define entrances${(params.entrances || []).length ? ` (${params.entrances.length})` : ""}</button>
           <label><span>Security setback <b id="dcg-bv">${params.setback}</b> m</span>
             <input type="range" id="dcg-setback" min="10" max="50" step="5" value="${params.setback}"></label>
@@ -657,7 +664,8 @@ export function openDcGen(ctx) {
         + cell(st.mwHa.toFixed(1) + " MW/ha", "IT density (gross)")
         + cell(st.coverage.toFixed(0) + "%", "building coverage")
         + cell(st.greenPct.toFixed(0) + "%", "landscape / open")
-        + cell(st.subOk ? (st.subArea / 1e4).toFixed(1) + " ha" : "⚠ no fit", "substation", st.subOk ? "" : "cm-sr")
+        + cell(st.subReq === false ? "off-site" : st.subOk ? (st.subArea / 1e4).toFixed(1) + " ha" : "⚠ no fit",
+               "substation", st.subReq === false || st.subOk ? "" : "cm-sr")
         + cell(st.parking, "parking spaces")
         + cell(money(st.capex), "capex")
         + cell(money(st.value), "stabilised value")
@@ -724,6 +732,10 @@ export function openDcGen(ctx) {
     });
     m.querySelector("#dcg-uniform").addEventListener("change", (e) => {
       params.uniform = e.target.checked;
+      resetPop();
+    });
+    m.querySelector("#dcg-sub").addEventListener("change", (e) => {
+      params.substation = e.target.checked;
       resetPop();
     });
   }

@@ -8494,7 +8494,7 @@ async function openSavedLayoutGenerator(sl) {
     return;
   }
   try {
-    const mod = await import("./layoutgen.js?v=ws150");
+    const mod = await import("./layoutgen.js?v=ws151");
     let site = sl.site[0];
     for (let i = 1; i < sl.site.length; i++) site = _turfUnion(site, sl.site[i]);
     const totHa = sl.site.reduce((s2, f) => s2 + (Number(f.properties.area_ha) || 0), 0)
@@ -8547,7 +8547,7 @@ async function openSavedDcGenerator(sl) {
     return;
   }
   try {
-    const mod = await import("./dcgen.js?v=dc4");
+    const mod = await import("./dcgen.js?v=dc5");
     let site = sl.site[0];
     for (let i = 1; i < sl.site.length; i++) site = _turfUnion(site, sl.site[i]);
     let exclusions = [];
@@ -8781,7 +8781,7 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws150");
+      const mod = await import("./layoutgen.js?v=ws151");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       // Hard constraints INSIDE the site become no-build exclusion zones in
@@ -17081,7 +17081,7 @@ function openDcCompileModal() {
       </div>
       <div class="cm-cols">
         <div class="cm-left">
-          <div id="dcm-plan">${_sitePlanSVG(feats)}</div>
+          <div id="dcm-plan" class="cm-plan">${_sitePlanSVG(feats, 460, 430)}</div>
           <div class="cm-dials">
             <label><span>Net developable <small>% of gross</small></span>
               <input type="number" id="dcm-netpct" min="30" max="95" step="1" value="${_dcCompileState.netPct}"></label>
@@ -17137,7 +17137,7 @@ function openDcCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading DC layout engine…";
     try {
-      const mod = await import("./dcgen.js?v=dc4");
+      const mod = await import("./dcgen.js?v=dc5");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       let exclusions = [];
