@@ -8459,14 +8459,52 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws132");
+      const mod = await import("./layoutgen.js?v=ws133");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
+      // Hard constraints INSIDE the site become no-build exclusion zones in
+      // the layout tool — flood zones, ancient woodland, heritage. Clipped to
+      // the site so the engine only carries what matters. Best-effort: no
+      // constraint data just means no exclusions.
+      let exclusions = [];
+      try {
+        const sb = getSupabase();
+        const bb = turf.bbox(site);
+        const { data } = await sb.rpc("constraints_in_bbox", {
+          p_kinds: ["flood_zone_3", "flood_zone_2", "ancient_woodland",
+                    "scheduled_monument", "sssi", "sac", "spa", "ramsar"],
+          w: bb[0] - 0.001, s: bb[1] - 0.001, e: bb[2] + 0.001, n: bb[3] + 0.001,
+          p_zoom: 15 });
+        for (const f of (data && data.features) || []) {
+          const clipped = _turfIntersect(site, f);
+          if (clipped) exclusions.push({ kind: (f.properties || {}).kind || "constraint",
+                                         geometry: clipped.geometry });
+        }
+      } catch (err2) { console.warn("layout exclusions unavailable", err2); }
       mod.openLayoutGen({
-        site, siteHa: totHa, name,
+        site, siteHa: totHa, name, exclusions,
         density: _compileState.density, netPct: _compileState.netPct,
         ppm2: deep.ppm2 || null,
         assumptions: SIFT.assumptions || {},
+        // Adopt: push the chosen layout's achieved numbers back into this
+        // compile appraisal, so the full residual (land, policy costs,
+        // affordable) runs on the layout that will actually be built.
+        onAdopt: ({ units, flatsPct }) => {
+          const netPctIn = m.querySelector("#cm-netpct");
+          const densIn = m.querySelector("#cm-density");
+          if (!netPctIn || !densIn) return;
+          const netHa = totHa * (Number(netPctIn.value) || 75) / 100;
+          densIn.value = Math.max(5, Math.round(units / Math.max(0.01, netHa)));
+          densIn.dispatchEvent(new Event("input"));
+          const note = m.querySelector("#cm-adopt-note") || (() => {
+            const p = document.createElement("p");
+            p.id = "cm-adopt-note"; p.className = "hint";
+            m.querySelector("#cm-out").after(p);
+            return p;
+          })();
+          note.innerHTML = `Adopted the generated layout: <b>${units} homes</b>` +
+            (flatsPct != null ? ` (${flatsPct}% flats — set the flat mix in Viability variables to match)` : "") + ".";
+        },
       });
       b.disabled = false; b.textContent = "Generative layout →";
     } catch (err) {

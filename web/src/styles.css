@@ -3018,3 +3018,8 @@ footer {
   .cm-body { grid-template-columns: 1fr; }
   .lg-body { grid-template-columns: 1fr; }
 }
+
+/* Layout tool: standards panel + no-build legend chip. */
+.lg-std { font-size: 10px; color: var(--text-dim); }
+.lg-std summary { cursor: pointer; font-weight: 600; }
+.lg-std ul { margin: 4px 0 0; padding-left: 14px; display: flex; flex-direction: column; gap: 3px; line-height: 1.4; }
