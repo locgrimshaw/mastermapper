@@ -4079,8 +4079,12 @@ function hoverContentForOverlay(def, p) {
   if (d && d.startsWith("osm_") && p.cls) {
     const ha = Number(p.ha);
     const sub = String(p.subtype || "").replace(/_/g, " ");
-    return { title: p.name || p.kind || def.label,
-             kind: (p.kind || def.label) + (sub ? " · " + sub : ""),
+    // Most OSM polygons carry no name. Lead with the subtype rather than
+    // repeating the class label twice — "Unnamed retail park" says more than
+    // "Retail sheds & parks · retail park".
+    const unnamed = sub ? "Unnamed " + sub : (p.kind || def.label);
+    return { title: p.name || unnamed,
+             kind: (p.kind || def.label) + (sub && p.name ? " · " + sub : ""),
              chip: def.color,
              rows: [
                row(ha ? (ha >= 1 ? ha.toFixed(2) + " ha" : Math.round(Number(p.area_m2)).toLocaleString() + " m²") : null, "site area"),

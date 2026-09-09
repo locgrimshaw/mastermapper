@@ -102,6 +102,17 @@ add("commercial shed parking", {"amenity": "parking", "parking": "surface"}, 90,
 add("6-storey office", {"building": "commercial", "building:levels": "6"}, 60, C[0] + 0.004, C[1], None)
 add("office park parking", {"amenity": "parking", "parking": "surface"}, 90, C[0] + 0.0047, C[1], "osm_parking")
 add("commercial shed, no parking", {"building": "commercial", "building:levels": "1"}, 60, C[0] + 0.010, C[1], None)
+# Employment-estate NAMES beat the retail land-use tag. OSM tags many trading
+# estates landuse=retail because they have trade counters, which put 51 of
+# them in the retail layer. A name carrying both formats stays retail.
+B = (-1.3400, 52.4500)
+add("Farnham Trading Estate", {"landuse": "retail", "name": "Farnham Trading Estate"}, 200, B[0], B[1], "osm_industrial")
+add("Cross Point Business Park", {"landuse": "retail", "name": "Cross Point Business Park"}, 200, B[0] + 0.004, B[1], "osm_industrial")
+add("Aintree Retail & Business Park", {"landuse": "retail", "name": "Aintree Racecourse Retail & Business Park"}, 200, B[0] + 0.008, B[1], "osm_retail")
+add("named business park (commercial)", {"landuse": "commercial", "name": "Sherwood Business Park"}, 90, B[0] + 0.012, B[1], "osm_industrial")
+add("Slough Trading Estate", {"landuse": "commercial", "name": "Slough Trading Estate"}, 400, B[0] + 0.016, B[1], "osm_industrial")
+# ...but the name alone must not resurrect a multi-storey office block.
+add("6-storey Business Centre", {"landuse": "commercial", "building": "commercial", "name": "Vantage Business Centre", "building:levels": "7"}, 60, B[0] + 0.022, B[1], None)
 
 # --- other classes ---------------------------------------------------------
 add("multi-storey car park", {"amenity": "parking", "parking": "multi-storey"}, 70, O[0] + 0.016, O[1] + 0.01, None)

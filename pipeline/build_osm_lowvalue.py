@@ -96,10 +96,23 @@ MIN_RETAIL_DISTRICT_M2 = 15000.0
 MIN_DISTRICT_PARKING_M2 = 8000.0
 DISTRICT_PARKING_R_M = 150.0
 
-# Names that positively identify an out-of-town retail format.
+# Names that positively identify an out-of-town RETAIL format.
 RETAIL_PARK_RE = re.compile(
     r"retail park|shopping park|retail centre|retail center|trade park|"
-    r"trading estate|outlet|superstore|leisure park|business park", re.I)
+    r"outlet|superstore|leisure park", re.I)
+# Names that identify an EMPLOYMENT estate. These used to sit in the retail
+# regex above, which put 51 features called "Farnham Trading Estate",
+# "Cross Point Business Park" and the like into the retail layer. OSM often
+# tags such an estate landuse=retail because it has trade counters on it; the
+# name is the stronger signal, so it wins and routes them to industrial.
+# Checked AFTER the retail names, so "Aintree Racecourse Retail & Business
+# Park" — genuinely both — stays retail.
+BUSINESS_PARK_RE = re.compile(
+    r"business park|trading estate|industrial estate|industrial park|"
+    r"enterprise park|technology park|science park|distribution park|"
+    r"commerce park|business centre|business center", re.I)
+# Any shopper-facing word. Used only to break the tie above.
+RETAIL_WORD_RE = re.compile(r"retail|shopping|outlet", re.I)
 
 # Formats that are inherently out-of-town/low-rise whatever else they carry.
 BIG_BOX_SHOPS = {"doityourself", "garden_centre", "trade", "wholesale",
@@ -236,6 +249,14 @@ def classify(t, area=0.0, near_parking=False, big_parking=False):
         #     landuse=retail DISTRICT tag can be trusted on its own
         if RETAIL_PARK_RE.search(nm):
             return "osm_retail", "retail_park"
+        # (a2) ... unless it says employment estate, which is not retail. A
+        #      name that says BOTH ("Aintree Racecourse Retail & Business
+        #      Park") is a mixed scheme and stays retail, since that is the
+        #      layer a shopper-facing name belongs in.
+        if BUSINESS_PARK_RE.search(nm):
+            if RETAIL_WORD_RE.search(nm):
+                return "osm_retail", "retail_park"
+            return "osm_industrial", "business_park"
         # (b) formats that are inherently big-box wherever they sit
         if shop in BIG_BOX_SHOPS:
             return "osm_retail", shop
@@ -272,6 +293,9 @@ def classify(t, area=0.0, near_parking=False, big_parking=False):
     # belong here and NOT under retail, where "retail park" misdescribed them.
     # Single- and two-storey sheds on vast surface parking is exactly the
     # "underutilised business sites" NPPF L2(1)(b) names.
+    if lu == "commercial" or bld == "commercial":
+        if BUSINESS_PARK_RE.search(t.get("name") or "") and is_lowrise(t):
+            return "osm_industrial", "business_park"
     if lu == "commercial" and area >= MIN_RETAIL_DISTRICT_M2 and big_parking:
         return "osm_industrial", "business_park"
     if (bld == "commercial" and area >= MIN_RETAIL_SHED_M2
@@ -444,7 +468,12 @@ def main():
                 props["levels"] = levels
             if t.get("operator"):
                 props["operator"] = t["operator"][:120]
-            name = (t.get("name") or label)[:180]
+            # No invented names. An unnamed OSM polygon gets an EMPTY name, so
+            # the loader stores NULL and the map falls back to describing the
+            # class — rather than presenting "Retail sheds & parks" as if that
+            # were the site's actual name, which is what the class label as a
+            # fallback produced.
+            name = (t.get("name") or "")[:180]
 
             w.writerow([cls, sid, name, json.dumps(props, separators=(",", ":")),
                         wkt_polys(polys)])
