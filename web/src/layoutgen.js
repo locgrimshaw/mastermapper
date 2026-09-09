@@ -1373,10 +1373,10 @@ function decorate(cand, site) {
 function statsFor({ placed, total, roadArea, roadLen, greenArea, lotArea, site, params, gardenDepth, southPct, deadEnds, junctions, flatBlocks, avgGarden: avgGardenIn }) {
   const siteHa = site.areaM2 / 1e4;
   const houses = placed.det + placed.semi + placed.terr;
-  // Gross-to-net honesty: what share of the gross site is actually developed
-  // (plots + adopted street), TestFit-style, and the privacy distance the
-  // opposing rear windows get (Essex benchmark 25 m, common minimum 21 m).
-  const netDevPct = (lotArea + roadArea) / site.areaM2 * 100;
+  // Net developable, properly defined: plot land only, AFTER streets are
+  // subtracted (net is always the lower number). Streets are reported
+  // separately; the privacy distance is the Essex 25 m benchmark vs 21 m min.
+  const netDevPct = lotArea / site.areaM2 * 100;
   const backToBack = 2 * gardenDepth + 0;
   const mix = total > 0 ? { flat: placed.flat / total, det: placed.det / total,
     semi: placed.semi / total, terr: placed.terr / total } : { flat: 0, det: 0, semi: 0, terr: 0 };
@@ -1930,7 +1930,7 @@ export function openLayoutGen(ctx) {
       m.querySelector("#lg-best-stats").innerHTML = `<div class="cm-grid">`
         + cell(st.total.toLocaleString(), "dwellings")
         + cell(st.density.toFixed(1) + "/ha", "gross density")
-        + cell(st.netDevPct.toFixed(0) + "%", "gross → net developed")
+        + cell(st.netDevPct.toFixed(0) + "%", "net developable · % of gross")
         + cell(st.poc.toFixed(0) + "%", "PoC (excl. land)")
         + cell(Math.round(st.roadLen) + " m", "street length")
         + cell(st.roadPerUnit.toFixed(1) + " m", "street / home")

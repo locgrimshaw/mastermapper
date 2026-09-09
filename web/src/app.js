@@ -8459,7 +8459,7 @@ function openCompileModal() {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
-      const mod = await import("./layoutgen.js?v=ws142");
+      const mod = await import("./layoutgen.js?v=ws143");
       let site = feats[0];
       for (let i = 1; i < feats.length; i++) site = _turfUnion(site, feats[i]);
       // Hard constraints INSIDE the site become no-build exclusion zones in
@@ -10373,7 +10373,7 @@ function buildSiteReportHTML(site) {
     <h1>${esc(site.name)}</h1>
     <p class="cover-sub">${esc(site.subtitle || "")} · generated ${dateStr}</p>
     <div class="sr-kpis">
-      <div class="sr-kpi"><b>${site.totHa.toFixed(2)} ha</b><span>net developable</span></div>
+      <div class="sr-kpi"><b>${site.totHa.toFixed(2)} ha</b><span>${site.mode === "catchment" ? "net developable" : "gross site area"}</span></div>
       <div class="sr-kpi"><b>~${site.units.toLocaleString()}</b><span>homes (${esc(site.densityBasis || site.regime)})</span></div>
       <div class="sr-kpi"><b>${money(ap.gdv)}</b><span>gross development value</span></div>
       <div class="sr-kpi"><b>${pct(ap.profitOnCost)}</b><span>profit on cost ${ragBadge}</span></div>
