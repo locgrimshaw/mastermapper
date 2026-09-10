@@ -1488,6 +1488,39 @@ def build_rents_group():
         _note("la_rents", "no rent values")
         return out
 
+    # ONS REISSUE LAD CODES when a boundary changes, and the PIPR workbook
+    # runs a newer vintage than the boundary layer: Barnsley is E08000016 in
+    # the polygons and E08000038 in PIPR, Sheffield E08000019 vs E08000039.
+    # Left alone that silently blanks two metropolitan boroughs — the map just
+    # shows a hole where South Yorkshire should be. Rather than a hand-written
+    # alias list that rots at the next reorganisation, any PIPR area with no
+    # polygon of its own code is matched by NAME against the polygons nothing
+    # else has claimed, restricted to the same country. Every such match is
+    # PRINTED, so a wrong pairing is visible rather than assumed.
+    if code_col:
+        have = set(gdf[code_col].astype(str))
+        orphans = [c for c in props_by_code if c not in have]
+        if orphans:
+            def _norm(x):
+                return re.sub(r"[^a-z0-9]+", "", str(x or "").lower())
+            unclaimed = {}
+            for _, grow in gdf.iterrows():
+                gc = str(_cell(grow, code_col) or "")
+                if gc and gc not in props_by_code:
+                    unclaimed.setdefault(_norm(_cell(grow, name_col)), []).append(gc)
+            for pc in orphans:
+                nm = _norm(props_by_code[pc].get("pipr_name"))
+                cands = [g for g in unclaimed.get(nm, []) if g[:1] == pc[:1]]
+                if len(cands) == 1:
+                    props_by_code[cands[0]] = props_by_code.pop(pc)
+                    print(f"  [la_rents] {props_by_code[cands[0]]['pipr_name']}: "
+                          f"PIPR code {pc} matched polygon {cands[0]} by name "
+                          f"(ONS reissued the code)")
+                else:
+                    print(f"  [la_rents] WARNING: PIPR area {pc} "
+                          f"({props_by_code[pc].get('pipr_name')}) has no "
+                          f"polygon and no unique name match — not mapped")
+
     joined = gdf[gdf[code_col].astype(str).isin(props_by_code)] if code_col else gdf
     missing = len(props_by_code) - len(joined)
     print(f"  [la_rents] {len(joined)}/{len(gdf)} LAD polygons matched a PIPR "

@@ -236,7 +236,7 @@ def build_la_props(areas, periods):
         m = a["months"].get(latest)
         if not m or (m.get("all") or {}).get("rent") is None:
             continue
-        p = {"asof": latest}
+        p = {"asof": latest, "pipr_name": a["name"], "pipr_code": code}
         for skey in SERIES_KEYS:
             d = m.get(skey) or {}
             if d.get("rent") is not None:

@@ -54,11 +54,19 @@ NESO publishes a NEWER release: copy its zip link from
 3. **Drop-in file** named **`ptal_grid.csv`** (keep that name even for a
    zip/GeoJSON — the pipeline sniffs the content), or hand the file to Claude.
 
-## 5. ONS private rents — ✅ DONE (June 2026 data committed)
+## 5. ONS private rents — ✅ AUTOMATED (no manual step)
 
-data/raw/ons-la-rents.csv carries the latest-month average rent + annual
-change for 335 local authorities, extracted from the PIPR workbook. To
-refresh: hand the new PIPR download to Claude (any format).
+Nothing to do. The **"Build ONS private rents (PIPR)"** GitHub Action runs
+monthly (20th, after ONS's mid-month release), discovers the newest workbook
+from the ONS landing page, and loads both `pipr_rents` (latest month, all nine
+series) and `pipr_series` (the full history back to January 2015). Afterwards,
+run **"Load datasets into Supabase"** with `datasets = lad_boundary,la_rents`
+to repaint the map layer with the new figures.
+
+There is no stable ONS download URL — each release has its own dated path and
+an unpredictable filename — so if ONS restructure the page the build fails
+loudly rather than loading stale numbers. Fix `latest_release_url` in
+`pipeline/pipr.py`; `pipeline/test_pipr.py` covers that discovery logic.
 
 ## 5b. (superseded) ONS private rents original steps
 
@@ -294,14 +302,11 @@ tec_register reload so statuses stay in step.
 
 ## Rental + office evidence — refresh (loaded 2026-09)
 
-- **pipr_rents** (residential rents by LA — feeds the BTR model): download the
-  latest ONS "Price Index of Private Rents, UK: monthly price statistics"
-  workbook (monthly, accredited official statistics), extract Table 1's latest
-  month per area (overall + bedroom/type splits), and upsert into
-  `public.pipr_rents` (code PK; the 2026-09 session's packed
-  `insert … unnest(string_to_array(...))` pattern fits in a few pastes).
-  Monthly cadence is plenty; the model reads it per LAD with region/England
-  fallbacks.
+- **pipr_rents / pipr_series** (residential rents by LA — feed the BTR model
+  and the rents map layer): now fully automated, see section 5 above. PIPR is
+  **official statistics in development, not accredited**, and is not
+  seasonally adjusted; the UI says so wherever a figure is shown, and it
+  should stay that way.
 - **voa_offices** (building-level office rents — feeds the office calculator
   and the "Office rents (VOA)" layer): run the **"Load VOA office rent
   evidence into Supabase"** GitHub Action (also on a quarterly cron). It

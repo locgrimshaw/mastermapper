@@ -120,6 +120,13 @@ def main():
     check("legacy annual change preserved",
           p["annual_rent_change_pct"], p["chg_all"])
     check("asof is the latest month", payload["asof"], "2026-07")
+    # The map join needs the PIPR name and code to survive: ONS reissue LAD
+    # codes when boundaries change (Barnsley E08000016 -> E08000038, Sheffield
+    # E08000019 -> E08000039), and build_datasets falls back to a name match
+    # for any PIPR area whose code has no polygon. Drop these and two
+    # metropolitan boroughs silently vanish from the map.
+    check("pipr_name carried for the name fallback", p["pipr_name"], "Ashford")
+    check("pipr_code carried for traceability", p["pipr_code"], "E07000105")
 
     # --- release discovery: newest by DATE, not by filename ----------------
     html = '''

@@ -1337,7 +1337,7 @@ const MAP_OVERLAYS = [
     radius: ["interpolate", ["linear"], ["zoom"], 7, 2.5, 11, 4.5, 15, 7] },
   { key: "uni_building",    group: "students", label: "University buildings (OSM)", color: "#5f3dc4", dataset: "uni_building", minZoom: 11 },
   // Market & boundaries
-  { key: "la_rents",     group: "market", label: "Private rents (LA average)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
+  { key: "la_rents",     group: "market", label: "Private rents (ONS PIPR)", color: "#0b7285", dataset: "la_rents",     minZoom: 5 },
   // Sold-price CHOROPLETHS (see the layer entries below). The four-band
   // price_grid dataset they used to render as bilinear surfaces is retained
   // in the database and still feeds nothing else; the surface renderer below
@@ -1686,7 +1686,7 @@ const LAYER_INFO = {
   uni_campus_site:     { about: "University campus grounds — the actual site extents, so multi-campus institutions show every campus, not just the HQ dot.", source: "© OpenStreetMap contributors (ODbL)" },
   uni_building:        { about: "Individual university building footprints. Zoom in close — these are dense.", source: "© OpenStreetMap contributors (ODbL)" },
   ptal:                { about: "Public Transport Accessibility Level on a 100 m grid, coloured by grade — blues are poorly connected (0–1b), greens/yellows mid (2–3), oranges/reds excellent (4–6b). Greater London only. Every cell in view is drawn — no sampling — which is why it needs a close zoom: the full 100 m grid is 159,451 cells and a wider view cannot be served from the database fast enough.", source: "TfL PTAL 2023 via ArcGIS Hub (OGL)" },
-  la_rents:            { about: "Average monthly private rents by local authority, shaded light (cheapest, ~£500) to deep teal (most expensive, £3,000+). Hover a district for its figure and annual change.", source: "ONS Price Index of Private Rents (OGL v3)" },
+  la_rents:            { about: "Average monthly private rents by local authority, from the ONS Price Index of Private Rents. Unlike a portal scrape this covers <strong>both new and existing tenancies</strong>, drawn from administrative rent records — so it is closer to the passing rent on standing stock than to asking rents. Use the picker below the row to shade by <strong>bedroom count</strong> (1/2/3/4+) or <strong>property type</strong> (detached, semi, terraced, flat), and to switch between the rent level, the annual change and five-year growth; the focus band then drops every authority outside a range you set. Click a district for the full breakdown and its monthly history back to 2015. <strong>Official statistics in development</strong>, not accredited, and not seasonally adjusted. England and Wales only: ONS publish Scotland as 18 rental groupings that are not council areas (and mainly of advertised new lets), and Northern Ireland as market areas with no area code, so neither can be drawn honestly on authority boundaries — both still feed the viability model's fallbacks. Five-year growth is computed here from the published levels; ONS publish the annual change themselves.", source: "ONS Price Index of Private Rents (OGL v3)" },
   price_trend:         { about: "Whether local sale prices are rising or falling: median of the last 12 months against the median of the 24 months before, on the same boundaries as the price layers. Blue = falling, red = rising, pale = flat — a diverging ramp on the RAW percentage, because unlike price level this measure has a meaningful zero. Areas without enough sales in BOTH windows stay blank rather than faking a flat market.", source: "HM Land Registry Price Paid Data (OGL v3)" },
   cil_rates:           { about: "Residential Community Infrastructure Levy by charging authority — INDICATIVE typical rates (£/m² of net new floorspace, ~2025-indexed) compiled from adopted charging schedules, incl. the Mayoral CIL in London. Green = £0 (no CIL adopted, or Scotland where no CIL regime exists), deep red = London-borough rates. Blue = the authority DOES charge CIL (a schedule is published) but its rate is not yet compiled; grey = nothing known. Both fall back to the regional band in the appraisal. Every compiled rate is cross-checked against MHCLG's own register of charging schedules: 95 are confirmed by a published schedule, and where the register contradicted the table (a dated schedule against a recorded 'no CIL') the £0 has been withdrawn rather than left to understate costs. Schedules charge by zone, so verify against the council's current adopted schedule before reliance; enter the exact rate per project in Viability variables.", source: "Council charging schedules / annual CIL rate summaries, hand-compiled; verified against MHCLG planning.data.gov.uk community-infrastructure-levy-schedule (OGL v3)" },
   build_cost:          { about: "Relative construction cost by local authority — a FREE PROXY assembled from ONS construction output indices and openly published regional factors, not BCIS (which is a paid RICS product). Green = cheaper than the national average, red = dearer. Every figure can be overridden per project in Viability variables; a client with BCIS access can paste their own numbers there.", source: "ONS construction output price indices + published regional factors (proxy)" },
@@ -1823,6 +1823,158 @@ function setMarketPtype(v) {
   if (map.getLayer("ov-ppd_sales-pt"))
     map.setFilter("ov-ppd_sales-pt", salesFilter);
 }
+// ---- Private rents: series x metric, repainted from loaded props ---------
+// The la_rents polygons carry EVERY series the ONS Price Index of Private
+// Rents publishes — nine rent levels, nine annual changes, nine five-year
+// growth figures — so switching bedroom count, property type or metric is a
+// repaint of features already in the browser, never a refetch. Same trick as
+// the sold-price choropleths' flats/houses filter.
+const RENT_SERIES = [
+  ["all", "All"], ["b1", "1 bed"], ["b2", "2 bed"], ["b3", "3 bed"],
+  ["b4", "4+ bed"], ["det", "Detached"], ["semi", "Semi"],
+  ["terr", "Terraced"], ["flat", "Flat"],
+];
+const RENT_SERIES_LABEL = Object.fromEntries(RENT_SERIES);
+const RENT_METRICS = [
+  ["rent", "£/month", "Average rent"],
+  ["chg", "Annual %", "Annual change"],
+  ["g5", "5-year %", "Five-year growth"],
+];
+// Three ramps, each with FIXED breakpoints rather than per-series percentiles.
+// That is deliberate for rents: a given colour must mean the same £ whichever
+// series is showing, or "2 bed" and "detached" look alike while differing by
+// £600. Even spread within one series matters less than being able to compare
+// across them.
+const RENT_RAMPS = {
+  rent: { stops: [500, 700, 900, 1100, 1400, 1800, 2400, 3200],
+          colors: ["#eaf6f7", "#d5eef0", "#a3d8dc", "#6dbcc5", "#3c96a6",
+                   "#20707f", "#12566a", "#0d4a5c", "#06303d"],
+          fmt: v => "£" + Math.round(v).toLocaleString(),
+          unit: "per calendar month" },
+  // Diverging about zero: falling rents are a different fact from slow growth,
+  // so they get their own colour rather than the pale end of one ramp.
+  chg: { stops: [-2, 0, 2, 4, 6, 8, 10],
+         colors: ["#1864ab", "#74c0fc", "#d8e2e8", "#ffe8cc", "#ffc078",
+                  "#ff922b", "#e8590c", "#a61e4d"],
+         fmt: v => (v > 0 ? "+" : "") + v + "%",
+         unit: "year on year" },
+  g5: { stops: [0, 10, 20, 30, 40, 50, 65],
+        colors: ["#f8f9fa", "#e3fafc", "#99e9f2", "#66d9e8", "#3bc9db",
+                 "#22b8cf", "#1098ad", "#0b7285"],
+        fmt: v => (v > 0 ? "+" : "") + v + "%",
+        unit: "since 2021" },
+};
+let rentSeries = (() => {
+  try { const v = localStorage.getItem("mm.rentSeries");
+        return RENT_SERIES.some(r => r[0] === v) ? v : "all"; }
+  catch (_) { return "all"; }
+})();
+let rentMetric = (() => {
+  try { const v = localStorage.getItem("mm.rentMetric");
+        return RENT_METRICS.some(r => r[0] === v) ? v : "rent"; }
+  catch (_) { return "rent"; }
+})();
+// Focus band on the CURRENT metric's units. null = show everything.
+let rentBand = null;
+
+function rentKey() { return `${rentMetric}_${rentSeries}`; }
+
+// Step ramp on the raw value. An authority missing the selected series is
+// fully transparent, never a colour — ONS suppress a series where the sample
+// is too thin, and absence of evidence must not read as a cheap area.
+function rentPaint() {
+  const r = RENT_RAMPS[rentMetric] || RENT_RAMPS.rent;
+  const key = rentKey();
+  const step = ["step", ["to-number", ["get", key]], r.colors[0]];
+  r.stops.forEach((v, i) => step.push(v, r.colors[i + 1]));
+  return ["case", ["!", ["has", key]], "rgba(0,0,0,0)", step];
+}
+
+// The focus band is a LAYER FILTER, not a paint trick: an authority outside
+// the band leaves the map entirely, so what remains is the shortlist.
+function rentFilterExpr() {
+  if (!rentBand) return null;
+  const key = rentKey();
+  const f = ["all", ["has", key]];
+  if (rentBand.min != null) f.push([">=", ["to-number", ["get", key]], rentBand.min]);
+  if (rentBand.max != null) f.push(["<=", ["to-number", ["get", key]], rentBand.max]);
+  return f;
+}
+
+function applyRentView() {
+  const fill = map && map.getLayer("ov-la_rents-fill");
+  if (fill) {
+    map.setPaintProperty("ov-la_rents-fill", "fill-color", rentPaint());
+    map.setFilter("ov-la_rents-fill", rentFilterExpr());
+  }
+  const line = map && map.getLayer("ov-la_rents-line");
+  if (line) map.setFilter("ov-la_rents-line", rentFilterExpr());
+  const leg = document.getElementById("rent-legend");
+  if (leg) leg.innerHTML = rentLegendInnerHTML();
+  const lbl = document.getElementById("rent-metric-label");
+  if (lbl) lbl.textContent = rentViewLabel();
+}
+
+function rentViewLabel() {
+  const m = RENT_METRICS.find(x => x[0] === rentMetric) || RENT_METRICS[0];
+  return `${RENT_SERIES_LABEL[rentSeries] || "All"} · ${m[2]}`;
+}
+
+function setRentView(series, metric) {
+  if (series) rentSeries = series;
+  if (metric && metric !== rentMetric) {
+    rentMetric = metric;
+    rentBand = null;                  // a band in £ is meaningless in %
+  }
+  try {
+    localStorage.setItem("mm.rentSeries", rentSeries);
+    localStorage.setItem("mm.rentMetric", rentMetric);
+  } catch (_) {}
+  applyRentView();
+}
+
+function setRentBand(band) { rentBand = band; applyRentView(); }
+
+// Legend for the ramp currently in play, labelled in that metric's units.
+function rentLegendInnerHTML() {
+  const r = RENT_RAMPS[rentMetric] || RENT_RAMPS.rent;
+  const sw = r.colors.map(c =>
+    `<span style="background:${c}"></span>`).join("");
+  const lo = r.fmt(r.stops[0]);
+  const hi = r.fmt(r.stops[r.stops.length - 1]);
+  const band = rentBand
+    ? ` · showing ${rentBand.min != null ? r.fmt(rentBand.min) : "any"}–${rentBand.max != null ? r.fmt(rentBand.max) : "any"}`
+    : "";
+  return `<div class="ramp">${sw}</div>
+    <div class="scale"><span>&lt;${lo}</span><span>${hi}+</span></div>
+    <div class="legend-note">${r.unit}${band}</div>`;
+}
+
+// Series x metric picker plus a focus band, rendered under the rents row.
+function rentControlsHTML() {
+  const band = RENT_RAMPS[rentMetric] || RENT_RAMPS.rent;
+  const bmin = band.stops[0], bmax = band.stops[band.stops.length - 1];
+  return `
+    <div class="lt-conn" id="rent-picker">
+      <div class="lt-seg-label">Rent view <b id="rent-metric-label">${rentViewLabel()}</b></div>
+      <div class="lt-conn-row" role="group" aria-label="Rent series">
+        ${RENT_SERIES.map(([v, l]) => `<button type="button" class="lt-seg-btn${rentSeries === v ? " active" : ""}" data-rent-series="${v}">${l}</button>`).join("")}
+      </div>
+      <div class="lt-conn-row" role="group" aria-label="Rent metric">
+        ${RENT_METRICS.map(([v, l]) => `<button type="button" class="lt-seg-btn${rentMetric === v ? " active" : ""}" data-rent-metric="${v}">${l}</button>`).join("")}
+      </div>
+      <div class="lt-conn-row rent-band">
+        <label>from <input type="number" id="rent-band-min" step="any"
+               placeholder="${band.fmt(bmin).replace(/[£+%]/g, "")}" value="${rentBand && rentBand.min != null ? rentBand.min : ""}" /></label>
+        <label>to <input type="number" id="rent-band-max" step="any"
+               placeholder="${band.fmt(bmax).replace(/[£+%]/g, "")}" value="${rentBand && rentBand.max != null ? rentBand.max : ""}" /></label>
+        <button type="button" class="lt-seg-btn" id="rent-band-clear">Clear</button>
+      </div>
+      <div id="rent-legend" class="rent-legend">${rentLegendInnerHTML()}</div>
+    </div>`;
+}
+
+
 const OVERLAY_FETCH_MARGIN = 0.3;     // pad each fetch 30% beyond the viewport
 const overlayState = {};              // key -> { on, opacity, fetched:{w,s,e,n,z} }
 
@@ -2489,11 +2641,9 @@ function renderOverlay(key, def, fc) {
       ? ["step", ["coalesce", ["to-number", ["get", "hdt_pct"]], 0],
          "#e03131", 75, "#e8590c", 85, "#f59f00", 95, "#2f9e44"]
       : def.dataset === "la_rents"
-      // Sequential rent choropleth: light teal cheap -> deep teal expensive.
-      ? ["case", ["!", ["has", "rent_mean"]], "rgba(160,170,175,0.4)",
-         ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "rent_mean"]], 0],
-          500, "#d5eef0", 800, "#a3d8dc", 1100, "#6dbcc5", 1500, "#3c96a6",
-          2000, "#20707f", 3000, "#0d4a5c"]]
+      // Rents: whichever ONS series and metric the picker is on. See
+      // rentPaint — the polygons carry all nine series, so this repaints.
+      ? rentPaint()
       : (def.dataset === "lsoa_prices" || def.dataset === "lad_prices" || def.choro)
       // Sold prices / £-per-m² / trend on real boundaries. Prices key on the
       // national percentile (even spread, the deprivation-map look); trend
@@ -2714,6 +2864,7 @@ function agentRentsCardHTML(p) {
 
 function openOverlayCard(key, p, lngLat) {
   hoverCardHide();
+  if (key === "la_rents") { openRentCard(p, lngLat); return; }
   if (key === "agent_rents") {
     openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, lngLat,
       agentRentsCardHTML(p));
@@ -2751,6 +2902,149 @@ function openOverlayCard(key, p, lngLat) {
     (raw ? `<details class="ovp-more"><summary>All attributes</summary>` +
            `<table class="ovp-table">${raw}</table></details>` : "") +
     `</div>`);
+}
+
+// ---- Private rents: the full ONS picture for one authority ---------------
+// The polygon already carries every series, so the breakdown renders
+// instantly; the monthly history is a separate small fetch (nine array rows
+// for the authority) that fills the chart in when it lands.
+const _piprSeriesCache = new Map();
+
+function piprSeriesFor(code) {
+  if (!code) return Promise.resolve(null);
+  if (_piprSeriesCache.has(code))
+    return Promise.resolve(_piprSeriesCache.get(code));
+  const sb = getSupabase();
+  if (!sb) return Promise.resolve(null);
+  return sb.from("pipr_series")
+    .select("series,first_period,rents,chg")
+    .eq("code", code)
+    .then(({ data }) => {
+      const by = {};
+      for (const r of data || []) by[r.series] = r;
+      const val = Object.keys(by).length ? by : null;
+      _piprSeriesCache.set(code, val);
+      return val;
+    })
+    .catch(() => null);
+}
+
+// 'YYYY-MM' n months on from first_period.
+function _piprPeriodAt(first, i) {
+  const [y, m] = String(first || "2015-01").split("-").map(Number);
+  const t = (y * 12 + (m - 1)) + i;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
+}
+
+// Compact bedroom ladder for the dense summary panels: the numbers a scheme
+// mix decision turns on, on one line. Falls back to nothing when ONS have
+// suppressed the splits for this authority.
+function rentLadderHTML(r) {
+  if (!r) return "";
+  const parts = [["b1", "1b"], ["b2", "2b"], ["b3", "3b"], ["b4", "4b+"]]
+    .filter(([k]) => r[`rent_${k}`] != null)
+    .map(([k, l]) => `${l} £${Number(r[`rent_${k}`]).toLocaleString()}`);
+  return parts.length ? parts.join(" · ") : "";
+}
+
+function rentBreakdownHTML(p) {
+  const cell = (v, f) => v == null ? '<td class="rc-na">—</td>'
+                                   : `<td>${f(v)}</td>`;
+  const pc = v => `<span class="${v > 0 ? "rc-up" : v < 0 ? "rc-dn" : ""}">${v > 0 ? "+" : ""}${v}%</span>`;
+  const rows = RENT_SERIES.map(([k, label]) => {
+    if (p[`rent_${k}`] == null) return "";
+    const on = k === rentSeries ? ' class="rc-on"' : "";
+    return `<tr${on}><th>${_esc(label)}</th>` +
+      cell(p[`rent_${k}`], v => "£" + Number(v).toLocaleString()) +
+      cell(p[`chg_${k}`], pc) + cell(p[`g5_${k}`], pc) + `</tr>`;
+  }).join("");
+  return `<table class="rc-table">
+      <thead><tr><th></th><th>£/mo</th><th>1 yr</th><th>5 yr</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+}
+
+// Inline SVG line chart of the monthly history. Two lines at most: the series
+// currently selected on the map, and "all properties" behind it as a
+// reference when a split is selected — enough to show whether this bedroom
+// count is pulling away from the local average, which is the question a BTR
+// mix decision actually turns on.
+function rentTrendSVG(by, seriesKey, w, h) {
+  const main = by[seriesKey];
+  if (!main || !Array.isArray(main.rents)) return "";
+  const ref = seriesKey !== "all" ? by.all : null;
+  const pad = { l: 34, r: 6, t: 8, b: 16 };
+  const vals = main.rents.filter(v => v != null);
+  if (vals.length < 2) return "";
+  const refVals = ref ? ref.rents.filter(v => v != null) : [];
+  const lo = Math.min(...vals, ...refVals), hi = Math.max(...vals, ...refVals);
+  const span = Math.max(1, hi - lo);
+  const n = main.rents.length;
+  const X = i => pad.l + (i / (n - 1)) * (w - pad.l - pad.r);
+  const Y = v => pad.t + (1 - (v - lo) / span) * (h - pad.t - pad.b);
+  const path = arr => {
+    let d = "", pen = false;
+    arr.forEach((v, i) => {
+      if (v == null) { pen = false; return; }
+      d += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1) + " ";
+      pen = true;
+    });
+    return d.trim();
+  };
+  // Year gridlines, thinned so the labels never collide.
+  const first = main.first_period;
+  let ticks = "";
+  const every = n > 96 ? 24 : 12;
+  for (let i = 0; i < n; i += every) {
+    const yr = _piprPeriodAt(first, i).slice(0, 4);
+    ticks += `<line x1="${X(i).toFixed(1)}" y1="${pad.t}" x2="${X(i).toFixed(1)}" y2="${h - pad.b}" class="rt-grid"/>` +
+             `<text x="${X(i).toFixed(1)}" y="${h - 4}" class="rt-tick">${yr}</text>`;
+  }
+  const last = main.rents[n - 1];
+  return `<svg class="rt" viewBox="0 0 ${w} ${h}" width="100%" height="${h}"
+       role="img" aria-label="Monthly rent history">
+    <text x="2" y="${(pad.t + 7).toFixed(1)}" class="rt-ax">£${Math.round(hi).toLocaleString()}</text>
+    <text x="2" y="${(h - pad.b).toFixed(1)}" class="rt-ax">£${Math.round(lo).toLocaleString()}</text>
+    ${ticks}
+    ${ref ? `<path d="${path(ref.rents)}" class="rt-ref"/>` : ""}
+    <path d="${path(main.rents)}" class="rt-line"/>
+    ${last != null ? `<circle cx="${X(n - 1).toFixed(1)}" cy="${Y(last).toFixed(1)}" r="2.6" class="rt-dot"/>` : ""}
+  </svg>`;
+}
+
+function openRentCard(p, lngLat) {
+  const code = p.lad_code || "";
+  const name = p.name || "Local authority";
+  const cur = RENT_SERIES_LABEL[rentSeries] || "All";
+  const head = p[`rent_${rentSeries}`];
+  const chg = p[`chg_${rentSeries}`];
+  const chartId = "rt-" + Math.random().toString(36).slice(2, 8);
+  openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, lngLat,
+    `<div class="ovp ovp2 rc" style="--ov:#0b7285">
+       <div class="ovp-kind"><span class="ovp-dot"></span>Private rents · ONS PIPR${p.asof ? " · " + _esc(p.asof) : ""}</div>
+       <div class="ovp-title">${_esc(name)}</div>
+       ${head != null ? `<div class="rc-head"><b>£${Number(head).toLocaleString()}</b><span>/month · ${_esc(cur)}</span>` +
+         (chg != null ? `<span class="rc-chg ${chg > 0 ? "rc-up" : chg < 0 ? "rc-dn" : ""}">${chg > 0 ? "+" : ""}${chg}% y/y</span>` : "") +
+         `</div>` : ""}
+       <div id="${chartId}" class="rc-chart"><div class="rc-wait">loading history…</div></div>
+       ${rentBreakdownHTML(p)}
+       <div class="rc-note">Average rent across new AND existing tenancies, from
+         administrative records. Official statistics in development; not
+         seasonally adjusted. Five-year figures are computed from the published
+         levels.</div>
+     </div>`);
+  piprSeriesFor(code).then(by => {
+    const el = document.getElementById(chartId);
+    if (!el) return;
+    if (!by) { el.innerHTML = `<div class="rc-wait">no history available</div>`; return; }
+    const svg = rentTrendSVG(by, rentSeries, 300, 108);
+    const m = by[rentSeries];
+    const months = m && Array.isArray(m.rents) ? m.rents.length : 0;
+    el.innerHTML = svg
+      ? svg + `<div class="rc-cap">${_esc(RENT_SERIES_LABEL[rentSeries] || "All")}` +
+        (rentSeries !== "all" ? ` <span class="rc-ref-key">vs all properties</span>` : "") +
+        ` · ${months} months from ${_esc(m.first_period)}</div>`
+      : `<div class="rc-wait">no history for this series</div>`;
+  });
 }
 
 // The PBSA-lens card for a university provider dot: headline student numbers
@@ -3146,10 +3440,15 @@ function buildLayersPanel() {
             </div>
           </div>`;
       }
-      rows += MAP_OVERLAYS.filter(o => o.group === g.key).map(o =>
-        ltRowHTML({ dataKey: o.key, label: o.label, color: o.color, statId: `ov-stat-${o.key}`,
-                    checked: false, opacity: OVERLAY_DEFAULT_OPACITY, opacityKey: `ov:${o.key}`,
-                    info: LAYER_INFO[o.key] })).join("");
+      rows += MAP_OVERLAYS.filter(o => o.group === g.key).map(o => {
+        const r = ltRowHTML({ dataKey: o.key, label: o.label, color: o.color,
+                              statId: `ov-stat-${o.key}`, checked: false,
+                              opacity: OVERLAY_DEFAULT_OPACITY,
+                              opacityKey: `ov:${o.key}`, info: LAYER_INFO[o.key] });
+        // The rents layer carries nine series and three metrics; a picker
+        // under its own row beats 27 toggles, and switching is a repaint.
+        return o.key === "la_rents" ? r + rentControlsHTML() : r;
+      }).join("");
       // Deprivation rides inside Plans & policy areas as its own collapsed
       // sub-section (regeneration-need context rather than a top branch).
       if (g.key === "policy") rows += deprivationSub;
@@ -3245,6 +3544,53 @@ function buildLayersPanel() {
     seg.querySelectorAll(".lt-seg-btn").forEach(b =>
       b.classList.toggle("active", b === btn));
   });
+
+  // Private rents: series row, metric row, and the focus band. One handler
+  // per concern; changing the metric clears the band because a £ threshold
+  // means nothing once the map is showing percentages.
+  const rp = document.getElementById("rent-picker");
+  if (rp) {
+    rp.addEventListener("click", e => {
+      const btn = e.target.closest(".lt-seg-btn");
+      if (!btn) return;
+      if (btn.id === "rent-band-clear") {
+        setRentBand(null);
+        const a = document.getElementById("rent-band-min");
+        const b = document.getElementById("rent-band-max");
+        if (a) a.value = ""; if (b) b.value = "";
+        return;
+      }
+      const ser = btn.dataset.rentSeries, met = btn.dataset.rentMetric;
+      if (!ser && !met) return;
+      const metricChanged = met && met !== rentMetric;
+      setRentView(ser, met);
+      btn.parentElement.querySelectorAll(".lt-seg-btn").forEach(b =>
+        b.classList.toggle("active", b === btn));
+      if (metricChanged) {
+        // The band inputs are labelled in the old metric's units — reset them
+        // rather than leave "1200" sitting in a percentage field.
+        for (const id of ["rent-band-min", "rent-band-max"]) {
+          const el = document.getElementById(id);
+          if (el) el.value = "";
+        }
+        const r = RENT_RAMPS[rentMetric] || RENT_RAMPS.rent;
+        const lo = document.getElementById("rent-band-min");
+        const hi = document.getElementById("rent-band-max");
+        if (lo) lo.placeholder = r.fmt(r.stops[0]).replace(/[£+%]/g, "");
+        if (hi) hi.placeholder = r.fmt(r.stops[r.stops.length - 1]).replace(/[£+%]/g, "");
+      }
+    });
+    const readBand = () => {
+      const a = parseFloat((document.getElementById("rent-band-min") || {}).value);
+      const b = parseFloat((document.getElementById("rent-band-max") || {}).value);
+      const min = isFinite(a) ? a : null, max = isFinite(b) ? b : null;
+      setRentBand(min == null && max == null ? null : { min, max });
+    };
+    rp.addEventListener("input", e => {
+      if (e.target.id === "rent-band-min" || e.target.id === "rent-band-max")
+        readBand();
+    });
+  }
 
   // Connectivity mode x purpose. Two rows, one handler: whichever row was
   // clicked sets its own dimension and leaves the other alone.
@@ -4463,9 +4809,17 @@ function hoverContentForOverlay(def, p) {
                 `${hh ? "household income" : "median annual pay"}${p.asof ? ` (${p.asof})` : ""}`),
             row(p.name || null, hh ? "neighbourhood (MSOA)" : "authority")];
   } else if (d === "la_rents") {
+    // Reports whatever the map is currently showing, not a fixed headline —
+    // a card that says "£1,120 average" while the map is shaded by 2-bed
+    // annual growth is worse than no card.
     title = p.name || "Local authority";
-    rows = [row(p.rent_mean != null ? `£${Number(p.rent_mean).toLocaleString()}/mo` : null, "avg rent"),
-            row(p.annual_rent_change_pct != null ? `${p.annual_rent_change_pct > 0 ? "+" : ""}${p.annual_rent_change_pct}%` : null, "year on year")];
+    const sk = rentSeries, sl = RENT_SERIES_LABEL[sk] || "All";
+    const lvl = p[`rent_${sk}`], yr = p[`chg_${sk}`], g5 = p[`g5_${sk}`];
+    kind = `Private rents · ${sl}${p.asof ? " · " + p.asof : ""}`;
+    rows = [row(lvl != null ? `£${Number(lvl).toLocaleString()}/mo` : null, "average rent"),
+            row(yr != null ? `${yr > 0 ? "+" : ""}${yr}%` : null, "year on year"),
+            row(g5 != null ? `${g5 > 0 ? "+" : ""}${g5}%` : null, "five years"),
+            row(sk !== "all" && p.rent_all != null ? `£${Number(p.rent_all).toLocaleString()}/mo` : null, "all properties")];
   } else if (d === "planit_rates") {
     title = p.name || "Authority";
     kind = "Planning approval rate — last 3 years";
@@ -4914,6 +5268,8 @@ async function showSpotSummary(lngLat, point) {
     const ch = areas.la_rents.annual_rent_change_pct;
     houseSec += line("avg private rent", strong(`£${Number(areas.la_rents.rent_mean).toLocaleString()}/mo`) +
       (ch != null ? ` <span class="sp-dim">${ch > 0 ? "+" : ""}${_esc(ch)}% y/y</span>` : ""));
+    const ladder = rentLadderHTML(areas.la_rents);
+    if (ladder) houseSec += line("rent by bedrooms", `<span class="sp-dim">${ladder}</span>`);
   }
   if (ps && ps.brownfield_nearby > 0)
     houseSec += line("brownfield sites", strong(String(ps.brownfield_nearby)) + ` <span class="sp-dim">within 800 m</span>`);
@@ -14379,6 +14735,8 @@ async function uniPanelHydrate(p, lng, lat) {
       const ch = areas.la_rents.annual_rent_change_pct;
       html += line("avg private rent", strong(`£${Number(areas.la_rents.rent_mean).toLocaleString()}/mo`) +
         (ch != null ? ` <span class="sp-dim">${ch > 0 ? "+" : ""}${_esc(ch)}% y/y</span>` : ""));
+      const ladder = rentLadderHTML(areas.la_rents);
+      if (ladder) html += line("rent by bedrooms", `<span class="sp-dim">${ladder}</span>`);
     }
     if (areas.ptal) html += line("PTAL at HQ", strong(String(areas.ptal.ptal ?? "")));
     if (areas.article4) html += line("Article 4", strong("yes — HMO controls likely"));
@@ -15093,9 +15451,14 @@ function deepGbShare() {
 }
 
 // ---- Rental evidence (ONS Price Index of Private Rents) -------------------
-// Accredited official statistics, monthly, per local authority, split by
-// bedrooms and property type (pipr_rents, migration 0075). This is the
-// backable basis the BTR viability mode capitalises — not a scrape.
+// Monthly, per local authority, split by bedrooms and property type
+// (pipr_rents; migrations 0075 and 0081). The backable basis the BTR
+// viability mode capitalises — not a scrape: PIPR is built from
+// administrative rent records and covers both new and existing tenancies.
+// STATUS: "official statistics in development", NOT accredited (0075's
+// comment said accredited; the workbook's own cover sheet does not). It is
+// also not seasonally adjusted. Both matter when the number is quoted into
+// an appraisal, so the UI says so wherever it is shown.
 let RENTS = null;
 let _rentsPromise = null;
 function ensureRents() {
@@ -17334,6 +17697,8 @@ map.on("load", async () => {
 // Test/debug handle: module-scoped internals reachable from the console and
 // the offline smoke harness. Read-only usage only — not a public API.
 window.__mm = { MAP_OVERLAYS, LAYER_INFO, renderOverlay, hoverContentForOverlay,
+                openOverlayCard, openRentCard, rentTrendSVG, rentBreakdownHTML,
+                piprSeriesFor, rentKey, setRentView, setRentBand,
                 setOverlayOpacity, overlayDef, pf, pfPrintReport, _cellsToPoints,
                 deep, renderDevelopableLayer, renderPublicLandLayer,
                 renderDeepDiveLegend, renderPublicLandSummary,
