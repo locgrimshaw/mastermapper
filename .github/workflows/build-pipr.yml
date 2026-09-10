@@ -1,0 +1,97 @@
+name: Build ONS private rents (PIPR)
+
+# Downloads the latest ONS "Price Index of Private Rents, UK: monthly price
+# statistics" workbook, parses it, and loads two tables into Supabase:
+#
+#   pipr_rents   the latest published month — £/calendar month per area for
+#                all nine series (all properties; 1/2/3/4+ bedrooms;
+#                detached, semi-detached, terraced, flat or maisonette).
+#                This is what the BTR viability mode capitalises.
+#   pipr_series  the full monthly history back to January 2015, one row per
+#                (area, series) with the months as arrays.
+#
+# It also writes supabase/pipr_la_props.json, which the map layer build reads.
+# Loading the LAYER itself is a separate run: after this finishes, run
+# "Load datasets into Supabase" with datasets = "lad_boundary,la_rents".
+#
+# THERE IS NO STABLE ONS DOWNLOAD URL for PIPR — every monthly release lands
+# on its own dated path with an unpredictable filename suffix — so the build
+# discovers the newest release by parsing the dataset landing page. If ONS
+# restructure that page this fails loudly rather than silently loading stale
+# figures; pipeline/pipr.py::latest_release_url is the thing to fix.
+#
+# ONS publish monthly, around the middle of the month. The cron runs on the
+# 20th to sit safely after that, and the workflow is also dispatchable.
+#
+# Source: ONS, Crown copyright, Open Government Licence v3.0.
+
+on:
+  schedule:
+    - cron: "40 4 20 * *"
+  workflow_dispatch:
+    inputs:
+      src:
+        description: "Optional: URL or repo path of a specific PIPR .xlsx (blank = discover the latest release)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install openpyxl
+
+      # Parser regression test FIRST — it runs on a synthetic workbook and
+      # takes a second, so a classification or geography mistake fails here
+      # rather than after an 18 MB download and a table replacement.
+      - name: Test the PIPR parser
+        run: python pipeline/test_pipr.py
+
+      - name: Build the rent tables
+        env:
+          PIPR_SRC: ${{ inputs.src }}
+        run: |
+          set -e
+          if [ -n "$PIPR_SRC" ] && echo "$PIPR_SRC" | grep -q '^https\?://'; then
+            mkdir -p data/raw
+            curl -fL --retry 3 --retry-delay 10 -o data/raw/pipr.xlsx "$PIPR_SRC"
+            export PIPR_SRC=data/raw/pipr.xlsx
+          fi
+          python pipeline/build_pipr.py
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing secrets. Add SUPABASE_URL and SUPABASE_SERVICE_KEY"
+            echo "::error::under Settings > Secrets and variables > Actions, then re-run."
+            exit 1
+          fi
+          python supabase/loaders/load_pipr.py
+
+      # The map layer needs the polygons rebuilt with the new props. Kept as
+      # an artifact rather than committed, so the datasets run can pick it up.
+      - name: Upload the map-layer props
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipr_la_props
+          path: supabase/pipr_la_props.json
+          retention-days: 30
+
+      - name: Next step
+        run: |
+          echo "::notice::pipr_rents and pipr_series are loaded. To refresh the"
+          echo "::notice::map layer, run 'Load datasets into Supabase' with"
+          echo "::notice::datasets = lad_boundary,la_rents"

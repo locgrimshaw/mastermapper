@@ -19,7 +19,8 @@ name: Load datasets into Supabase
 #   TEC_SRC         NESO TEC Register CSV export
 #   GSP_SRC         NESO "GIS Boundaries for GB Grid Supply Points" GeoJSON
 #                   (only if the guessed default resource hash 404s)
-#   ONS_RENTS_SRC   latest ONS PIPR local-authority rents CSV
+#   PIPR_SRC        a specific ONS PIPR .xlsx (optional — la_rents
+#                   discovers the newest release by itself)
 #   WATER_SRC       EA CAMS water resource availability GeoJSON/SHP
 # The OSM power extract is the one source prepared IN THIS WORKFLOW (osmium
 # needs the ~1.8 GB Geofabrik UK PBF): see the "Extract OSM power features"
@@ -244,7 +245,7 @@ jobs:
           PTAL_SRC: ${{ vars.PTAL_SRC }}
           GSP_SRC: ${{ vars.GSP_SRC }}
           TEC_SRC: ${{ vars.TEC_SRC }}
-          ONS_RENTS_SRC: ${{ vars.ONS_RENTS_SRC }}
+          PIPR_SRC: ${{ vars.PIPR_SRC }}
           LAD_BOUNDARIES_SRC: ${{ vars.LAD_BOUNDARIES_SRC }}
           ALC_SRC: ${{ vars.ALC_SRC }}
           WATER_SRC: ${{ vars.WATER_SRC }}

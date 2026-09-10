@@ -19,7 +19,7 @@ DATASETS env var; blank = all. Env override convention: <DATASET-KEY
 UPPERCASED>_SRC (e.g. ARTICLE4_SRC), accepting either a URL (downloaded to
 data/raw/) or a local file path. A few datasets also honour the shorter
 historical names used in their docs (GSP_SRC, TEC_SRC, WATER_SRC,
-ONS_RENTS_SRC, LAD_BOUNDARIES_SRC, PTAL_SRC, OSM_POWER_GEOJSON).
+PIPR_SRC, LAD_BOUNDARIES_SRC, PTAL_SRC, OSM_POWER_GEOJSON).
 
 REGISTRY (dataset -> default source; all downloads land in data/raw/):
 
@@ -67,10 +67,13 @@ REGISTRY (dataset -> default source; all downloads land in data/raw/):
   Land / values:
     lad_boundary ONS Open Geography LAD boundaries (ArcGIS FeatureServer,
                  paginated). Emitted whenever the boundaries download works.
-    la_rents     ONS_RENTS_SRC (latest PIPR local-authority rents CSV — no
-                 stable URL, skip w/ warning if unset) joined by LAD code onto
-                 the lad_boundary polygons. props: rent_mean, rent_lq and
-                 per-bedroom breakdowns as detected.
+    la_rents     ONS Price Index of Private Rents, joined by LAD code onto the
+                 lad_boundary polygons. The newest monthly release is
+                 discovered from the ONS landing page (there is no stable
+                 download URL); PIPR_SRC pins a specific workbook. props carry
+                 EVERY published series — rent_/chg_/g5_ for all properties,
+                 1/2/3/4+ bedrooms and detached/semi/terraced/flat — so the
+                 map's series selector repaints without refetching.
     alc          Natural England Provisional ALC (ArcGIS FeatureServer,
                  paginated). Polygons; props: alc_grade.
     water_availability
@@ -1411,8 +1414,9 @@ def build_tec_register():
 
 
 def build_rents_group():
-    """lad_boundary (always, when the boundaries fetch works) and la_rents
-    (when an ONS PIPR rents CSV is supplied and joins by LAD code)."""
+    """lad_boundary (always, when the boundaries fetch works) and la_rents,
+    the ONS Price Index of Private Rents joined onto those polygons by LAD
+    code. Run pipeline/build_pipr.py first — it writes the props this reads."""
     out = {}
     bpath, bhow = _resolve_arcgis_source(
         "lad_boundary", ["LAD_BOUNDARY_SRC", "LAD_BOUNDARIES_SRC"],
@@ -1444,80 +1448,54 @@ def build_rents_group():
         props_fn=lambda f: {"lad_code": _cell(f, code_col)})
     _note("lad_boundary", bhow, len(out["lad_boundary"]))
 
-    rpath, rhow = _resolve_source("la_rents", ["LA_RENTS_SRC", "ONS_RENTS_SRC"],
-                                  None, "ons-la-rents.csv")
-    if rpath is None:
-        _warn("la_rents", "no rents CSV — set ONS_RENTS_SRC to the latest ONS"
-              " PIPR (Price Index of Private Rents) local-authority-level CSV"
-              " (no stable download URL; grab it from the ONS PIPR release"
-              " page). lad_boundary was still built so the boundaries layer"
-              " works alone.")
-        _note("la_rents", "ONS_RENTS_SRC not set")
-        return out
-    print(f"  [la_rents] reading {rpath.name} ({rhow}) ...")
-    df = _read_csv(rpath)
-    rcode_col = _find_col(df, ["area code", "areacd", "ons code", "lad code",
-                               "ladcd", "local authority code", "geography code",
-                               "code"], contains=True)
-    if rcode_col is None:
-        _warn("la_rents", f"no LAD-code column detected in {rpath.name} "
-              f"(columns: {list(df.columns)[:12]}...)")
-        _note("la_rents", "unrecognised rents CSV columns")
-        return out
-
-    # Rent value columns, detected defensively. Two shapes are handled:
-    #  wide  — one row per LAD, columns like 'Mean rent', 'Lower quartile',
-    #          '1 bedroom', ...
-    #  long  — many rows per LAD with a bedrooms/category column and a single
-    #          rent/price value column.
-    bed_cat_col = _find_col(df, ["bedroom category", "bedrooms", "bedroom",
-                                 "property type"], contains=True)
-    value_cols = [c for c in df.columns if c not in (rcode_col, bed_cat_col)
-                  and re.search(r"rent|price|mean|median|quartile|bed",
-                                str(c).lower())]
-    props_by_code = {}
-    if bed_cat_col and value_cols:
-        # long format: fold each (code, bedroom-category) row into props.
-        val_col = value_cols[0]
-        for c in value_cols:
-            if re.search(r"rent|price", str(c).lower()):
-                val_col = c
-                break
-        for _, r in df.iterrows():
-            code = _cell(r, rcode_col)
-            v = _num(r, val_col)
-            if not code or v is None:
-                continue
-            cat = _slug_key(_cell(r, bed_cat_col)) or "all"
-            p = props_by_code.setdefault(code, {})
-            p[f"rent_{cat}"] = v
-            if "all" in cat:
-                p.setdefault("rent_mean", v)
-    elif value_cols:
-        # wide format: one row per LAD.
-        for _, r in df.iterrows():
-            code = _cell(r, rcode_col)
-            if not code:
-                continue
-            p = props_by_code.setdefault(code, {})
-            for c in value_cols:
-                v = _num(r, c)
-                if v is None:
-                    continue
-                lc = str(c).lower()
-                if "mean" in lc or "average" in lc:
-                    p["rent_mean"] = v
-                elif "lower quartile" in lc or re.search(r"\blq\b", lc):
-                    p["rent_lq"] = v
-                else:
-                    p[_slug_key(c)] = v
+    # --- la_rents: the full PIPR picture, not just a headline ------------
+    # pipeline/build_pipr.py parses the ONS workbook and writes every series
+    # it publishes (all properties; 1/2/3/4+ bedrooms; detached, semi,
+    # terraced, flat) with its annual change and a five-year growth figure.
+    # Putting ALL of it on the polygon is deliberate: the map's bedroom and
+    # property-type selector then repaints from features already loaded
+    # instead of refetching, the same trick the price choropleths use.
+    #
+    # This replaced a defensive column-sniffer over a hand-made CSV that only
+    # ever recovered a mean and an annual change, and needed someone to
+    # download a spreadsheet by hand first.
+    props_path = ROOT / "supabase" / "pipr_la_props.json"
+    if props_path.exists():
+        payload = json.loads(props_path.read_text(encoding="utf-8"))
+    else:
+        # No prepared props: fetch and parse the workbook here, the same way
+        # every other dataset in this module resolves its own default source.
+        # That keeps `--datasets la_rents` a one-command refresh instead of
+        # requiring build_pipr.py to have been run in the same checkout.
+        try:
+            sys.path.insert(0, str(ROOT / "pipeline"))
+            import pipr as _pipr
+            wb, how = _pipr.fetch_workbook(ROOT / "data" / "raw" / "pipr.xlsx",
+                                           os.environ.get("PIPR_SRC") or None)
+            print(f"  [la_rents] parsing PIPR workbook ({how}) ...")
+            _areas = _pipr.read_table1(wb)
+            payload = _pipr.build_la_props(_areas, _pipr.periods_of(_areas))
+        except Exception as exc:                      # noqa: BLE001
+            _warn("la_rents", f"could not obtain the ONS PIPR workbook: {exc}."
+                  " lad_boundary was still built so the boundaries layer"
+                  " works alone.")
+            _note("la_rents", "PIPR workbook unavailable")
+            return out
+    props_by_code = payload.get("areas") or {}
+    asof = payload.get("asof")
     if not props_by_code:
-        _warn("la_rents", "no usable rent values detected in the CSV")
-        _note("la_rents", "no rent values detected")
+        _warn("la_rents", "pipr_la_props.json carries no areas")
+        _note("la_rents", "no rent values")
         return out
 
     joined = gdf[gdf[code_col].astype(str).isin(props_by_code)] if code_col else gdf
-    print(f"  [la_rents] {len(joined)}/{len(gdf)} LADs matched a rents row")
+    missing = len(props_by_code) - len(joined)
+    print(f"  [la_rents] {len(joined)}/{len(gdf)} LAD polygons matched a PIPR "
+          f"area (data month {asof})")
+    if missing > 0:
+        # Not fatal, but worth saying out loud: a PIPR area with no polygon is
+        # invisible on the map however good the number is.
+        print(f"  [la_rents] {missing} PIPR area(s) had no matching polygon")
 
     def rent_props(f):
         p = dict(props_by_code.get(_cell(f, code_col), {}))
@@ -1526,7 +1504,8 @@ def build_rents_group():
 
     out["la_rents"] = _emit(joined, "la_rents", name_col=name_col,
                             id_col=code_col, want="polygon", props_fn=rent_props)
-    _note("la_rents", f"{rhow}; joined on {rcode_col}", len(out["la_rents"]))
+    _note("la_rents", f"ONS PIPR {asof} via pipeline/build_pipr.py",
+          len(out["la_rents"]))
     return out
 
 

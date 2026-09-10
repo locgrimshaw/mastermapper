@@ -112,3 +112,6 @@ node_modules/
 # Loader import CSVs are build artifacts (pipeline/build_*.py write them; CI
 # rebuilds them fresh) — the voa_offices one alone is ~76 MB.
 supabase/datasets_import.csv
+supabase/pipr_rents_import.csv
+supabase/pipr_series_import.csv
+supabase/pipr_la_props.json
