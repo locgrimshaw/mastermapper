@@ -2642,6 +2642,10 @@ footer {
 .rent-band input::-webkit-outer-spin-button,
 .rent-band input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .rent-band input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+/* Placeholders show the ramp's ends as a hint. Keep them clearly lighter than
+   a typed value — at equal weight "from 5 to 10" reads as a set range when
+   only the 5 was entered. */
+.rent-band input::placeholder { color: var(--text-dim); opacity: 0.55; }
 .rent-legend { margin-top: 7px; }
 .rent-legend .ramp { display: flex; height: 9px; border-radius: 2px;
                      overflow: hidden; }

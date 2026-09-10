@@ -1942,12 +1942,38 @@ function rentLegendInnerHTML() {
     `<span style="background:${c}"></span>`).join("");
   const lo = r.fmt(r.stops[0]);
   const hi = r.fmt(r.stops[r.stops.length - 1]);
-  const band = rentBand
-    ? ` · showing ${rentBand.min != null ? r.fmt(rentBand.min) : "any"}–${rentBand.max != null ? r.fmt(rentBand.max) : "any"}`
-    : "";
+  let band = "";
+  if (rentBand) {
+    const from = rentBand.min != null ? r.fmt(rentBand.min) : "any";
+    const to = rentBand.max != null ? r.fmt(rentBand.max) : "any";
+    // Say how many authorities survive the band. A filter that only changes
+    // what is coloured leaves you counting polygons by eye; this makes it an
+    // answer. Counted over what is loaded for the current view, and said so.
+    const c = rentBandCount();
+    band = ` · ${from}–${to}` +
+      (c ? ` · <b>${c.pass}</b> of ${c.total} in view` : "");
+  }
   return `<div class="ramp">${sw}</div>
     <div class="scale"><span>&lt;${lo}</span><span>${hi}+</span></div>
     <div class="legend-note">${r.unit}${band}</div>`;
+}
+
+function rentBandCount() {
+  try {
+    const src = map && map.getSource("ov-la_rents-src");
+    const feats = (src && src._data && src._data.features) || [];
+    if (!feats.length) return null;
+    const key = rentKey();
+    let total = 0, pass = 0;
+    for (const f of feats) {
+      const v = f.properties && f.properties[key];
+      if (v == null) continue;
+      total++;
+      if ((rentBand.min == null || v >= rentBand.min)
+          && (rentBand.max == null || v <= rentBand.max)) pass++;
+    }
+    return total ? { pass, total } : null;
+  } catch (_) { return null; }
 }
 
 // Series x metric picker plus a focus band, rendered under the rents row.
