@@ -1,5 +1,13 @@
 import { initLondonSift } from "./londonsift.js?v=ls9";
 
+// Front-end feature switches. The generative designers — the housing layout
+// generator (layoutgen.js) and the data-centre campus generator (dcgen.js) —
+// are withdrawn from the app for now: their code stays, but no button opens
+// them and layouts saved from them are not drawn. Set
+// FEATURES: { generativeDesign: true } in config.js to bring them back.
+const FEATURES = Object.assign({ generativeDesign: false },
+  (window.MASTERMAPPER_CONFIG && window.MASTERMAPPER_CONFIG.FEATURES) || {});
+
 // app.js — Welfare Mapper prototype
 // England socio-economic site appraisal tool.
 //
@@ -8905,6 +8913,12 @@ const _SL_BTYPE_COLORS = ["match", ["get", "btype"],
   "det", "#e8590c", "semi", "#f59f00", "terr", "#fab005", "flat", "#7048e8",
   "#e8590c"];
 function renderSavedLayoutsOnMap() {
+  // Generator output: hidden with the generators (kept in storage).
+  if (!FEATURES.generativeDesign) {
+    const chip = document.getElementById("sl-chip");
+    if (chip) chip.remove();
+    return;
+  }
   if (!map.isStyleLoaded && !map.getStyle) return;
   const feats = [];
   for (const sl of _savedLayouts)
@@ -9248,13 +9262,13 @@ function openCompileModal() {
               <input type="number" id="cm-netpct" min="20" max="100" step="1" value="${_compileState.netPct}"></label>
           </div>
           <div id="cm-out"></div>
-          <div class="asm-actions" style="margin-top:10px">
+          ${FEATURES.generativeDesign ? `<div class="asm-actions" style="margin-top:10px">
             <button type="button" id="cm-layout" class="plot-mode-btn">Generative layout →</button>
-          </div>
+          </div>` : ""}
           <p class="hint" style="margin-top:6px">Appraisal uses the sift's viability
             variables (tenure ${SIFT.assumptions && SIFT.assumptions.tenure === "btr" ? "build-to-rent" : "build-to-sell"})
-            and this catchment's sales evidence. The layout tool tests real road-and-plot
-            arrangements against these numbers.</p>
+            and this catchment's sales evidence.${FEATURES.generativeDesign ? ` The layout tool tests real road-and-plot
+            arrangements against these numbers.` : ""}</p>
         </div>
       </div>
     </div>`;
@@ -9293,7 +9307,7 @@ function openCompileModal() {
   m.querySelector("#cm-netpct").addEventListener("input", recompute);
   m.querySelector("#cm-close").addEventListener("click", () => { m.hidden = true; });
   m.addEventListener("click", e => { if (e.target === m) m.hidden = true; });
-  m.querySelector("#cm-layout").addEventListener("click", async (e) => {
+  m.querySelector("#cm-layout")?.addEventListener("click", async (e) => {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading layout engine…";
     try {
@@ -17615,7 +17629,7 @@ function openDcCompileModal() {
             <label><span>Value <small>£M / MW IT</small></span>
               <input type="number" id="dcm-value" min="4" max="25" step="0.5" value="${_dcCompileState.valuePerMw}"></label>
           </div>
-          <button type="button" id="dcm-layout" class="plot-mode-btn">Generative DC layout →</button>
+          ${FEATURES.generativeDesign ? `<button type="button" id="dcm-layout" class="plot-mode-btn">Generative DC layout →</button>` : ""}
         </div>
         <div class="cm-right"><div id="dcm-out"></div></div>
       </div>
@@ -17647,14 +17661,15 @@ function openDcCompileModal() {
       + cell(money(value), "stabilised value")
       + cell(margin.toFixed(0) + "%", "margin on capex", margin >= 20 ? "cm-sg" : margin >= 8 ? "cm-sa" : "cm-sr")
       + `</div>
-      <p class="hint">Screening arithmetic only — the layout generator draws the campus and
-      re-derives capacity from what actually fits; grid demand is the number for the DNO conversation.</p>`;
+      <p class="hint">Screening arithmetic only${FEATURES.generativeDesign
+        ? " — the layout generator draws the campus and re-derives capacity from what actually fits"
+        : ""}; grid demand is the number for the DNO conversation.</p>`;
   };
   ["#dcm-netpct", "#dcm-mwha", "#dcm-pue", "#dcm-cost", "#dcm-value"].forEach(id =>
     m.querySelector(id).addEventListener("input", recompute));
   m.querySelector("#dcm-close").addEventListener("click", () => { m.hidden = true; });
   m.addEventListener("click", e => { if (e.target === m) m.hidden = true; });
-  m.querySelector("#dcm-layout").addEventListener("click", async (e) => {
+  m.querySelector("#dcm-layout")?.addEventListener("click", async (e) => {
     const b = e.currentTarget;
     b.disabled = true; b.textContent = "Loading DC layout engine…";
     try {
