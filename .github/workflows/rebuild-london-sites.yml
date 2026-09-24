@@ -2,9 +2,10 @@ name: Rebuild London sites
 
 # Rebuilds london_sites — the table behind the "London sites" sifter
 # (migration 0083, web/src/londonsift.js) — from the layers already in
-# Supabase. Run it after any of its inputs change: brownfield registers, the
-# OSM low-value land layers, PTAL, connectivity, rents, VOA offices, prices,
-# constraints, or the transit network.
+# Supabase, after refreshing the GLA London Plan layers (0084). Run it after
+# any of its inputs change: brownfield registers, the OSM low-value land
+# layers, PTAL, connectivity, rents, VOA offices, prices, constraints, or the
+# transit network.
 #
 # With "refresh_transit" ticked it first re-pulls the Tube / DLR / Overground
 # / Elizabeth line / tram network from the TfL API
@@ -82,6 +83,11 @@ jobs:
             echo "— transit graph from $url"
             call rebuild_london_transit "{\"p_url\":\"$url\"}"
           fi
+          # London Plan designations straight from the GLA planning data map
+          # (Opportunity Areas, SIL, Metropolitan Open Land) — see 0084.
+          call load_gla_planning_layer '{"p_dataset":"gla_opportunity_area","p_layer":103}'
+          call load_gla_planning_layer '{"p_dataset":"gla_sil","p_layer":206}'
+          call load_gla_planning_layer '{"p_dataset":"gla_mol","p_layer":211}'
           echo "— base"
           call rebuild_london_sites '{"p_stage":"base"}'
           max=$(curl -sS "$SUPABASE_URL/rest/v1/london_sites?select=id&order=id.desc&limit=1" \

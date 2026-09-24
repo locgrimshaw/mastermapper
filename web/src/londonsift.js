@@ -113,14 +113,16 @@ const GATE_DEFS = {
   headroom:    { title: "Intensification headroom", metrics: ["headroom"],
                  about: "How much taller the neighbourhood is than the site: the 75th-percentile storey count of buildings within ~300 m minus the site's own average. A low shed among mid-rise blocks scores high." },
   constraints: { title: "Constraints", special: "constraints",
-                 about: "Remove sites under hard or costly designations. Flood zones, conservation areas and listed buildings are tested against the site; Article 4 directions in London mostly remove office-to-residential permitted development." },
+                 about: "Remove sites under hard or costly designations. Strategic Industrial Locations are protected for industry and logistics (London Plan E5) and Metropolitan Open Land has Green Belt-level protection (G3); both are tested against the whole plot, so a site clipping one is flagged. Flood zones, conservation areas and listed buildings are tested against the site; Article 4 directions in London mostly remove office-to-residential permitted development." },
   policy:      { title: "Policy areas & ownership", special: "policy",
-                 about: "Keep only sites inside the Central Activities Zone, a Mayoral development corporation (LLDC, OPDC), or on public land (council and other public-body titles)." },
+                 about: "Keep only sites inside a London Plan Opportunity Area (the capital's planned growth locations), the Central Activities Zone, a Mayoral development corporation (LLDC, OPDC), or on public land (council and other public-body titles). Several ticks = any of them." },
   borough:     { title: "Boroughs", special: "borough",
                  about: "Limit the sift to chosen boroughs." },
 };
 
 const CONSTRAINT_OPTS = [
+  { key: "in_sil", label: "Strategic Industrial Location" },
+  { key: "in_mol", label: "Metropolitan Open Land" },
   { key: "flood3", label: "Flood zone 3" },
   { key: "flood2", label: "Flood zone 2" },
   { key: "conservation", label: "Conservation area" },
@@ -130,6 +132,7 @@ const CONSTRAINT_OPTS = [
   { key: "aqma", label: "Air quality management area" },
 ];
 const POLICY_OPTS = [
+  { key: "in_oa", label: "Opportunity Area" },
   { key: "in_caz", label: "Central Activities Zone" },
   { key: "in_devcorp", label: "Development corporation" },
   { key: "public_land", label: "Public land" },
@@ -151,8 +154,8 @@ function defaultGate(key, over = {}) {
     g.excludePermissioned = false;
     g.mode = "filter";
   }
-  if (d.special === "constraints") g.exclude = ["flood3", "listed"];
-  if (d.special === "policy") g.require = ["in_caz"];
+  if (d.special === "constraints") g.exclude = ["in_sil", "in_mol", "flood3", "listed"];
+  if (d.special === "policy") g.require = ["in_oa"];
   if (d.special === "borough") g.boroughs = [];
   return Object.assign(g, over);
 }
@@ -177,7 +180,7 @@ const PRESETS = {
     defaultGate("office", { mode: "filter", metric: "office_voa_pm2", value: 300, keepMissing: false }),
     defaultGate("conn", { mode: "score", metric: "conn_emp", value: 90 }),
     defaultGate("growth", { mode: "score", metric: "approval_pct", value: 85 }),
-    defaultGate("constraints", { mode: "filter", exclude: ["flood3", "listed"] }),
+    defaultGate("constraints", { mode: "filter", exclude: ["in_sil", "in_mol", "flood3", "listed"] }),
     defaultGate("resi"), defaultGate("walk"), defaultGate("price"), defaultGate("headroom"),
     defaultGate("policy"), defaultGate("borough"),
   ] },
@@ -189,12 +192,12 @@ const PRESETS = {
     defaultGate("growth", { mode: "score", metric: "rent_g5", value: 25 }),
     defaultGate("headroom", { mode: "score" }),
     defaultGate("walk", { mode: "score" }),
-    defaultGate("constraints", { mode: "filter", exclude: ["flood3", "listed"] }),
+    defaultGate("constraints", { mode: "filter", exclude: ["in_sil", "in_mol", "flood3", "listed"] }),
     defaultGate("conn"), defaultGate("office"), defaultGate("price"), defaultGate("policy"), defaultGate("borough"),
   ] },
   broad: { label: "Broad screen", gates: [
     defaultGate("land", { types: LAND_TYPES.map(t => t.key), minHa: 0.25 }),
-    defaultGate("constraints", { mode: "filter", exclude: ["flood3"] }),
+    defaultGate("constraints", { mode: "filter", exclude: ["in_mol", "flood3"] }),
     defaultGate("z1", { mode: "score" }),
     defaultGate("ptal", { mode: "score" }),
     defaultGate("conn", { mode: "score" }),
@@ -263,7 +266,7 @@ export function initLondonSift(deps) {
         <button type="button" id="ls-export">Export CSV</button>
         <button type="button" class="ghost" id="ls-reset">Reset to preset</button>
       </div>
-      <p class="hint ls-foot">Sources: MHCLG brownfield registers, OpenStreetMap, OS Open Greenspace, TfL (PTAL, timetables), DfT connectivity metric, ONS private rents, VOA rating list, agent office reports, HM Land Registry, planning.data.gov.uk. Borough-level figures (rents, approval rate, plan supply) apply to every site in the borough.</p>
+      <p class="hint ls-foot">Sources: MHCLG brownfield registers, OpenStreetMap, OS Open Greenspace, TfL (PTAL, timetables), DfT connectivity metric, ONS private rents, VOA rating list, agent office reports, HM Land Registry, planning.data.gov.uk, GLA planning data map (Opportunity Areas, SIL, MOL). Borough-level figures (rents, approval rate, plan supply) apply to every site in the borough.</p>
     </div>`;
 
   const $ = id => document.getElementById(id);
@@ -784,6 +787,8 @@ export function initLondonSift(deps) {
       `<div class="ovp-stat"><div class="ovp-sv">${v}</div><div class="ovp-sk">${escape(k)}</div></div>`;
     const f = (k, v) => v == null ? null : METRICS[k].fmt(v);
     const flags = [
+      r.in_oa && `Opportunity Area${r.oa_name ? ": " + r.oa_name : ""}`,
+      r.in_sil && "Strategic Industrial Location", r.in_mol && "Metropolitan Open Land",
       r.in_caz && "CAZ", r.in_devcorp && "Development corporation", r.public_land && "Public land",
       r.flood3 && "Flood zone 3", !r.flood3 && r.flood2 && "Flood zone 2", r.conservation && "Conservation area",
       (r.listed_n || 0) > 0 && `${r.listed_n} listed building${r.listed_n > 1 ? "s" : ""}`,
@@ -845,7 +850,7 @@ export function initLondonSift(deps) {
       "ptal", "ptal_ai", "z1_min", "z1_via", "stn_name", "stn_m", "conn_pt", "conn_emp", "conn_all",
       "resi_rent", "resi_rent_2b", "office_submkt", "office_prime", "office_mid", "office_voa_pm2", "office_n",
       "price_ppm2", "price_trend", "rent_chg", "rent_g5", "approval_pct", "plan_vs_lhn", "land_value", "cil",
-      "in_caz", "in_devcorp", "public_land", "article4", "conservation", "listed_n", "flood3", "flood2", "tpo", "aqma",
+      "in_oa", "oa_name", "in_sil", "in_mol", "in_caz", "in_devcorp", "public_land", "article4", "conservation", "listed_n", "flood3", "flood2", "tpo", "aqma",
       "storeys_site", "storeys_ctx", "dwellings_max", "permission"];
     const q = v => v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
     const lines = [cols.join(",")];

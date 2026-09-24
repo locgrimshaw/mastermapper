@@ -27,7 +27,10 @@ does the interactive scoring and reporting.
   (brownfield register, derelict and underused built land, green space, grey
   belt) through reorderable gates: PTAL, DfT connectivity, door-to-Zone-1
   travel time, residential and office rents, growth, constraints and height
-  headroom. Each gate filters, scores or is off; gate order sets the funnel
+  headroom, plus London Plan designations (Opportunity Areas, Strategic
+  Industrial Locations, Metropolitan Open Land — also available as data
+  layers, loaded from the GLA planning data map by migration 0084). Each gate
+  filters, scores or is off; gate order sets the funnel
   and the ranking weights. Presets for office-led, build-to-rent and broad
   screens; export the ranked shortlist as CSV. Data: `london_sites`
   (migration 0083), rebuilt by the "Rebuild London sites" workflow; Zone 1
