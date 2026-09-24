@@ -23,6 +23,11 @@ window.MASTERMAPPER_CONFIG = {
   // the frontend so they don't need to ship ~130 MB of data files.
   DATA_BASE: "",
 
+  // Front-end feature switches (see FEATURES in web/src/app.js). The housing
+  // and data-centre generative designers are withdrawn from the app for now;
+  // their code is kept. Uncomment to bring them back:
+  //   FEATURES: { generativeDesign: true },
+
   // Site-wide viability defaults: every key here overrides the built-in
   // figure in VIAB_SCHEMA (web/src/app.js) as the value ALL users start
   // from — the sift, the deep-dive appraisal and site reports all read them.
