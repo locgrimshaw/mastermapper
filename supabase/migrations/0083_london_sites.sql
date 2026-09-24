@@ -20,8 +20,9 @@
 --
 -- Build order (service role): rebuild_london_transit(), then
 -- rebuild_london_sites(stage) for each stage in turn — 'base', 'access',
--- 'market', 'growth', 'policy', 'form'. Stages are separate calls so each stays
--- inside the API statement timeout.
+-- 'market', 'growth', 'policy', 'form'. Every stage after 'base' also takes an
+-- id range (p_from, p_to), so a caller behind the API gateway's ~100 s request
+-- limit can run it in chunks (.github/workflows/rebuild-london-sites.yml).
 
 -- ───────────────────────── transit graph ─────────────────────────
 
@@ -237,7 +238,9 @@ do $$ begin
   create policy london_transit_node_read on public.london_transit_node for select using (true);
 exception when duplicate_object then null; end $$;
 
-create or replace function public.rebuild_london_sites(p_stage text)
+drop function if exists public.rebuild_london_sites(text);
+create or replace function public.rebuild_london_sites(
+  p_stage text, p_from int default 0, p_to int default 2147483647)
 returns jsonb
 language plpgsql
 set search_path = public, extensions
@@ -258,7 +261,10 @@ begin
     insert into london_sites (src, src_id, cat, subtype, name, pdl, area_ha, geom, pt,
                               dwellings_max, permission, public_land)
     select 'register', b.id::text, 'brownfield', coalesce(b.permission_status, 'registered'),
-           coalesce(nullif(b.name, ''), b.site_address), true,
+           -- Many registers put a reference code ("NSP08", "15/06448/FULL") in
+           -- the name; prefer the address unless the name reads like words.
+           case when coalesce(b.name, '') ~ '\s' then b.name
+                else coalesce(nullif(b.site_address, ''), nullif(b.name, '')) end, true,
            coalesce(b.hectares, st_area(b.area::geography) / 1e4),
            coalesce(b.area::geometry, st_buffer(b.geom::geography, sqrt(greatest(coalesce(b.hectares, 0.1), 0.01) * 1e4 / pi()))::geometry),
            b.geom::geometry, b.dwellings_max, b.permission_status, b.is_public
@@ -321,20 +327,22 @@ begin
   elsif p_stage = 'access' then
     update london_sites s set ptal = m.props->>'ptal', ptal_ai = (m.props->>'ai')::real
     from map_features m
-    where m.dataset = 'ptal' and st_intersects(m.geom, s.pt);
+    where m.dataset = 'ptal' and st_intersects(m.geom, s.pt)
+      and s.id between p_from and p_to;
 
     update london_sites s set conn_pt = (m.props->>'p_all')::real,
                               conn_all = (m.props->>'a_all')::real,
                               conn_emp = (m.props->>'p_emp')::real
     from map_features m
-    where m.dataset = 'connectivity_oa' and st_intersects(m.geom, s.pt);
+    where m.dataset = 'connectivity_oa' and st_intersects(m.geom, s.pt)
+      and s.id between p_from and p_to;
 
     -- Nearest station and the fastest door-to-Zone-1 option among the eight
     -- nearest (walk at 80 m/min with a 1.25 street-detour factor).
     update london_sites s set stn_name = x.name, stn_m = x.m
     from (
       select s2.id, nn.name, st_distance(nn.geom::geography, s2.pt::geography) m
-      from london_sites s2
+      from (select * from london_sites where id between p_from and p_to) s2
       cross join lateral (
         select t.name, t.geom from london_transit_node t
         order by t.geom <-> s2.pt limit 1) nn
@@ -343,7 +351,7 @@ begin
     update london_sites s set z1_min = round(x.t::numeric, 1), z1_via = x.name
     from (
       select s2.id, best.t, best.name
-      from london_sites s2
+      from (select * from london_sites where id between p_from and p_to) s2
       cross join lateral (
         select k.mins_z1 + st_distance(k.geom::geography, s2.pt::geography) * 1.25 / 80 t, k.name
         from (select t.* from london_transit_node t
@@ -358,14 +366,15 @@ begin
                               rent_chg = (m.props->>'chg_all')::real,
                               rent_g5 = (m.props->>'g5_all')::real
     from map_features m
-    where m.dataset = 'la_rents' and m.props->>'lad_code' = s.lad_code;
+    where m.dataset = 'la_rents' and m.props->>'lad_code' = s.lad_code
+      and s.id between p_from and p_to;
 
     update london_sites s set office_submkt = x.name, office_prime = x.prime, office_mid = x.mid
     from (
       select s2.id, a.name,
              (a.props->'prime'->>'avg')::real prime,
              coalesce((a.props->'mid'->>'avg')::real, (a.props->'low'->>'avg')::real) mid
-      from london_sites s2
+      from (select * from london_sites where id between p_from and p_to) s2
       cross join lateral (
         select m.name, m.props, m.geom from map_features m
         where m.dataset = 'agent_office_rents'
@@ -378,7 +387,7 @@ begin
       select s2.id,
              percentile_cont(0.5) within group (order by (m.props->>'pm2')::real) med,
              count(*)::int n
-      from london_sites s2
+      from (select * from london_sites where id between p_from and p_to) s2
       join map_features m
         on m.dataset = 'voa_offices' and st_dwithin(m.geom, s2.pt, 0.0045)
       where (m.props->>'pm2') is not null
@@ -388,32 +397,38 @@ begin
     update london_sites s set price_ppm2 = (m.props->>'ppm2')::real,
                               price_trend = (m.props->>'trend_pct')::real
     from map_features m
-    where m.dataset = 'price_grid_f' and st_intersects(m.geom, s.pt);
+    where m.dataset = 'price_grid_f' and st_intersects(m.geom, s.pt)
+      and s.id between p_from and p_to;
 
     -- Borough figures where the local grid is too thin.
     update london_sites s set price_ppm2 = coalesce(s.price_ppm2, (m.props->>'ppm2')::real),
                               price_trend = coalesce(s.price_trend, (m.props->>'trend_pct')::real)
     from map_features m
     where m.dataset = 'lad_prices' and m.props->>'lad' = s.lad_code
-      and (s.price_ppm2 is null or s.price_trend is null);
+      and (s.price_ppm2 is null or s.price_trend is null)
+      and s.id between p_from and p_to;
 
   elsif p_stage = 'growth' then
     update london_sites s set approval_pct = (m.props->>'approval_pct')::real
     from map_features m
-    where m.dataset = 'planit_rates' and st_intersects(m.geom, s.pt);
+    where m.dataset = 'planit_rates' and st_intersects(m.geom, s.pt)
+      and s.id between p_from and p_to;
 
     update london_sites s set plan_vs_lhn = (m.props->>'plan_vs_lhn')::real
     from map_features m
-    where m.dataset = 'housing_need' and m.props->>'lad_code' = s.lad_code;
+    where m.dataset = 'housing_need' and m.props->>'lad_code' = s.lad_code
+      and s.id between p_from and p_to;
 
     update london_sites s set land_value = (m.props->>'resi_gbp_ha')::real
     from map_features m
-    where m.dataset = 'land_value' and m.props->>'lad_code' = s.lad_code;
+    where m.dataset = 'land_value' and m.props->>'lad_code' = s.lad_code
+      and s.id between p_from and p_to;
 
     update london_sites s set cil = coalesce((m.props->>'cil_pm2')::real, 0)
                                    + coalesce((m.props->>'mayoral')::real, 0)
     from map_features m
-    where m.dataset = 'cil_rates' and m.props->>'lad_code' = s.lad_code;
+    where m.dataset = 'cil_rates' and m.props->>'lad_code' = s.lad_code
+      and s.id between p_from and p_to;
 
   elsif p_stage = 'policy' then
     update london_sites s set
@@ -427,13 +442,14 @@ begin
       flood2 = exists (select 1 from planning_constraints p where p.kind = 'flood_zone_2' and st_intersects(p.geom, s.pt)),
       listed_n = (select count(*) from planning_constraints p where p.kind = 'listed_building' and st_intersects(p.geom, s.geom)),
       public_land = coalesce(s.public_land, false) or exists (
-        select 1 from map_features m where m.dataset = 'public_parcel' and st_intersects(m.geom, s.pt));
+        select 1 from map_features m where m.dataset = 'public_parcel' and st_intersects(m.geom, s.pt))
+    where s.id between p_from and p_to;
 
   elsif p_stage = 'form' then
     update london_sites s set storeys_site = x.v
     from (
       select s2.id, avg((m.props->>'storeys')::real) v
-      from london_sites s2
+      from (select * from london_sites where id between p_from and p_to) s2
       join map_features m on m.dataset = 'building_height' and st_intersects(m.geom, s2.geom)
       where s2.cat <> 'green'
       group by s2.id
@@ -442,7 +458,7 @@ begin
     update london_sites s set storeys_ctx = x.v
     from (
       select s2.id, percentile_cont(0.75) within group (order by (m.props->>'storeys')::real) v
-      from london_sites s2
+      from (select * from london_sites where id between p_from and p_to) s2
       join map_features m on m.dataset = 'building_height' and st_dwithin(m.geom, s2.pt, 0.003)
       group by s2.id
     ) x where x.id = s.id;
@@ -457,9 +473,9 @@ begin
 end $$;
 
 revoke execute on function public.rebuild_london_transit(text) from public, anon, authenticated;
-revoke execute on function public.rebuild_london_sites(text) from public, anon, authenticated;
+revoke execute on function public.rebuild_london_sites(text, int, int) from public, anon, authenticated;
 grant execute on function public.rebuild_london_transit(text) to service_role;
-grant execute on function public.rebuild_london_sites(text) to service_role;
+grant execute on function public.rebuild_london_sites(text, int, int) to service_role;
 
 -- ───────────────────────── read RPCs ─────────────────────────
 

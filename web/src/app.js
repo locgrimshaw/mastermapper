@@ -1,3 +1,5 @@
+import { initLondonSift } from "./londonsift.js?v=ls1";
+
 // app.js — Welfare Mapper prototype
 // England socio-economic site appraisal tool.
 //
@@ -5534,6 +5536,14 @@ function wireInteractions() {
         setDrawer(false);
         return true;
       }
+    }
+
+    // 1b. London sites sifter — a mode the user switched on, so its sites
+    // win over rail stops, overlays and LSOA zones.
+    if (LONDON_SIFT && LONDON_SIFT.active && LONDON_SIFT.tap(point, box)) {
+      dbg("tap → london site");
+      setDrawer(false);
+      return true;
     }
 
     // 2. Rail stop — upgrade to station card if we can match it, else stop card.
@@ -17672,6 +17682,8 @@ window._dcTest = { openDcPanel, openDcCompileModal,
 wirePbsaBox();            // PBSA sift (university rail access, box 3)
 wireOtherDataToggle();    // reveals the two above + the DC layers branch
 wirePortfolioBox();       // Portfolio scorer (priority-1 tool)
+const LONDON_SIFT = initLondonSift({ map, getSupabase, mmStore,
+  escape: escapeSift, overlayBeforeId });   // London sites sifter
 
 map.on("load", async () => {
   try {

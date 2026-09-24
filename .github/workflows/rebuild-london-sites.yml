@@ -1,0 +1,97 @@
+name: Rebuild London sites
+
+# Rebuilds london_sites — the table behind the "London sites" sifter
+# (migration 0083, web/src/londonsift.js) — from the layers already in
+# Supabase. Run it after any of its inputs change: brownfield registers, the
+# OSM low-value land layers, PTAL, connectivity, rents, VOA offices, prices,
+# constraints, or the transit network.
+#
+# With "refresh_transit" ticked it first re-pulls the Tube / DLR / Overground
+# / Elizabeth line / tram network from the TfL API
+# (pipeline/build_london_transit.py), commits the JSON, and has Supabase load
+# it and recompute every stop's time to Zone 1 (rebuild_london_transit).
+#
+# Stages after 'base' run in id chunks so no single request outlives the API
+# gateway's ~100 s ceiling.
+#
+# Sources: TfL Unified API (OGL v2.0) plus the datasets listed in 0083.
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_transit:
+        description: "Re-pull the TfL network and recompute Zone 1 times first"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        if: ${{ inputs.refresh_transit }}
+        with:
+          python-version: "3.12"
+
+      - name: Build the TfL network
+        if: ${{ inputs.refresh_transit }}
+        run: |
+          pip install requests
+          python pipeline/build_london_transit.py
+
+      - name: Commit the network JSON
+        if: ${{ inputs.refresh_transit }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add pipeline/data/london_transit.json
+          if git diff --cached --quiet; then
+            echo "Network unchanged — nothing to commit."
+          else
+            git commit -m "Refresh TfL network for London sites [automated]"
+            git push
+          fi
+
+      - name: Rebuild in Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          REFRESH_TRANSIT: ${{ inputs.refresh_transit }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."
+            exit 1
+          fi
+          call () {  # call <fn> <json-args>
+            curl -sS --fail-with-body -X POST "$SUPABASE_URL/rest/v1/rpc/$1" \
+              -H "apikey: $SUPABASE_SERVICE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+              -H "Content-Type: application/json" -d "$2" --max-time 600
+            echo ""
+          }
+          set -e
+          if [ "$REFRESH_TRANSIT" = "true" ]; then
+            sha=$(git rev-parse HEAD)
+            url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${sha}/pipeline/data/london_transit.json"
+            echo "— transit graph from $url"
+            call rebuild_london_transit "{\"p_url\":\"$url\"}"
+          fi
+          echo "— base"
+          call rebuild_london_sites '{"p_stage":"base"}'
+          max=$(curl -sS "$SUPABASE_URL/rest/v1/london_sites?select=id&order=id.desc&limit=1" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            | python3 -c "import sys, json; print(json.load(sys.stdin)[0]['id'])")
+          echo "— $max sites"
+          for stage in access market growth policy form; do
+            for from in $(seq 0 4000 "$max"); do
+              to=$((from + 3999))
+              echo "— $stage $from–$to"
+              call rebuild_london_sites "{\"p_stage\":\"$stage\",\"p_from\":$from,\"p_to\":$to}"
+            done
+          done
