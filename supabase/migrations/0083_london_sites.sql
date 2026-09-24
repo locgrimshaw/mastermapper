@@ -246,6 +246,20 @@ do $$ begin
   create policy london_transit_node_read on public.london_transit_node for select using (true);
 exception when duplicate_object then null; end $$;
 
+-- Does a designation meaningfully cover a site? Centre inside it, or at
+-- least 10% of the site's area under it. No SET clause and schema-qualified
+-- PostGIS calls so the planner can inline it; callers pair it with
+-- `m.geom && s.geom` so the spatial index still prunes candidates.
+create or replace function public.london_site_covers(d extensions.geometry, site extensions.geometry, pt extensions.geometry)
+returns boolean
+language sql immutable parallel safe
+as $$
+  select extensions.st_intersects(d, pt)
+      or (extensions.st_intersects(d, site)
+          and extensions.st_area(extensions.st_intersection(d, site))
+              >= 0.1 * greatest(extensions.st_area(site), 1e-12))
+$$;
+
 drop function if exists public.rebuild_london_sites(text);
 create or replace function public.rebuild_london_sites(
   p_stage text, p_from int default 0, p_to int default 2147483647)
@@ -451,16 +465,19 @@ begin
       listed_n = (select count(*) from planning_constraints p where p.kind = 'listed_building' and st_intersects(p.geom, s.geom)),
       public_land = coalesce(s.public_land, false) or exists (
         select 1 from map_features m where m.dataset = 'public_parcel' and st_intersects(m.geom, s.pt)),
-      -- London Plan designations (0084). SIL and MOL test the whole plot, so
-      -- a site clipping the edge of protected land still flags.
+      -- London Plan designations (0084). A designation counts when it covers
+      -- the site's centre or at least 10% of its area: boundaries are digitised
+      -- by 33 boroughs and railway-corridor SINCs run along estate edges, so a
+      -- bare intersects test flags hundreds of sites on slivers (measured: ~half
+      -- of SINC hits were under 2% of the site).
       oa_name = (select m.name from map_features m where m.dataset = 'gla_opportunity_area'
                  and st_intersects(m.geom, s.pt) limit 1),
       in_oa = exists (select 1 from map_features m where m.dataset = 'gla_opportunity_area' and st_intersects(m.geom, s.pt)),
-      in_sil = exists (select 1 from map_features m where m.dataset = 'gla_sil' and st_intersects(m.geom, s.geom)),
-      in_mol = exists (select 1 from map_features m where m.dataset = 'gla_mol' and st_intersects(m.geom, s.geom)),
-      in_lsis = exists (select 1 from map_features m where m.dataset = 'gla_lsis' and st_intersects(m.geom, s.geom)),
+      in_sil = exists (select 1 from map_features m where m.dataset = 'gla_sil' and m.geom && s.geom and london_site_covers(m.geom, s.geom, s.pt)),
+      in_mol = exists (select 1 from map_features m where m.dataset = 'gla_mol' and m.geom && s.geom and london_site_covers(m.geom, s.geom, s.pt)),
+      in_lsis = exists (select 1 from map_features m where m.dataset = 'gla_lsis' and m.geom && s.geom and london_site_covers(m.geom, s.geom, s.pt)),
       sinc_grade = (select m.props->>'grade' from map_features m
-                    where m.dataset = 'gla_sinc' and st_intersects(m.geom, s.geom)
+                    where m.dataset = 'gla_sinc' and m.geom && s.geom and london_site_covers(m.geom, s.geom, s.pt)
                     order by case when m.props->>'grade' ilike 'metropolitan%' then 0
                                   when m.props->>'grade' ilike '%grade I' then 1
                                   when m.props->>'grade' ilike 'borough%' then 2 else 3 end
