@@ -9,7 +9,7 @@
   <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" rel="stylesheet" />
   <!-- Bump ?v= on every frontend change so GitHub Pages / browsers don't serve
        a stale cached copy (these assets have no content hash in their name). -->
-  <link rel="stylesheet" href="src/styles.css?v=ws157-pipr" />
+  <link rel="stylesheet" href="src/styles.css?v=ws160-london-group" />
 </head>
 <body>
   <div id="app">
@@ -40,6 +40,20 @@
         <div class="box-body">
           <p class="hint" style="margin:10px 14px 4px">Toggle any layer and set its transparency. Layers stream in for the current view and are cached as you pan — nothing is cropped to station catchments.</p>
           <div id="layers-tree"></div>
+        </div>
+      </section>
+
+      <!-- ============ LONDON SITES ============
+           Reorderable gate sifter over every candidate plot in Greater London
+           (table london_sites, migration 0083). Built by initLondonSift() in
+           src/londonsift.js. -->
+      <section class="side-box" id="london-box">
+        <button type="button" class="box-head" aria-expanded="true">
+          <span class="box-title">London sites</span>
+          <span class="box-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="box-body">
+          <section class="block" id="ls-root"></section>
         </div>
       </section>
 
@@ -397,6 +411,6 @@
        deep-dive amenity layers use these; the rest of the map works without. -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script type="module" src="src/app.js?v=ws157-pipr"></script>
+  <script type="module" src="src/app.js?v=ws160-london-group"></script>
 </body>
 </html>

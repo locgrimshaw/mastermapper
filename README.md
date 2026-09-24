@@ -23,6 +23,20 @@ does the interactive scoring and reporting.
 - **Site sift** — step through the NPPF station funnel (connectivity → eligibility
   → developable land → constraints → the three scored axes). The shortlist
   updates live at every step; England and Scotland sift separately.
+- **London sites** — sift ~22,500 candidate plots across Greater London
+  (brownfield register, derelict and underused built land, green space, grey
+  belt) through reorderable gates: PTAL, DfT connectivity, door-to-Zone-1
+  travel time, residential and office rents, growth, constraints and height
+  headroom, plus London Plan designations (Opportunity Areas, Strategic
+  Industrial Locations, Locally Significant Industrial Sites, Metropolitan
+  Open Land, Sites of Importance for Nature Conservation — also in the
+  **London** data-layers group with the CAZ and PTAL, loaded from the GLA
+  planning data map by migration 0084). Each gate
+  filters, scores or is off; gate order sets the funnel
+  and the ranking weights. Presets for office-led, build-to-rent and broad
+  screens; export the ranked shortlist as CSV. Data: `london_sites`
+  (migration 0083), rebuilt by the "Rebuild London sites" workflow; Zone 1
+  times come from a TfL + national-rail graph (`pipeline/build_london_transit.py`).
 
 ## How to run this (no terminal needed)
 

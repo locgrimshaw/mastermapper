@@ -3139,3 +3139,52 @@ footer {
 #dc-panel .sp-h small { font-weight: 400; text-transform: none; letter-spacing: 0; color: #868e96; }
 .dcp-chips span.dcp-ok { background: #ebfbee; border-color: #b2f2bb; color: #2b8a3e; }
 .dcp-chips span.dcp-bad { background: #fff0f0; border-color: #ffc9c9; color: #c92a2a; font-weight: 600; }
+
+/* ============ London sites sifter (src/londonsift.js) ============ */
+#ls-root .dd-row-all { margin-top: 6px; }
+.ls-presets { display: flex; gap: 4px; margin: 8px 0 10px; flex-wrap: wrap; }
+.ls-preset { flex: 1 1 0; padding: 5px 6px; font-size: 12px; border: 1px solid var(--ink-line);
+  background: transparent; color: var(--text); border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.ls-preset.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ls-gates { display: flex; flex-direction: column; gap: 6px; }
+.ls-gate { border: 1px solid var(--ink-line); border-radius: 8px; padding: 6px 8px; background: var(--ink-2); }
+.ls-gate.ls-mode-off { opacity: 0.6; }
+.ls-gate.ls-mode-filter { border-left: 3px solid var(--accent); }
+.ls-gate.ls-mode-score { border-left: 3px solid #4c6ef5; }
+.ls-gate.dragging { opacity: 0.4; }
+.ls-gate.drop-over { outline: 2px dashed var(--accent); outline-offset: 1px; }
+.ls-gate-h { display: flex; align-items: center; gap: 6px; }
+.ls-grip { cursor: grab; color: var(--text-dim); font-size: 12px; letter-spacing: -2px; user-select: none; }
+.ls-gate-t { flex: 1; font-size: 13px; font-weight: 600; }
+.ls-mode { font-size: 11px; padding: 2px 4px; }
+.ls-move { display: inline-flex; gap: 2px; }
+.ls-move button { width: 22px; height: 22px; padding: 0; font-size: 12px; line-height: 1; border: 1px solid var(--ink-line);
+  background: transparent; color: var(--text); border-radius: 4px; cursor: pointer; }
+.ls-move button:disabled { opacity: 0.3; cursor: default; }
+.ls-gate-b { margin-top: 6px; display: flex; flex-direction: column; gap: 5px; }
+.ls-gate-b select.ls-metric, .ls-gate-b select.ls-boroughs { width: 100%; font-size: 12px; }
+.ls-mode-score .ls-thr, .ls-mode-score .ls-keep { opacity: 0.45; }
+.ls-types label, .ls-green label { font-size: 11.5px; }
+.ls-green summary, .ls-about summary { font-size: 11px; color: var(--text-dim); cursor: pointer; }
+.ls-about p { font-size: 11px; color: var(--text-dim); line-height: 1.45; margin: 4px 0 0; }
+.ls-sub { margin: 0; }
+.ls-dist { font-size: 10.5px; margin: 0; }
+.ls-sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.ls-gate-f { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 11px; color: var(--text-dim); }
+.ls-gate-f:empty { display: none; }
+.ls-bar { flex: 1; height: 5px; background: var(--ink-line); border-radius: 3px; overflow: hidden; }
+.ls-bar i { display: block; height: 100%; background: var(--accent); }
+.ls-fn { white-space: nowrap; font-family: var(--font-data); }
+.ls-fn b { color: var(--text); }
+.ls-w { white-space: nowrap; color: #4c6ef5; font-family: var(--font-data); }
+.ls-summary { margin: 4px 0 6px; display: flex; flex-direction: column; gap: 5px; }
+.ls-chips { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11.5px; }
+.ls-chip b { font-family: var(--font-data); }
+.ls-opts { margin: 2px 0 6px; }
+.ls-list { max-height: 42vh; overflow: auto; }
+.ls-table tr[data-id] { cursor: pointer; }
+.ls-table tr[data-id]:hover td { background: var(--ink-line); }
+.ls-foot { font-size: 10.5px; margin-top: 8px; }
+.ls-card-sec { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin: 8px 0 2px; }
+.ls-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.ls-flags span { font-size: 10.5px; padding: 1px 6px; border-radius: 10px; background: var(--ink-line); }
