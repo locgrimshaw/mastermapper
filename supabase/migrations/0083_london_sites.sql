@@ -479,7 +479,7 @@ returns table (
   storeys_site real, storeys_ctx real, dwellings_max int, permission text
 )
 language sql stable
-set search_path = public
+set search_path = public, extensions
 as $$
   select id, src, cat, subtype, name, pdl, area_ha, lad_code, borough,
          st_x(pt)::real, st_y(pt)::real,
@@ -497,7 +497,7 @@ $$;
 create or replace function public.london_site_shapes(w float8, s float8, e float8, n float8, lim int default 4000)
 returns jsonb
 language sql stable
-set search_path = public
+set search_path = public, extensions
 as $$
   select jsonb_build_object('type', 'FeatureCollection', 'features', coalesce(jsonb_agg(
     jsonb_build_object('type', 'Feature', 'id', id,
