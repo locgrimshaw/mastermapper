@@ -408,15 +408,29 @@ export function initLondonSift(deps) {
     let pool = LS.rows.filter(r => r.lng != null);
     const start = pool.length;
     const funnel = [];
+    // "Show" on a gate stops the map and list at that stage: later gates
+    // neither filter nor score, and the sites this gate removed are kept
+    // aside so the map can mark them.
+    let stageI = LS.stageKey ? LS.gates.findIndex(g => g.key === LS.stageKey && !isHidden(g)) : -1;
+    if (stageI < 0) LS.stageKey = null;
+    let shown = null, cut = [];
     LS.gates.forEach((g, i) => {
-      if (effMode(g) !== "filter") { funnel[i] = null; return; }
-      const before = pool.length;
-      pool = pool.filter(r => passes(g, r));
-      funnel[i] = { before, after: pool.length };
+      if (effMode(g) === "filter") {
+        const before = pool.length, kept = [], dropped = [];
+        for (const r of pool) (passes(g, r) ? kept : dropped).push(r);
+        pool = kept;
+        funnel[i] = { before, after: pool.length };
+        if (i === stageI) cut = dropped;
+      } else funnel[i] = null;
+      if (i === stageI) shown = pool;
     });
+    const finalN = pool.length;
+    if (shown) pool = shown;
     // Ranking: scoring gates (filter or score, with a metric), weighted by
-    // their position among themselves — first counts most.
-    const scorers = LS.gates.filter(g => effMode(g) !== "off" && GATE_DEFS[g.key].metrics);
+    // their position among themselves — first counts most. At a stage, only
+    // the gates up to it count.
+    const upto = stageI >= 0 ? LS.gates.slice(0, stageI + 1) : LS.gates;
+    const scorers = upto.filter(g => effMode(g) !== "off" && GATE_DEFS[g.key].metrics);
     const n = scorers.length;
     const survivors = pool.map(r => {
       let num = 0, den = 0;
@@ -428,7 +442,8 @@ export function initLondonSift(deps) {
       });
       return { r, s: den ? Math.round(100 * num / den) : 0 };
     }).sort((a, b) => b.s - a.s || (b.r.area_ha || 0) - (a.r.area_ha || 0));
-    LS.result = { start, survivors, funnel, scorers };
+    LS.result = { start, survivors, funnel, scorers, finalN, stageI,
+                  cut: new Set(cut.map(r => r.id)) };
     renderFunnel();
     renderSummary();
     renderList();
@@ -438,6 +453,12 @@ export function initLondonSift(deps) {
   // ── gates UI ─────────────────────────────────────────────────────────
   const gatesEl = $("ls-gates");
   let dragFrom = null;
+  gatesEl.addEventListener("click", e => {
+    const b = e.target.closest(".ls-show");
+    if (!b) return;
+    LS.stageKey = LS.stageKey === b.dataset.stage ? null : b.dataset.stage;
+    run();
+  });
 
   function renderGates() {
     root.querySelectorAll(".ls-preset").forEach(b =>
@@ -687,7 +708,12 @@ export function initLondonSift(deps) {
         const wPct = Math.round(100 * (n - rank) / (n * (n + 1) / 2));
         html += `<span class="ls-w" title="Share of the ranking score">weight ${wPct}%</span>`;
       }
+      const on = res.stageI === i;
+      html += `<button type="button" class="ls-show${on ? " on" : ""}" data-stage="${g.key}"
+        title="${on ? "Back to the full sift" : "Show the map and list as they stand after this gate, ignoring the gates below it"}">${on ? "Showing ✓" : "Show"}</button>`;
       f.innerHTML = html;
+      el.classList.toggle("ls-staged", on);
+      el.classList.toggle("ls-after", res.stageI >= 0 && i > res.stageI);
       const dist = el.querySelector(".ls-dist");
       if (dist && g.metric && LS.sorted[g.metric]?.length) {
         const a = LS.sorted[g.metric], m = METRICS[g.metric];
@@ -710,7 +736,11 @@ export function initLondonSift(deps) {
     for (const { r } of survivors) if (r.borough) byB[r.borough] = (byB[r.borough] || 0) + 1;
     const tops = Object.entries(byB).sort((a, b) => b[1] - a[1]).slice(0, 5)
       .map(([b, n]) => `${escape(b)} <b>${n}</b>`).join(" · ");
-    el.innerHTML = `<div class="dc-headline"><b>${fmtInt(survivors.length)}</b> sites · <b>${fmtInt(ha)}</b> ha
+    const { stageI, finalN, cut } = LS.result;
+    const banner = stageI >= 0 ? `<div class="ls-stage-banner">
+        <span>Showing the sift up to <b>${escape(GATE_DEFS[LS.gates[stageI].key].title)}</b>${cut.size ? ` — its ${fmtInt(cut.size)} removed sites are the grey rings` : ""}. The full sift leaves ${fmtInt(finalN)}.</span>
+        <button type="button" class="ls-link" id="ls-stage-clear">Show full sift</button></div>` : "";
+    el.innerHTML = banner + `<div class="dc-headline"><b>${fmtInt(survivors.length)}</b> sites · <b>${fmtInt(ha)}</b> ha
         <span class="hint">of ${fmtInt(start)} candidates</span></div>
       <div class="ls-chips">${cats}</div>
       <div class="ls-legend" aria-label="Map colour key">
@@ -720,6 +750,8 @@ export function initLondonSift(deps) {
         <span class="ls-legend-top"><i>1</i> top ${TOP_N} ranked</span>
       </div>
       ${tops ? `<div class="hint">Top boroughs: ${tops}</div>` : ""}`;
+    const clr = $("ls-stage-clear");
+    if (clr) clr.addEventListener("click", () => { LS.stageKey = null; run(); });
   }
 
   function renderList() {
@@ -769,7 +801,8 @@ export function initLondonSift(deps) {
     const rankOf = new Map(LS.result.survivors.slice(0, TOP_N).map((x, i) => [x.r.id, i + 1]));
     return { type: "FeatureCollection", features: LS.rows.filter(r => r.lng != null).map(r => ({
       type: "Feature", id: r.id,
-      properties: { id: r.id, s: scoreOf.has(r.id) ? scoreOf.get(r.id) : -1, ha: r.area_ha || 0,
+      properties: { id: r.id, s: scoreOf.has(r.id) ? scoreOf.get(r.id) : LS.result.cut.has(r.id) ? -2 : -1,
+                    ha: r.area_ha || 0,
                     rank: rankOf.get(r.id) || 0 },
       geometry: { type: "Point", coordinates: [r.lng, r.lat] } })) };
   }
@@ -787,9 +820,16 @@ export function initLondonSift(deps) {
     // Site dots sit on top of every other layer (stations included): while the
     // sift is on, the sites are the subject.
     if (!map.getLayer("ls-pts-out")) map.addLayer({ id: "ls-pts-out", type: "circle", source: "ls-pts",
-      filter: ["<", S, 0], maxzoom: 14,
+      filter: ["==", S, -1], maxzoom: 14,
       paint: { "circle-color": "#868e96", "circle-opacity": 0.35,
                "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 1.2, 13, 3] } });
+    // Sites removed by the gate being shown ("Show" on a gate): hollow rings,
+    // so its impact reads against what survives.
+    if (!map.getLayer("ls-pts-cut")) map.addLayer({ id: "ls-pts-cut", type: "circle", source: "ls-pts",
+      filter: ["==", S, -2], maxzoom: 14,
+      paint: { "circle-color": "rgba(0,0,0,0)",
+               "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 3, 11, 4.5, 13.9, 6],
+               "circle-stroke-color": "#495057", "circle-stroke-width": 1, "circle-stroke-opacity": 0.5 } });
     if (!map.getLayer("ls-pts-in")) {
       map.addLayer({ id: "ls-pts-in", type: "circle", source: "ls-pts",
         filter: [">=", S, 0], maxzoom: 14,
@@ -827,10 +867,10 @@ export function initLondonSift(deps) {
   function applyLayerVisibility() {
     const vis = on => on ? "visible" : "none";
     if (map.getLayer("ls-pts-out")) map.setLayoutProperty("ls-pts-out", "visibility", vis(LS.active && LS.showOut));
-    for (const id of ["ls-pts-in", "ls-pts-top", "ls-pts-rank", "ls-shp-fill", "ls-shp-line"])
+    for (const id of ["ls-pts-in", "ls-pts-cut", "ls-pts-top", "ls-pts-rank", "ls-shp-fill", "ls-shp-line"])
       if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(LS.active));
     if (LS.active && map.getLayer("ls-shp-fill")) {
-      const f = LS.showOut ? null : [">=", S, 0];
+      const f = LS.showOut ? null : [">=", S, -2];
       map.setFilter("ls-shp-fill", f); map.setFilter("ls-shp-line", f);
     }
   }
@@ -848,7 +888,8 @@ export function initLondonSift(deps) {
     if (!src || !LS.shapesFc) return;
     const scoreOf = new Map(LS.result.survivors.map(x => [x.r.id, x.s]));
     for (const f of LS.shapesFc.features)
-      f.properties.s = scoreOf.has(f.properties.id) ? scoreOf.get(f.properties.id) : -1;
+      f.properties.s = scoreOf.has(f.properties.id) ? scoreOf.get(f.properties.id)
+        : LS.result.cut.has(f.properties.id) ? -2 : -1;
     src.setData(LS.shapesFc);
   }
 
@@ -913,7 +954,9 @@ export function initLondonSift(deps) {
       <div class="ovp-kind"><span class="ovp-dot"></span>${escape(CAT_LABEL[r.cat] || r.cat)} — ${escape(typeLabel(r))}</div>
       <div class="ovp-title">${escape(siteName(r))}</div>
       <div class="ovp-note">${escape(r.borough || "")} · ${(r.area_ha || 0).toFixed(2)} ha${r.pdl === false ? " · <b>not previously developed</b>" : ""}
-        ${s ? ` · score <b>${s.s}</b> / 100` : ` · <b>eliminated</b>`}</div>
+        ${s ? ` · score <b>${s.s}</b> / 100`
+          : LS.result?.cut.has(r.id) ? ` · <b>removed by ${escape(GATE_DEFS[LS.gates[LS.result.stageI].key].title)}</b>`
+          : ` · <b>eliminated</b>`}</div>
       <div class="ls-card-sec">Access</div>
       <div class="ovp-stats">
         ${stat(r.ptal ? `PTAL ${escape(r.ptal)}` : null, "public transport access")}
@@ -946,7 +989,7 @@ export function initLondonSift(deps) {
   // Called from app.js's tap dispatcher so touch works as well as click.
   function tap(point, box) {
     if (!LS.active || !LS.rows) return false;
-    const layers = ["ls-pts-top", "ls-pts-in", "ls-shp-fill", "ls-pts-out"].filter(id =>
+    const layers = ["ls-pts-top", "ls-pts-in", "ls-shp-fill", "ls-pts-cut", "ls-pts-out"].filter(id =>
       map.getLayer(id) && map.getLayoutProperty(id, "visibility") !== "none");
     if (!layers.length) return false;
     let hits = [];
@@ -973,7 +1016,8 @@ export function initLondonSift(deps) {
       lines.push(cols.map(c => c === "rank" ? i + 1 : c === "score" ? s : q(r[c])).join(",")));
     const gates = LS.gates.filter(g => effMode(g) !== "off").map((g, i) =>
       `${i + 1}. ${GATE_DEFS[g.key].title} [${g.mode}]` + (g.metric ? ` ${METRICS[g.metric].label} ${METRICS[g.metric].dir > 0 ? ">=" : "<="} ${g.value}` : ""));
-    lines.unshift(`# London sites sift — ${new Date().toISOString().slice(0, 10)} — ${gates.join("; ")}`);
+    const stage = LS.result.stageI >= 0 ? ` — STAGE VIEW up to ${GATE_DEFS[LS.gates[LS.result.stageI].key].title}` : "";
+    lines.unshift(`# London sites sift — ${new Date().toISOString().slice(0, 10)}${stage} — ${gates.join("; ")}`);
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);

@@ -3211,3 +3211,14 @@ footer {
 .ls-legend-top { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
 .ls-legend-top i { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%;
   background: #1f1f1f; color: #fff; font-style: normal; font-size: 9px; font-weight: 700; box-shadow: 0 0 0 1.5px #fff, 0 0 0 2.5px rgba(0,0,0,.25); }
+/* London sifter: "Show" a stage of the funnel */
+.ls-show { margin-left: auto; flex: 0 0 auto; font-size: 10.5px; padding: 1px 8px; border-radius: 10px;
+  border: 1px solid var(--ink-line); background: transparent; color: var(--text); cursor: pointer; }
+.ls-show:hover { border-color: var(--accent); }
+.ls-show.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ls-gate.ls-staged { box-shadow: 0 0 0 2px var(--accent); }
+.ls-gate.ls-after { opacity: 0.45; }
+.ls-gate.ls-after:hover { opacity: 0.8; }
+.ls-stage-banner { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border-radius: 6px;
+  background: var(--accent-dim); border: 1px solid var(--accent); font-size: 11.5px; }
+.ls-stage-banner .ls-link { align-self: flex-start; color: var(--accent); }

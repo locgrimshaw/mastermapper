@@ -1,4 +1,4 @@
-import { initLondonSift } from "./londonsift.js?v=ls5";
+import { initLondonSift } from "./londonsift.js?v=ls6";
 
 // app.js — Welfare Mapper prototype
 // England socio-economic site appraisal tool.
