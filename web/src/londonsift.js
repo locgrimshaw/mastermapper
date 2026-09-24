@@ -252,6 +252,15 @@ export function initLondonSift(deps) {
       if (!out.some(g => g.key === k)) out.push(defaultGate(k));
     return out;
   }
+  // Per-viewer panel layout, kept apart from the gate settings so presets
+  // and "Reset" never undo it: which cards are minimised, which are hidden.
+  // A hidden gate is not applied at all (it would otherwise change the
+  // results from somewhere the viewer can no longer see).
+  const ui = Object.assign({ collapsed: {}, hidden: {} }, mmStore.get("londonSift.ui", {}));
+  const saveUi = () => mmStore.set("londonSift.ui", ui);
+  const isHidden = g => !!ui.hidden[g.key];
+  const effMode = g => isHidden(g) ? "off" : g.mode;
+
   const persist = () => {
     mmStore.set("londonSift.gates", LS.gates);
     mmStore.set("londonSift.preset", LS.preset);
@@ -269,7 +278,12 @@ export function initLondonSift(deps) {
         ${Object.entries(PRESETS).map(([k, p]) =>
           `<button type="button" class="ls-preset" data-preset="${k}">${p.label}</button>`).join("")}
       </div>
+      <div class="ls-gatebar">
+        <button type="button" class="ls-link" id="ls-collapse-all">Minimise all</button>
+        <button type="button" class="ls-link" id="ls-expand-all">Expand all</button>
+      </div>
       <div id="ls-gates" class="ls-gates"></div>
+      <div id="ls-hidden" class="ls-hidden"></div>
       <div class="dc-sec">Result</div>
       <div id="ls-summary" class="ls-summary"></div>
       <div class="ls-opts">
@@ -294,6 +308,13 @@ export function initLondonSift(deps) {
     LS.gates = clone(PRESETS[LS.preset].gates);
     persist(); renderGates(); run();
   }));
+  $("ls-collapse-all").addEventListener("click", () => {
+    for (const g of LS.gates) ui.collapsed[g.key] = true;
+    saveUi(); renderGates();
+  });
+  $("ls-expand-all").addEventListener("click", () => {
+    ui.collapsed = {}; saveUi(); renderGates();
+  });
   $("ls-reset").addEventListener("click", () => {
     LS.gates = clone(PRESETS[LS.preset]?.gates || PRESETS.balanced.gates);
     persist(); renderGates(); run();
@@ -388,14 +409,14 @@ export function initLondonSift(deps) {
     const start = pool.length;
     const funnel = [];
     LS.gates.forEach((g, i) => {
-      if (g.mode !== "filter") { funnel[i] = null; return; }
+      if (effMode(g) !== "filter") { funnel[i] = null; return; }
       const before = pool.length;
       pool = pool.filter(r => passes(g, r));
       funnel[i] = { before, after: pool.length };
     });
     // Ranking: scoring gates (filter or score, with a metric), weighted by
     // their position among themselves — first counts most.
-    const scorers = LS.gates.filter(g => g.mode !== "off" && GATE_DEFS[g.key].metrics);
+    const scorers = LS.gates.filter(g => effMode(g) !== "off" && GATE_DEFS[g.key].metrics);
     const n = scorers.length;
     const survivors = pool.map(r => {
       let num = 0, den = 0;
@@ -421,29 +442,61 @@ export function initLondonSift(deps) {
   function renderGates() {
     root.querySelectorAll(".ls-preset").forEach(b =>
       b.classList.toggle("on", b.dataset.preset === LS.preset));
-    gatesEl.innerHTML = LS.gates.map((g, i) => gateHTML(g, i)).join("");
+    const vis = LS.gates.map((g, i) => i).filter(i => !isHidden(LS.gates[i]));
+    gatesEl.innerHTML = vis.map((i, k) => gateHTML(LS.gates[i], i, k === 0, k === vis.length - 1)).join("");
     gatesEl.querySelectorAll(".ls-gate").forEach(el => wireGate(el));
+    renderHiddenTray();
     renderFunnel();
   }
 
-  function gateHTML(g, i) {
+  // Tray of hidden gates, each one click from coming back.
+  function renderHiddenTray() {
+    const el = $("ls-hidden");
+    const hid = LS.gates.filter(isHidden);
+    if (!hid.length) { el.innerHTML = ""; return; }
+    el.innerHTML = `<span class="hint">Hidden (not applied):</span> ` + hid.map(g =>
+      `<button type="button" class="ls-chip-btn" data-show="${g.key}" title="Show this gate again">+ ${escape(GATE_DEFS[g.key].title)}</button>`).join("");
+    el.querySelectorAll("[data-show]").forEach(b => b.addEventListener("click", () => {
+      delete ui.hidden[b.dataset.show]; saveUi(); renderGates(); run();
+    }));
+  }
+
+  // One-line reading of a gate's setting, shown in the header when minimised.
+  function gateSummary(g) {
+    const d = GATE_DEFS[g.key];
+    if (d.special === "land") return `${g.types.length} land types · ≥ ${g.minHa.toFixed(2)} ha`;
+    if (d.special === "constraints") return g.exclude.length ? `excludes ${g.exclude.length}` : "none excluded";
+    if (d.special === "policy") return g.require.length ? `${g.require.length} area type${g.require.length > 1 ? "s" : ""}` : "any";
+    if (d.special === "borough") return g.boroughs.length ? `${g.boroughs.length} borough${g.boroughs.length > 1 ? "s" : ""}` : "all London";
+    const m = METRICS[g.metric];
+    if (m.ptal) return `PTAL ${g.value}+`;
+    return `${m.dir > 0 ? "≥" : "≤"} ${m.fmt(Number(g.value))}`;
+  }
+
+  function gateHTML(g, i, first, last) {
+    const collapsed = !!ui.collapsed[g.key];
     const d = GATE_DEFS[g.key];
     const modeSel = `<select class="ls-mode" aria-label="Gate mode">
         <option value="filter"${g.mode === "filter" ? " selected" : ""}>Filter</option>
         ${d.metrics ? `<option value="score"${g.mode === "score" ? " selected" : ""}>Score</option>` : ""}
         <option value="off"${g.mode === "off" ? " selected" : ""}>Off</option>
       </select>`;
-    return `<div class="ls-gate ls-mode-${g.mode}" draggable="true" data-i="${i}">
+    return `<div class="ls-gate ls-mode-${g.mode}${collapsed ? " ls-collapsed" : ""}" draggable="true" data-i="${i}">
       <div class="ls-gate-h">
         <span class="ls-grip" title="Drag to reorder" aria-hidden="true">⋮⋮</span>
-        <span class="ls-gate-t">${escape(d.title)}</span>
+        <button type="button" class="ls-fold" aria-expanded="${!collapsed}" title="${collapsed ? "Expand" : "Minimise"}">
+          <span class="ls-caret" aria-hidden="true">▾</span>
+          <span class="ls-gate-t">${escape(d.title)}</span>
+          ${collapsed && g.mode !== "off" ? `<span class="ls-sum">${escape(gateSummary(g))}</span>` : ""}
+        </button>
         ${modeSel}
         <span class="ls-move">
-          <button type="button" class="ls-up" aria-label="Move up"${i === 0 ? " disabled" : ""}>↑</button>
-          <button type="button" class="ls-down" aria-label="Move down"${i === LS.gates.length - 1 ? " disabled" : ""}>↓</button>
+          <button type="button" class="ls-up" aria-label="Move up"${first ? " disabled" : ""}>↑</button>
+          <button type="button" class="ls-down" aria-label="Move down"${last ? " disabled" : ""}>↓</button>
+          <button type="button" class="ls-hide" aria-label="Hide this gate" title="Hide (stops applying it)">✕</button>
         </span>
       </div>
-      <div class="ls-gate-b"${g.mode === "off" ? " hidden" : ""}>${gateBodyHTML(g)}
+      <div class="ls-gate-b"${g.mode === "off" || collapsed ? " hidden" : ""}>${gateBodyHTML(g)}
         <details class="ls-about"><summary>About</summary><p>${escape(d.about)}</p></details>
       </div>
       <div class="ls-gate-f"></div>
@@ -506,8 +559,20 @@ export function initLondonSift(deps) {
     const g = LS.gates[i];
     const changed = (rerender = false) => { LS.preset = "custom"; persist(); if (rerender) renderGates(); run(); };
     el.querySelector(".ls-mode").addEventListener("change", e => { g.mode = e.target.value; changed(true); });
-    el.querySelector(".ls-up").addEventListener("click", () => move(i, i - 1));
-    el.querySelector(".ls-down").addEventListener("click", () => move(i, i + 1));
+    const neighbour = step => {
+      for (let j = i + step; j >= 0 && j < LS.gates.length; j += step)
+        if (!isHidden(LS.gates[j])) return j;
+      return -1;
+    };
+    el.querySelector(".ls-up").addEventListener("click", () => move(i, neighbour(-1)));
+    el.querySelector(".ls-down").addEventListener("click", () => move(i, neighbour(1)));
+    el.querySelector(".ls-fold").addEventListener("click", () => {
+      if (ui.collapsed[g.key]) delete ui.collapsed[g.key]; else ui.collapsed[g.key] = true;
+      saveUi(); renderGates();
+    });
+    el.querySelector(".ls-hide").addEventListener("click", () => {
+      ui.hidden[g.key] = true; saveUi(); renderGates(); run();
+    });
     // Drag and drop (desktop); the arrows cover touch.
     el.addEventListener("dragstart", e => {
       if (!e.target.classList || !e.target.classList.contains("ls-gate")) return;
@@ -521,7 +586,7 @@ export function initLondonSift(deps) {
     el.addEventListener("dragleave", () => el.classList.remove("drop-over"));
     el.addEventListener("drop", e => { e.preventDefault(); if (dragFrom != null && dragFrom !== i) move(dragFrom, i); });
     // Inputs inside a draggable card must not start a drag.
-    el.querySelectorAll("input, select, details").forEach(c => {
+    el.querySelectorAll("input, select, details, button").forEach(c => {
       c.addEventListener("mousedown", () => { el.draggable = false; });
       c.addEventListener("mouseup", () => { el.draggable = true; });
       c.addEventListener("blur", () => { el.draggable = true; });
@@ -648,6 +713,12 @@ export function initLondonSift(deps) {
     el.innerHTML = `<div class="dc-headline"><b>${fmtInt(survivors.length)}</b> sites · <b>${fmtInt(ha)}</b> ha
         <span class="hint">of ${fmtInt(start)} candidates</span></div>
       <div class="ls-chips">${cats}</div>
+      <div class="ls-legend" aria-label="Map colour key">
+        <span>Score</span>
+        <i class="ls-ramp" style="background:linear-gradient(90deg, ${RAMP_STOPS.map(([v, c]) => `${c} ${v}%`).join(", ")})"></i>
+        <span>best</span>
+        <span class="ls-legend-top"><i>1</i> top ${TOP_N} ranked</span>
+      </div>
       ${tops ? `<div class="hint">Top boroughs: ${tops}</div>` : ""}`;
   }
 
@@ -685,14 +756,21 @@ export function initLondonSift(deps) {
 
   // ── map ──────────────────────────────────────────────────────────────
   const S = ["coalesce", ["get", "s"], -1];
-  const SCORE_RAMP = ["interpolate", ["linear"], S,
-    0, "#ffe8cc", 40, "#ffa94d", 70, "#e8590c", 90, "#a61e4d", 100, "#5f0f40"];
+  // Every stop is saturated enough to read on the pale basemap — the old ramp
+  // opened at a near-white peach, so most sites vanished into the map.
+  // Low scores stay a clear orange; the best sites run to deep red.
+  // Kept in the orange-red family: purples would read as the station dots.
+  const RAMP_STOPS = [[0, "#ffa94d"], [40, "#fd7e14"], [65, "#e8590c"], [85, "#c92a2a"], [100, "#7a1212"]];
+  const SCORE_RAMP = ["interpolate", ["linear"], S, ...RAMP_STOPS.flat()];
+  const TOP_N = 25;          // ranked sites that get a number on the map
 
   function pointsFc() {
     const scoreOf = new Map(LS.result.survivors.map(x => [x.r.id, x.s]));
+    const rankOf = new Map(LS.result.survivors.slice(0, TOP_N).map((x, i) => [x.r.id, i + 1]));
     return { type: "FeatureCollection", features: LS.rows.filter(r => r.lng != null).map(r => ({
       type: "Feature", id: r.id,
-      properties: { id: r.id, s: scoreOf.has(r.id) ? scoreOf.get(r.id) : -1, ha: r.area_ha || 0 },
+      properties: { id: r.id, s: scoreOf.has(r.id) ? scoreOf.get(r.id) : -1, ha: r.area_ha || 0,
+                    rank: rankOf.get(r.id) || 0 },
       geometry: { type: "Point", coordinates: [r.lng, r.lat] } })) };
   }
 
@@ -702,23 +780,44 @@ export function initLondonSift(deps) {
     if (!map.getSource("ls-shp")) map.addSource("ls-shp", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     if (!map.getLayer("ls-shp-fill")) map.addLayer({ id: "ls-shp-fill", type: "fill", source: "ls-shp", minzoom: 13,
       paint: { "fill-color": ["case", ["<", S, 0], "#868e96", SCORE_RAMP],
-               "fill-opacity": ["case", ["<", S, 0], 0.15, 0.45] } }, before);
+               "fill-opacity": ["case", ["<", S, 0], 0.15, 0.6] } }, before);
     if (!map.getLayer("ls-shp-line")) map.addLayer({ id: "ls-shp-line", type: "line", source: "ls-shp", minzoom: 13,
       paint: { "line-color": ["case", ["<", S, 0], "#868e96", SCORE_RAMP],
-               "line-width": ["interpolate", ["linear"], ["zoom"], 13, 0.8, 17, 2] } }, before);
+               "line-width": ["interpolate", ["linear"], ["zoom"], 13, 1.5, 17, 3] } }, before);
+    // Site dots sit on top of every other layer (stations included): while the
+    // sift is on, the sites are the subject.
     if (!map.getLayer("ls-pts-out")) map.addLayer({ id: "ls-pts-out", type: "circle", source: "ls-pts",
       filter: ["<", S, 0], maxzoom: 14,
       paint: { "circle-color": "#868e96", "circle-opacity": 0.35,
-               "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 1.2, 13, 3] } }, before);
+               "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 1.2, 13, 3] } });
     if (!map.getLayer("ls-pts-in")) {
       map.addLayer({ id: "ls-pts-in", type: "circle", source: "ls-pts",
         filter: [">=", S, 0], maxzoom: 14,
+        layout: { "circle-sort-key": S },   // best sites drawn last, on top
         paint: { "circle-color": SCORE_RAMP,
                  "circle-radius": ["interpolate", ["linear"], ["zoom"],
-                   9, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 2, 5, 4, 50, 7],
-                   13, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 4, 5, 8, 50, 14]],
-                 "circle-stroke-color": "#fff", "circle-stroke-width": 0.6, "circle-opacity": 0.9 } }, before);
-      for (const id of ["ls-pts-in", "ls-shp-fill"]) {
+                   8, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 3, 5, 5, 50, 8],
+                   11, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 4.5, 5, 7, 50, 11],
+                   13.9, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 6, 5, 10, 50, 16]],
+                 "circle-stroke-color": "#212529",
+                 "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 0.6, 13, 1.2],
+                 "circle-stroke-opacity": 0.75,
+                 "circle-opacity": 1 } });
+      // Top-ranked sites: a white halo ring plus their rank number, so the
+      // shortlist in the panel can be found on the map at a glance.
+      map.addLayer({ id: "ls-pts-top", type: "circle", source: "ls-pts",
+        filter: [">", ["coalesce", ["get", "rank"], 0], 0], maxzoom: 17,
+        paint: { "circle-color": "#1f1f1f",
+                 "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 8, 13, 11],
+                 "circle-stroke-color": "#fff", "circle-stroke-width": 2 } });
+      map.addLayer({ id: "ls-pts-rank", type: "symbol", source: "ls-pts",
+        filter: [">", ["coalesce", ["get", "rank"], 0], 0], maxzoom: 17,
+        layout: { "text-field": ["to-string", ["get", "rank"]],
+                  "text-font": ["Noto Sans Bold"], "text-size": 11,
+                  "text-allow-overlap": true, "text-ignore-placement": true,
+                  "symbol-sort-key": ["get", "rank"] },
+        paint: { "text-color": "#fff" } });
+      for (const id of ["ls-pts-in", "ls-pts-top", "ls-shp-fill"]) {
         map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
         map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
       }
@@ -728,7 +827,7 @@ export function initLondonSift(deps) {
   function applyLayerVisibility() {
     const vis = on => on ? "visible" : "none";
     if (map.getLayer("ls-pts-out")) map.setLayoutProperty("ls-pts-out", "visibility", vis(LS.active && LS.showOut));
-    for (const id of ["ls-pts-in", "ls-shp-fill", "ls-shp-line"])
+    for (const id of ["ls-pts-in", "ls-pts-top", "ls-pts-rank", "ls-shp-fill", "ls-shp-line"])
       if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(LS.active));
     if (LS.active && map.getLayer("ls-shp-fill")) {
       const f = LS.showOut ? null : [">=", S, 0];
@@ -847,7 +946,7 @@ export function initLondonSift(deps) {
   // Called from app.js's tap dispatcher so touch works as well as click.
   function tap(point, box) {
     if (!LS.active || !LS.rows) return false;
-    const layers = ["ls-pts-in", "ls-shp-fill", "ls-pts-out"].filter(id =>
+    const layers = ["ls-pts-top", "ls-pts-in", "ls-shp-fill", "ls-pts-out"].filter(id =>
       map.getLayer(id) && map.getLayoutProperty(id, "visibility") !== "none");
     if (!layers.length) return false;
     let hits = [];
@@ -872,7 +971,7 @@ export function initLondonSift(deps) {
     const lines = [cols.join(",")];
     LS.result.survivors.forEach(({ r, s }, i) =>
       lines.push(cols.map(c => c === "rank" ? i + 1 : c === "score" ? s : q(r[c])).join(",")));
-    const gates = LS.gates.filter(g => g.mode !== "off").map((g, i) =>
+    const gates = LS.gates.filter(g => effMode(g) !== "off").map((g, i) =>
       `${i + 1}. ${GATE_DEFS[g.key].title} [${g.mode}]` + (g.metric ? ` ${METRICS[g.metric].label} ${METRICS[g.metric].dir > 0 ? ">=" : "<="} ${g.value}` : ""));
     lines.unshift(`# London sites sift — ${new Date().toISOString().slice(0, 10)} — ${gates.join("; ")}`);
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
