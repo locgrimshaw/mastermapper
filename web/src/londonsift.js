@@ -748,7 +748,6 @@ export function initLondonSift(deps) {
         <span>Score</span>
         <i class="ls-ramp" style="background:linear-gradient(90deg, ${RAMP_STOPS.map(([v, c]) => `${c} ${v}%`).join(", ")})"></i>
         <span>best</span>
-        <span class="ls-legend-top"><i>1</i> top ${TOP_N} ranked</span>
       </div>
       ${tops ? `<div class="hint">Top boroughs: ${tops}</div>` : ""}`;
     const clr = $("ls-stage-clear");
@@ -795,7 +794,6 @@ export function initLondonSift(deps) {
   // Kept in the orange-red family: purples would read as the station dots.
   const RAMP_STOPS = [[0, "#ffa94d"], [40, "#fd7e14"], [65, "#e8590c"], [85, "#c92a2a"], [100, "#7a1212"]];
   const SCORE_RAMP = ["interpolate", ["linear"], S, ...RAMP_STOPS.flat()];
-  const TOP_N = 25;          // ranked sites that get a number on the map
   // A site's dot fades out once its outline is big enough to read (roughly
   // ~3 px across): 2 ha plots at z11, 0.5 ha at z12, 0.12 ha at z13, the rest
   // by z14. Small plots keep a dot until then, so nothing disappears.
@@ -811,12 +809,10 @@ export function initLondonSift(deps) {
 
   function pointsFc() {
     const scoreOf = new Map(LS.result.survivors.map(x => [x.r.id, x.s]));
-    const rankOf = new Map(LS.result.survivors.slice(0, TOP_N).map((x, i) => [x.r.id, i + 1]));
     return { type: "FeatureCollection", features: LS.rows.filter(r => r.lng != null).map(r => ({
       type: "Feature", id: r.id,
       properties: { id: r.id, s: scoreOf.has(r.id) ? scoreOf.get(r.id) : LS.result.cut.has(r.id) ? -2 : -1,
-                    ha: r.area_ha || 0,
-                    rank: rankOf.get(r.id) || 0 },
+                    ha: r.area_ha || 0 },
       geometry: { type: "Point", coordinates: [r.lng, r.lat] } })) };
   }
 
@@ -858,21 +854,7 @@ export function initLondonSift(deps) {
                  "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 0.6, 13, 1.2],
                  "circle-stroke-opacity": dotFade(0.75),
                  "circle-opacity": dotFade(1) } });
-      // Top-ranked sites: a white halo ring plus their rank number, so the
-      // shortlist in the panel can be found on the map at a glance.
-      map.addLayer({ id: "ls-pts-top", type: "circle", source: "ls-pts",
-        filter: [">", ["coalesce", ["get", "rank"], 0], 0], maxzoom: 17,
-        paint: { "circle-color": "#1f1f1f",
-                 "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 8, 13, 11],
-                 "circle-stroke-color": "#fff", "circle-stroke-width": 2 } });
-      map.addLayer({ id: "ls-pts-rank", type: "symbol", source: "ls-pts",
-        filter: [">", ["coalesce", ["get", "rank"], 0], 0], maxzoom: 17,
-        layout: { "text-field": ["to-string", ["get", "rank"]],
-                  "text-font": ["Noto Sans Bold"], "text-size": 11,
-                  "text-allow-overlap": true, "text-ignore-placement": true,
-                  "symbol-sort-key": ["get", "rank"] },
-        paint: { "text-color": "#fff" } });
-      for (const id of ["ls-pts-in", "ls-pts-top", "ls-shp-fill"]) {
+      for (const id of ["ls-pts-in", "ls-shp-fill"]) {
         map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
         map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
       }
@@ -882,7 +864,7 @@ export function initLondonSift(deps) {
   function applyLayerVisibility() {
     const vis = on => on ? "visible" : "none";
     if (map.getLayer("ls-pts-out")) map.setLayoutProperty("ls-pts-out", "visibility", vis(LS.active && LS.showOut));
-    for (const id of ["ls-pts-in", "ls-pts-cut", "ls-pts-top", "ls-pts-rank", "ls-shp-fill", "ls-shp-line"])
+    for (const id of ["ls-pts-in", "ls-pts-cut", "ls-shp-fill", "ls-shp-line"])
       if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis(LS.active));
     if (LS.active && map.getLayer("ls-shp-fill")) {
       const f = LS.showOut ? null : [">=", S, -2];
@@ -1019,7 +1001,7 @@ export function initLondonSift(deps) {
   // Called from app.js's tap dispatcher so touch works as well as click.
   function tap(point, box) {
     if (!LS.active || !LS.rows) return false;
-    const layers = ["ls-pts-top", "ls-pts-in", "ls-shp-fill", "ls-pts-cut", "ls-pts-out"].filter(id =>
+    const layers = ["ls-pts-in", "ls-shp-fill", "ls-pts-cut", "ls-pts-out"].filter(id =>
       map.getLayer(id) && map.getLayoutProperty(id, "visibility") !== "none");
     if (!layers.length) return false;
     let hits = [];
