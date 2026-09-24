@@ -239,7 +239,7 @@ export function initLondonSift(deps) {
     showOut: mmStore.get("londonSift.showOut", false),
     gates: null,
     preset: mmStore.get("londonSift.preset", "balanced"),
-    shapesFc: null,
+    outlines: null,       // id -> simplified GeoJSON geometry (all sites, loaded once)
   };
   const saved = mmStore.get("londonSift.gates", null);
   LS.gates = Array.isArray(saved) && saved.length ? mergeSaved(saved) : clone(PRESETS[LS.preset]?.gates || PRESETS.balanced.gates);
@@ -323,6 +323,7 @@ export function initLondonSift(deps) {
   $("ls-showout").addEventListener("change", e => {
     LS.showOut = e.target.checked;
     mmStore.set("londonSift.showOut", LS.showOut);
+    paintShapes();
     applyLayerVisibility();
   });
   $("ls-export").addEventListener("click", exportCsv);
@@ -795,6 +796,18 @@ export function initLondonSift(deps) {
   const RAMP_STOPS = [[0, "#ffa94d"], [40, "#fd7e14"], [65, "#e8590c"], [85, "#c92a2a"], [100, "#7a1212"]];
   const SCORE_RAMP = ["interpolate", ["linear"], S, ...RAMP_STOPS.flat()];
   const TOP_N = 25;          // ranked sites that get a number on the map
+  // A site's dot fades out once its outline is big enough to read (roughly
+  // ~3 px across): 2 ha plots at z11, 0.5 ha at z12, 0.12 ha at z13, the rest
+  // by z14. Small plots keep a dot until then, so nothing disappears.
+  const HA = ["coalesce", ["get", "ha"], 0];
+  // (A zoom curve must be the outermost expression, so the stroke gets its own
+  // copy scaled inside rather than a multiplied one.)
+  const dotFade = (on) => ["interpolate", ["linear"], ["zoom"],
+    10.5, on,
+    11.3, ["case", [">=", HA, 2], 0, on],
+    12.2, ["case", [">=", HA, 0.5], 0, on],
+    13.1, ["case", [">=", HA, 0.12], 0, on],
+    13.9, ["case", [">=", HA, 0.04], 0, on]];
 
   function pointsFc() {
     const scoreOf = new Map(LS.result.survivors.map(x => [x.r.id, x.s]));
@@ -811,12 +824,14 @@ export function initLondonSift(deps) {
     const before = overlayBeforeId();
     if (!map.getSource("ls-pts")) map.addSource("ls-pts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     if (!map.getSource("ls-shp")) map.addSource("ls-shp", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-    if (!map.getLayer("ls-shp-fill")) map.addLayer({ id: "ls-shp-fill", type: "fill", source: "ls-shp", minzoom: 13,
+    // Plot outlines from z11. Removed-by-this-gate plots (s = -2) are hollow.
+    if (!map.getLayer("ls-shp-fill")) map.addLayer({ id: "ls-shp-fill", type: "fill", source: "ls-shp", minzoom: 11,
       paint: { "fill-color": ["case", ["<", S, 0], "#868e96", SCORE_RAMP],
-               "fill-opacity": ["case", ["<", S, 0], 0.15, 0.6] } }, before);
-    if (!map.getLayer("ls-shp-line")) map.addLayer({ id: "ls-shp-line", type: "line", source: "ls-shp", minzoom: 13,
+               "fill-opacity": ["case", ["==", S, -2], 0.04, ["<", S, 0], 0.15, 0.65] } }, before);
+    if (!map.getLayer("ls-shp-line")) map.addLayer({ id: "ls-shp-line", type: "line", source: "ls-shp", minzoom: 11,
       paint: { "line-color": ["case", ["<", S, 0], "#868e96", SCORE_RAMP],
-               "line-width": ["interpolate", ["linear"], ["zoom"], 13, 1.5, 17, 3] } }, before);
+               "line-opacity": ["case", ["==", S, -2], 0.6, 1],
+               "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.8, 13, 1.5, 17, 3] } }, before);
     // Site dots sit on top of every other layer (stations included): while the
     // sift is on, the sites are the subject.
     if (!map.getLayer("ls-pts-out")) map.addLayer({ id: "ls-pts-out", type: "circle", source: "ls-pts",
@@ -837,12 +852,12 @@ export function initLondonSift(deps) {
         paint: { "circle-color": SCORE_RAMP,
                  "circle-radius": ["interpolate", ["linear"], ["zoom"],
                    8, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 3, 5, 5, 50, 8],
-                   11, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 4.5, 5, 7, 50, 11],
-                   13.9, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 6, 5, 10, 50, 16]],
+                   11, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 4, 5, 7, 50, 11],
+                   13.9, ["interpolate", ["linear"], ["coalesce", ["get", "ha"], 0], 0, 4.5, 5, 7, 50, 9]],
                  "circle-stroke-color": "#212529",
                  "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 0.6, 13, 1.2],
-                 "circle-stroke-opacity": 0.75,
-                 "circle-opacity": 1 } });
+                 "circle-stroke-opacity": dotFade(0.75),
+                 "circle-opacity": dotFade(1) } });
       // Top-ranked sites: a white halo ring plus their rank number, so the
       // shortlist in the panel can be found on the map at a glance.
       map.addLayer({ id: "ls-pts-top", type: "circle", source: "ls-pts",
@@ -883,33 +898,48 @@ export function initLondonSift(deps) {
     applyLayerVisibility();
   }
 
+  // Outlines for the sites currently in play: survivors, plus the plots the
+  // shown gate removed, plus everything else when "show eliminated" is on.
   function paintShapes() {
     const src = map.getSource("ls-shp");
-    if (!src || !LS.shapesFc) return;
-    const scoreOf = new Map(LS.result.survivors.map(x => [x.r.id, x.s]));
-    for (const f of LS.shapesFc.features)
-      f.properties.s = scoreOf.has(f.properties.id) ? scoreOf.get(f.properties.id)
-        : LS.result.cut.has(f.properties.id) ? -2 : -1;
-    src.setData(LS.shapesFc);
+    if (!src || !LS.outlines || !LS.result) return;
+    const feats = [];
+    const push = (id, s) => {
+      const g = LS.outlines.get(id);
+      if (g) feats.push({ type: "Feature", id, properties: { id, s }, geometry: g });
+    };
+    for (const { r, s } of LS.result.survivors) push(r.id, s);
+    for (const id of LS.result.cut) push(id, -2);
+    if (LS.showOut) {
+      const inPlay = new Set([...LS.result.survivors.map(x => x.r.id), ...LS.result.cut]);
+      for (const id of LS.outlines.keys()) if (!inPlay.has(id)) push(id, -1);
+    }
+    src.setData({ type: "FeatureCollection", features: feats });
   }
 
-  let _shpTimer = null, _shpSeq = 0;
-  async function refreshShapes() {
-    if (!LS.active || map.getZoom() < 13) return;
+  // Every outline, once, in the background after the sites arrive (~5 MB
+  // uncompressed, paged because PostgREST caps a response at 1,000 rows).
+  async function loadOutlines() {
+    if (LS.outlines) return;
     const sb = getSupabase(); if (!sb) return;
-    const b = map.getBounds();
-    const seq = ++_shpSeq;
-    const { data, error } = await sb.rpc("london_site_shapes",
-      { w: b.getWest(), s: b.getSouth(), e: b.getEast(), n: b.getNorth(), lim: 4000 });
-    if (error || seq !== _shpSeq || !data) return;
-    LS.shapesFc = data;
+    const page = 1000, out = new Map();
+    for (let batch = 0; ; batch += 4) {
+      const res = await Promise.all([0, 1, 2, 3].map(k =>
+        sb.rpc("london_site_outlines").order("id", { ascending: true })
+          .range((batch + k) * page, (batch + k + 1) * page - 1)));
+      let done = false;
+      for (const { data, error } of res) {
+        if (error) { console.error("london_site_outlines failed", error); return; }
+        for (const row of data || []) {
+          try { out.set(row.id, JSON.parse(row.outline)); } catch (_) {}
+        }
+        if (!data || data.length < page) done = true;
+      }
+      if (done) break;
+    }
+    LS.outlines = out;
     paintShapes();
   }
-  map.on("moveend", () => {
-    if (!LS.active) return;
-    clearTimeout(_shpTimer);
-    _shpTimer = setTimeout(refreshShapes, 300);
-  });
 
   async function activate(on) {
     LS.active = on;
@@ -922,7 +952,7 @@ export function initLondonSift(deps) {
       st.textContent = `${fmtInt(LS.rows.length)} sites`;
       renderGates();
       run();
-      refreshShapes();
+      loadOutlines();
       const b = map.getBounds();
       if (b.getWest() > 0.35 || b.getEast() < -0.52 || b.getSouth() > 51.7 || b.getNorth() < 51.28)
         map.flyTo({ center: [-0.11, 51.5], zoom: 9.6 });
