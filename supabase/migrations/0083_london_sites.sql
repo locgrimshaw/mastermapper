@@ -15,7 +15,8 @@
 --   growth           price and rent growth, planning approval rate, housing
 --                    delivery pressure, land value, CIL
 --   policy / form    CAZ, development corporations, Opportunity Areas, SIL,
---                    Metropolitan Open Land (layers from 0084), Article 4, heritage,
+--                    Metropolitan Open Land, LSIS, SINC (layers from 0084),
+--                    Article 4, heritage,
 --                    flood risk, TPO, AQMA, public ownership, surrounding
 --                    building heights (intensification headroom)
 --
@@ -213,6 +214,8 @@ create table if not exists public.london_sites (
   oa_name         text,
   in_sil          boolean,           -- Strategic Industrial Location (0084)
   in_mol          boolean,           -- Metropolitan Open Land (0084)
+  in_lsis         boolean,           -- Locally Significant Industrial Site (0084)
+  sinc_grade      text,              -- highest SINC grade touching the site (0084)
   article4        boolean,
   conservation    boolean,
   listed_n        integer,
@@ -454,7 +457,14 @@ begin
                  and st_intersects(m.geom, s.pt) limit 1),
       in_oa = exists (select 1 from map_features m where m.dataset = 'gla_opportunity_area' and st_intersects(m.geom, s.pt)),
       in_sil = exists (select 1 from map_features m where m.dataset = 'gla_sil' and st_intersects(m.geom, s.geom)),
-      in_mol = exists (select 1 from map_features m where m.dataset = 'gla_mol' and st_intersects(m.geom, s.geom))
+      in_mol = exists (select 1 from map_features m where m.dataset = 'gla_mol' and st_intersects(m.geom, s.geom)),
+      in_lsis = exists (select 1 from map_features m where m.dataset = 'gla_lsis' and st_intersects(m.geom, s.geom)),
+      sinc_grade = (select m.props->>'grade' from map_features m
+                    where m.dataset = 'gla_sinc' and st_intersects(m.geom, s.geom)
+                    order by case when m.props->>'grade' ilike 'metropolitan%' then 0
+                                  when m.props->>'grade' ilike '%grade I' then 1
+                                  when m.props->>'grade' ilike 'borough%' then 2 else 3 end
+                    limit 1)
     where s.id between p_from and p_to;
 
   elsif p_stage = 'form' then
@@ -505,7 +515,7 @@ returns table (
   price_trend real, rent_chg real, rent_g5 real, approval_pct real, plan_vs_lhn real,
   land_value real, cil real,
   in_caz boolean, in_devcorp boolean, in_oa boolean, oa_name text, in_sil boolean, in_mol boolean,
-  article4 boolean, conservation boolean, listed_n int,
+  in_lsis boolean, sinc_grade text, article4 boolean, conservation boolean, listed_n int,
   flood3 boolean, flood2 boolean, tpo boolean, aqma boolean, public_land boolean,
   storeys_site real, storeys_ctx real, dwellings_max int, permission text
 )
@@ -518,7 +528,7 @@ as $$
          resi_rent, resi_rent_2b, office_submkt, office_prime, office_mid,
          office_voa_pm2, office_n, price_ppm2,
          price_trend, rent_chg, rent_g5, approval_pct, plan_vs_lhn, land_value, cil,
-         in_caz, in_devcorp, in_oa, oa_name, in_sil, in_mol, article4, conservation, listed_n,
+         in_caz, in_devcorp, in_oa, oa_name, in_sil, in_mol, in_lsis, sinc_grade, article4, conservation, listed_n,
          flood3, flood2, tpo, aqma, public_land,
          storeys_site, storeys_ctx, dwellings_max, permission
   from london_sites

@@ -12,6 +12,12 @@
 --                         schemes inside them face a strong presumption against.
 --   gla_mol               Metropolitan Open Land (layer 211) — given the same
 --                         protection as Green Belt (Policy G3).
+--   gla_lsis              Locally Significant Industrial Sites (layer 207) —
+--                         borough-designated industrial land (Policy E6); some
+--                         are flagged for industrial co-location with homes.
+--   gla_sinc              Sites of Importance for Nature Conservation (layer
+--                         202), graded Metropolitan / Borough I / Borough II /
+--                         Local by GiGL (Policy G6).
 --
 -- Source: GLA planning data map, gis.london.gov.uk ArcGIS service
 -- apps/planning_data_map_02 (London Datastore, OGL v2). Boroughs define the
@@ -23,6 +29,8 @@
 --   select load_gla_planning_layer('gla_opportunity_area', 103);
 --   select load_gla_planning_layer('gla_sil', 206);
 --   select load_gla_planning_layer('gla_mol', 211);
+--   select load_gla_planning_layer('gla_lsis', 207);
+--   select load_gla_planning_layer('gla_sinc', 202);
 -- then rebuild_london_sites('policy') to re-test the sites.
 
 create or replace function public.load_gla_planning_layer(p_dataset text, p_layer int)
@@ -60,6 +68,7 @@ begin
            'hectares',   (nullif(p->>'hectares', ''))::numeric,
            'status',     nullif(p->>'status', ''),
            'type',       nullif(p->>'boroughdesignation', ''),
+           'grade',      nullif(p->>'classification', ''),
            'ref',        nullif(p->>'sitereference', ''),
            'doc_type',   nullif(regexp_replace(coalesce(p->>'extrainfo1', ''), '^Document type:\s*', ''), ''),
            'designated', nullif(regexp_replace(coalesce(p->>'extrainfo2', ''), '^London Plan designation year:\s*', ''), ''),
@@ -87,3 +96,5 @@ alter table public.london_sites add column if not exists in_oa  boolean;
 alter table public.london_sites add column if not exists oa_name text;
 alter table public.london_sites add column if not exists in_sil boolean;
 alter table public.london_sites add column if not exists in_mol boolean;
+alter table public.london_sites add column if not exists in_lsis boolean;
+alter table public.london_sites add column if not exists sinc_grade text;

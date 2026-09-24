@@ -1,4 +1,4 @@
-import { initLondonSift } from "./londonsift.js?v=ls2";
+import { initLondonSift } from "./londonsift.js?v=ls3";
 
 // app.js — Welfare Mapper prototype
 // England socio-economic site appraisal tool.
@@ -1165,6 +1165,13 @@ const OVERLAY_TREE = [
     { key: "access", title: "Accessibility scores" },
     { key: "bus", title: "Bus network" },
   ]},
+  // London-only evidence: London Plan designations from the GLA planning data
+  // map (migration 0084) and TfL's PTAL grid. Kept together so the London
+  // sites sifter's inputs sit in one place.
+  { key: "london", title: "London", subs: [
+    { key: "londonplan",   title: "London Plan designations" },
+    { key: "londonaccess", title: "Transport access" },
+  ]},
   // Data-centre layers live in their own branch, hidden until the
   // "Other data" toggle at the bottom of the sidebar reveals it.
   { key: "datacentres", title: "Data centres", subs: [
@@ -1308,11 +1315,14 @@ const MAP_OVERLAYS = [
   { key: "battlefield",         group: "heritage", label: "Registered battlefields", color: "#862e9c", dataset: "battlefield", minZoom: 8 },
   // Context that changes how a site reads rather than constraining it.
   { key: "development_corporation", group: "policy", label: "Development corporation areas", color: "#0c8599", dataset: "development_corporation", minZoom: 6 },
-  { key: "central_activities_zone", group: "policy", label: "Central Activities Zone (London)", color: "#f76707", dataset: "central_activities_zone", minZoom: 8 },
-  // London Plan designations from the GLA planning data map (migration 0084).
-  { key: "gla_opportunity_area", group: "policy", label: "Opportunity Areas (London Plan)", color: "#9c36b5", dataset: "gla_opportunity_area", minZoom: 8, nameLabel: true },
-  { key: "gla_sil", group: "policy", label: "Strategic Industrial Locations (London)", color: "#8b5a2b", dataset: "gla_sil", minZoom: 9 },
-  { key: "gla_mol", group: "policy", label: "Metropolitan Open Land (London)", color: "#2b8a3e", dataset: "gla_mol", minZoom: 9 },
+  // London Plan designations (London group): CAZ from planning.data.gov.uk,
+  // the rest from the GLA planning data map (migration 0084).
+  { key: "central_activities_zone", group: "londonplan", label: "Central Activities Zone", color: "#f76707", dataset: "central_activities_zone", minZoom: 8 },
+  { key: "gla_opportunity_area", group: "londonplan", label: "Opportunity Areas", color: "#9c36b5", dataset: "gla_opportunity_area", minZoom: 8, nameLabel: true },
+  { key: "gla_sil",  group: "londonplan", label: "Strategic Industrial Locations (SIL)", color: "#8b5a2b", dataset: "gla_sil", minZoom: 9 },
+  { key: "gla_lsis", group: "londonplan", label: "Locally Significant Industrial Sites (LSIS)", color: "#d9a066", dataset: "gla_lsis", minZoom: 9 },
+  { key: "gla_mol",  group: "londonplan", label: "Metropolitan Open Land (MOL)", color: "#2b8a3e", dataset: "gla_mol", minZoom: 9 },
+  { key: "gla_sinc", group: "londonplan", label: "Sites of Importance for Nature Conservation (SINC)", color: "#0ca678", dataset: "gla_sinc", minZoom: 10 },
   { key: "hdt",                 group: "policy", label: "Housing Delivery Test",         color: "#e03131", dataset: "hdt", minZoom: 5 },
   // Decision culture: share of applications approved over 3 years (PlanIt).
   { key: "planit_rates",        group: "policy", label: "Approval rates (PlanIt)",       color: "#0b7285", dataset: "planit_rates", minZoom: 5 },
@@ -1482,7 +1492,7 @@ const MAP_OVERLAYS = [
   // returned TWO. Tiles have no such ceiling and cost the database nothing.
   // `dataset` stays for the popup and colour ramp; `tiles` routes the DATA away
   // from the RPC, reusing the ov-ptal-* layer ids so taps and opacity work.
-  { key: "ptal",       group: "access", label: "PTAL (London transport access)", color: "#f03e3e", dataset: "ptal", minZoom: 8,
+  { key: "ptal",       group: "londonaccess", label: "PTAL (public transport access level)", color: "#f03e3e", dataset: "ptal", minZoom: 8,
     tiles: { file: "ptal.pmtiles", sourceLayer: "ptal", minzoom: 8, outlineFromZoom: 15 },
     cap: { color: ["match", ["to-string", ["get", "ptal"]],
            "0", "#08306b", "1a", "#2171b5", "1b", "#6baed6", "2", "#74c476",
@@ -1726,6 +1736,8 @@ const LAYER_INFO = {
   development_corporation: { about: "Development corporation areas — a different consenting regime, often with its own affordable-housing requirement and its own plan. Worth knowing before assuming the district council decides.", source: "MHCLG planning.data.gov.uk (OGL v3)" },
   gla_opportunity_area: { about: "London Plan Opportunity Areas: the capital's main reservoirs of brownfield land, each expected to take at least 2,500 homes or 5,000 jobs, usually tied to a transport upgrade and planned through an Opportunity Area Planning Framework, Area Action Plan or SPD. Being inside one is a strong policy tailwind for intensification.", source: "GLA planning data map (London Datastore, OGL v2); boundaries set by the boroughs" },
   gla_sil:      { about: "Strategic Industrial Locations (Preferred Industrial Locations and Industrial Business Parks): London Plan Policy E5 protects them for industry, logistics and related uses. Residential and office-led schemes inside a SIL face a strong presumption against unless the plan-led process releases the land.", source: "GLA planning data map (London Datastore, OGL v2); boundaries set by the boroughs" },
+  gla_lsis:     { about: "Locally Significant Industrial Sites: borough-designated industrial land protected by London Plan Policy E6, one step below SIL. Some are flagged for co-location, where intensified industrial space can share a site with homes — so an LSIS can be an opportunity as much as a constraint. The borough's own label (e.g. 'LSIS co-location', 'Borough Employment Area') is shown on each site.", source: "GLA planning data map (London Datastore, OGL v2); boundaries set by the boroughs" },
+  gla_sinc:     { about: "Sites of Importance for Nature Conservation, graded Metropolitan, Borough (Grade I / II) or Local importance. London Plan Policy G6 protects them in proportion to grade: Metropolitan and Borough Grade I sites are a serious constraint, Local sites far less so.", source: "Greenspace Information for Greater London (GiGL) via the GLA planning data map (OGL v3)" },
   gla_mol:      { about: "Metropolitan Open Land: London's strategic open land, given the same level of protection as Green Belt by London Plan Policy G3. Development is inappropriate except in very special circumstances.", source: "GLA planning data map (London Datastore, OGL v2); boundaries set by the boroughs" },
   central_activities_zone: { about: "The Central Activities Zone: London's commercial core, where London Plan policy overrides normal borough expectations on mix, density and affordable housing.", source: "GLA / MHCLG planning.data.gov.uk (OGL v3)" },
   hdt:                 { about: "The Housing Delivery Test: net homes delivered against the requirement over the previous three years. NPPF (Aug 2026) Annex D ¶12 attaches three cumulative consequences. Below 95% (amber) the authority must prepare an action plan. Below 85% (orange) a 20% buffer is added to its deliverable land supply on top of that. Below 75% (red) an evidenced unmet need for housing is DEEMED to exist for the purpose of policy S5(1)(j) — which is the route to approval OUTSIDE a settlement boundary, and the single strongest positional argument an applicant can have. Green is passing. Results supersede on the day the next annual measurement publishes.", source: "MHCLG Housing Delivery Test measurement (OGL v3); consequences per NPPF Aug 2026 Annex D ¶11-13" },
@@ -4970,13 +4982,19 @@ function hoverContentForOverlay(def, p) {
             row(p.status, "framework status"),
             row(p.doc_type, "planning framework"),
             row(p.designated, "London Plan designation")];
-  } else if (d === "gla_sil" || d === "gla_mol") {
-    title = p.name || (d === "gla_sil" ? "Strategic Industrial Location" : "Metropolitan Open Land");
-    kind = d === "gla_sil" ? "Strategic Industrial Location — London Plan E5"
-                           : "Metropolitan Open Land — London Plan G3";
+  } else if (d === "gla_sil" || d === "gla_mol" || d === "gla_lsis" || d === "gla_sinc") {
+    const GLA_KIND = {
+      gla_sil:  ["Strategic Industrial Location", "Strategic Industrial Location — London Plan E5"],
+      gla_lsis: ["Locally Significant Industrial Site", "Locally Significant Industrial Site — London Plan E6"],
+      gla_mol:  ["Metropolitan Open Land", "Metropolitan Open Land — London Plan G3"],
+      gla_sinc: ["Nature conservation site", "SINC — London Plan G6"],
+    }[d];
+    title = p.name || GLA_KIND[0];
+    kind = GLA_KIND[1];
     rows = [row(p.borough, "borough"),
             row(p.hectares != null ? `${Number(p.hectares).toLocaleString()} ha` : null, "area"),
-            row(d === "gla_sil" ? p.type : null, "designation")];
+            row(d === "gla_sil" || d === "gla_lsis" ? p.type : null, "borough designation"),
+            row(d === "gla_sinc" ? p.grade : null, "importance")];
   } else if (d === "grey_belt_candidate") {
     title = p.name || "Grey-belt candidate";
     kind = "Grey-belt candidate — model, not a designation";
