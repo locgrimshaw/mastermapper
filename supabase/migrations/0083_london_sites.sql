@@ -259,7 +259,7 @@ begin
     select 'register', b.id::text, 'brownfield', coalesce(b.permission_status, 'registered'),
            coalesce(nullif(b.name, ''), b.site_address), true,
            coalesce(b.hectares, st_area(b.area::geography) / 1e4),
-           coalesce(b.area, st_buffer(b.geom::geography, sqrt(greatest(coalesce(b.hectares, 0.1), 0.01) * 1e4 / pi()))::geometry),
+           coalesce(b.area::geometry, st_buffer(b.geom::geography, sqrt(greatest(coalesce(b.hectares, 0.1), 0.01) * 1e4 / pi()))::geometry),
            b.geom, b.dwellings_max, b.permission_status, b.is_public
     from brownfield b, _ldn
     where st_intersects(b.geom, _ldn.g);
