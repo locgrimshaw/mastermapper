@@ -253,13 +253,14 @@ export function initLondonSift(deps) {
     return out;
   }
   // Per-viewer panel layout, kept apart from the gate settings so presets
-  // and "Reset" never undo it: which cards are minimised, which are hidden.
-  // A hidden gate is not applied at all (it would otherwise change the
-  // results from somewhere the viewer can no longer see).
+  // and "Reset" never undo it: which cards are minimised, and which gates
+  // are switched off with their toggle. A switched-off gate stays in the list
+  // (dimmed, settings kept) but is not applied at all. Stored as `hidden`,
+  // the name of the ✕ it replaced, so earlier choices carry over.
   const ui = Object.assign({ collapsed: {}, hidden: {} }, mmStore.get("londonSift.ui", {}));
   const saveUi = () => mmStore.set("londonSift.ui", ui);
-  const isHidden = g => !!ui.hidden[g.key];
-  const effMode = g => isHidden(g) ? "off" : g.mode;
+  const isOff = g => !!ui.hidden[g.key];
+  const effMode = g => isOff(g) ? "off" : g.mode;
 
   const persist = () => {
     mmStore.set("londonSift.gates", LS.gates);
@@ -283,7 +284,6 @@ export function initLondonSift(deps) {
         <button type="button" class="ls-link" id="ls-expand-all">Expand all</button>
       </div>
       <div id="ls-gates" class="ls-gates"></div>
-      <div id="ls-hidden" class="ls-hidden"></div>
       <div class="dc-sec">Result</div>
       <div id="ls-summary" class="ls-summary"></div>
       <div class="ls-opts">
@@ -412,7 +412,7 @@ export function initLondonSift(deps) {
     // "Show" on a gate stops the map and list at that stage: later gates
     // neither filter nor score, and the sites this gate removed are kept
     // aside so the map can mark them.
-    let stageI = LS.stageKey ? LS.gates.findIndex(g => g.key === LS.stageKey && !isHidden(g)) : -1;
+    let stageI = LS.stageKey ? LS.gates.findIndex(g => g.key === LS.stageKey && !isOff(g)) : -1;
     if (stageI < 0) LS.stageKey = null;
     let shown = null, cut = [];
     LS.gates.forEach((g, i) => {
@@ -464,23 +464,10 @@ export function initLondonSift(deps) {
   function renderGates() {
     root.querySelectorAll(".ls-preset").forEach(b =>
       b.classList.toggle("on", b.dataset.preset === LS.preset));
-    const vis = LS.gates.map((g, i) => i).filter(i => !isHidden(LS.gates[i]));
-    gatesEl.innerHTML = vis.map((i, k) => gateHTML(LS.gates[i], i, k === 0, k === vis.length - 1)).join("");
+    const last = LS.gates.length - 1;
+    gatesEl.innerHTML = LS.gates.map((g, i) => gateHTML(g, i, i === 0, i === last)).join("");
     gatesEl.querySelectorAll(".ls-gate").forEach(el => wireGate(el));
-    renderHiddenTray();
     renderFunnel();
-  }
-
-  // Tray of hidden gates, each one click from coming back.
-  function renderHiddenTray() {
-    const el = $("ls-hidden");
-    const hid = LS.gates.filter(isHidden);
-    if (!hid.length) { el.innerHTML = ""; return; }
-    el.innerHTML = `<span class="hint">Hidden (not applied):</span> ` + hid.map(g =>
-      `<button type="button" class="ls-chip-btn" data-show="${g.key}" title="Show this gate again">+ ${escape(GATE_DEFS[g.key].title)}</button>`).join("");
-    el.querySelectorAll("[data-show]").forEach(b => b.addEventListener("click", () => {
-      delete ui.hidden[b.dataset.show]; saveUi(); renderGates(); run();
-    }));
   }
 
   // One-line reading of a gate's setting, shown in the header when minimised.
@@ -498,27 +485,32 @@ export function initLondonSift(deps) {
   function gateHTML(g, i, first, last) {
     const collapsed = !!ui.collapsed[g.key];
     const d = GATE_DEFS[g.key];
-    const modeSel = `<select class="ls-mode" aria-label="Gate mode">
+    const off = isOff(g);
+    const modeSel = `<select class="ls-mode" aria-label="Gate mode"${off ? " disabled" : ""}>
         <option value="filter"${g.mode === "filter" ? " selected" : ""}>Filter</option>
         ${d.metrics ? `<option value="score"${g.mode === "score" ? " selected" : ""}>Score</option>` : ""}
         <option value="off"${g.mode === "off" ? " selected" : ""}>Off</option>
       </select>`;
-    return `<div class="ls-gate ls-mode-${g.mode}${collapsed ? " ls-collapsed" : ""}" draggable="true" data-i="${i}">
+    return `<div class="ls-gate ls-mode-${g.mode}${collapsed ? " ls-collapsed" : ""}${off ? " ls-off" : ""}" draggable="true" data-i="${i}">
       <div class="ls-gate-h">
+        <label class="ls-switch" title="${off ? "Switch this gate on" : "Switch this gate off (keeps its settings)"}">
+          <input type="checkbox" class="ls-onoff"${off ? "" : " checked"} aria-label="${escape(d.title)} on/off" />
+          <span class="ls-slider" aria-hidden="true"></span>
+        </label>
         <span class="ls-grip" title="Drag to reorder" aria-hidden="true">⋮⋮</span>
         <button type="button" class="ls-fold" aria-expanded="${!collapsed}" title="${collapsed ? "Expand" : "Minimise"}">
           <span class="ls-caret" aria-hidden="true">▾</span>
           <span class="ls-gate-t">${escape(d.title)}</span>
-          ${collapsed && g.mode !== "off" ? `<span class="ls-sum">${escape(gateSummary(g))}</span>` : ""}
+          ${off ? `<span class="ls-sum">off</span>`
+            : collapsed && g.mode !== "off" ? `<span class="ls-sum">${escape(gateSummary(g))}</span>` : ""}
         </button>
         ${modeSel}
         <span class="ls-move">
           <button type="button" class="ls-up" aria-label="Move up"${first ? " disabled" : ""}>↑</button>
           <button type="button" class="ls-down" aria-label="Move down"${last ? " disabled" : ""}>↓</button>
-          <button type="button" class="ls-hide" aria-label="Hide this gate" title="Hide (stops applying it)">✕</button>
         </span>
       </div>
-      <div class="ls-gate-b"${g.mode === "off" || collapsed ? " hidden" : ""}>${gateBodyHTML(g)}
+      <div class="ls-gate-b"${off || g.mode === "off" || collapsed ? " hidden" : ""}>${gateBodyHTML(g)}
         <details class="ls-about"><summary>About</summary><p>${escape(d.about)}</p></details>
       </div>
       <div class="ls-gate-f"></div>
@@ -581,19 +573,15 @@ export function initLondonSift(deps) {
     const g = LS.gates[i];
     const changed = (rerender = false) => { LS.preset = "custom"; persist(); if (rerender) renderGates(); run(); };
     el.querySelector(".ls-mode").addEventListener("change", e => { g.mode = e.target.value; changed(true); });
-    const neighbour = step => {
-      for (let j = i + step; j >= 0 && j < LS.gates.length; j += step)
-        if (!isHidden(LS.gates[j])) return j;
-      return -1;
-    };
-    el.querySelector(".ls-up").addEventListener("click", () => move(i, neighbour(-1)));
-    el.querySelector(".ls-down").addEventListener("click", () => move(i, neighbour(1)));
+    el.querySelector(".ls-up").addEventListener("click", () => move(i, i - 1));
+    el.querySelector(".ls-down").addEventListener("click", () => move(i, i + 1));
     el.querySelector(".ls-fold").addEventListener("click", () => {
       if (ui.collapsed[g.key]) delete ui.collapsed[g.key]; else ui.collapsed[g.key] = true;
       saveUi(); renderGates();
     });
-    el.querySelector(".ls-hide").addEventListener("click", () => {
-      ui.hidden[g.key] = true; saveUi(); renderGates(); run();
+    el.querySelector(".ls-onoff").addEventListener("change", e => {
+      if (e.target.checked) delete ui.hidden[g.key]; else ui.hidden[g.key] = true;
+      saveUi(); renderGates(); run();
     });
     // Drag and drop (desktop); the arrows cover touch.
     el.addEventListener("dragstart", e => {
@@ -694,7 +682,7 @@ export function initLondonSift(deps) {
       const i = Number(el.dataset.i);
       const g = LS.gates[i];
       const f = el.querySelector(".ls-gate-f");
-      if (!res || !f) { if (f) f.innerHTML = ""; return; }
+      if (!res || !f || isOff(g)) { if (f) f.innerHTML = ""; return; }
       const fr = res.funnel[i];
       const rank = res.scorers.indexOf(g);
       let html = "";
