@@ -481,13 +481,47 @@ async function fetchBasemapStyle(theme) {
   return _bmStyleCache[theme];
 }
 
+// Basemap diet. The full OpenFreeMap style draws ~54 layers from z6-8 up and,
+// measured, the basemap was about half of the map's pan/zoom cost. This keeps
+// the look but drops what the app doesn't need and holds dense detail back
+// until the zoom where it is legible:
+//   - dropped: the basemap's own railway lines (the app's rail overlay draws
+//     them, with modes), US road shields, glaciers and ice shelves, airport
+//     taxiways/runways, piers and footpaths;
+//   - later: minor roads from z12 (was z8), buildings from z14 (z12), A/B
+//     road-number badges from z13 (z11), small waterways and their labels,
+//     neighbourhood/village names.
+// Motorways, major roads, parks, water, woodland, boundaries and town/city
+// names are unchanged.
+const BASEMAP_DROP = new Set([
+  "landcover_ice_shelf", "landcover_glacier",
+  "aeroway-taxiway", "aeroway-runway-casing", "aeroway-runway",
+  "road_area_pier", "road_pier", "highway_path",
+  "railway_transit", "railway_transit_dashline", "railway_service",
+  "railway_service_dashline", "railway", "railway_dashline",
+  "highway-shield-us-interstate", "road_shield_us",
+  "highway-name-path",
+  // the dark style's names for the same things, plus its one-way arrows
+  "railway_minor", "railway_minor_dashline", "road_oneway", "road_oneway_opposite",
+]);
+const BASEMAP_MINZOOM = {
+  highway_minor: 12, building: 14, waterway: 11, landuse_residential: 10,
+  waterway_line_label: 13, label_other: 11, label_village: 10,
+  "highway-shield-non-us": 13,   // UK A/B road-number badges (the name misleads)
+  // dark style
+  place_other: 11, place_suburb: 11, place_village: 10, highway_name_other: 15,
+};
+
 function applyBasemapLayers(styleJson) {
   for (const id of _bmLayerIds) if (map.getLayer(id)) map.removeLayer(id);
   _bmLayerIds = []; _bmLabelIds = [];
   const anchor = (map.getStyle().layers || []).map(l => l.id)
     .find(id => id !== "base" && !id.startsWith("bm-"));
   for (const l of styleJson.layers) {
+    if (BASEMAP_DROP.has(l.id)) continue;
     const def = { ...l, id: "bm-" + l.id };
+    if (BASEMAP_MINZOOM[l.id] != null)
+      def.minzoom = Math.max(l.minzoom || 0, BASEMAP_MINZOOM[l.id]);
     _bmLayerIds.push(def.id);
     try {
       if (l.type === "symbol") { _bmLabelIds.push(def.id); map.addLayer(def); }
