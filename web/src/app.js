@@ -3219,8 +3219,46 @@ async function setParcelsVisible(on) {
   }
   for (const id of ["parcel-fill", "parcel-line"])
     if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
-  if (stat) stat.textContent = on ? "streams from z13" : "";
+  wireParcelStatus();
+  updateParcelStatus();
   updateDataSourceNote();
+}
+
+// Say what the parcel layer is doing. The tiles come from one 4.5 GB national
+// file; when the CDN edge nearest the viewer has not cached it, each request
+// goes back to storage and the first view can take a while to fill. Without
+// feedback that reads as broken — and so does being zoomed out below z13,
+// where nothing ever draws.
+let _parcelLoading = false, _parcelStatusWired = false;
+function updateParcelStatus() {
+  const stat = document.getElementById("parcels-stat");
+  if (!stat) return;
+  if (!parcelsState.on) { stat.textContent = ""; return; }
+  if (parcelsState.available === false) { stat.textContent = "tiles not built yet"; return; }
+  stat.textContent = map.getZoom() < 13 ? "zoom in to z13+"
+    : _parcelLoading ? "loading tiles…" : "streams from z13";
+}
+function wireParcelStatus() {
+  if (_parcelStatusWired) return;
+  _parcelStatusWired = true;
+  // Loading ends when the parcel source itself reports loaded — not on the
+  // map's "idle", which other animated layers can hold off indefinitely.
+  let poll = null;
+  const settle = () => {
+    let done = true;
+    try { done = map.isSourceLoaded("parcels"); } catch (_) {}
+    if (!done) return;
+    _parcelLoading = false;
+    clearInterval(poll); poll = null;
+    updateParcelStatus();
+  };
+  map.on("dataloading", e => {
+    if (e.sourceId !== "parcels" || !parcelsState.on) return;
+    if (!_parcelLoading) { _parcelLoading = true; updateParcelStatus(); }
+    if (!poll) poll = setInterval(settle, 400);
+  });
+  map.on("sourcedata", e => { if (e.sourceId === "parcels" && _parcelLoading) settle(); });
+  map.on("zoomend", updateParcelStatus);
 }
 
 function setParcelOpacity(v) {
