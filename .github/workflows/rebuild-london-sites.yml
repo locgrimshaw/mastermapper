@@ -84,12 +84,16 @@ jobs:
             call rebuild_london_transit "{\"p_url\":\"$url\"}"
           fi
           # London Plan designations straight from the GLA planning data map
-          # (Opportunity Areas, SIL, MOL, LSIS, SINC) — see 0084.
+          # (Opportunity Areas, SIL, MOL, LSIS, SINC; LVMF vistas from 0086).
           call load_gla_planning_layer '{"p_dataset":"gla_opportunity_area","p_layer":103}'
           call load_gla_planning_layer '{"p_dataset":"gla_sil","p_layer":206}'
           call load_gla_planning_layer '{"p_dataset":"gla_mol","p_layer":211}'
           call load_gla_planning_layer '{"p_dataset":"gla_lsis","p_layer":207}'
           call load_gla_planning_layer '{"p_dataset":"gla_sinc","p_layer":202}'
+          # London View Management Framework protected vistas (0086).
+          call load_gla_planning_layer '{"p_dataset":"gla_lvmf_corridor","p_layer":215}'
+          call load_gla_planning_layer '{"p_dataset":"gla_lvmf_wider","p_layer":216}'
+          call load_gla_planning_layer '{"p_dataset":"gla_lvmf_ext","p_layer":220}'
           echo "— base"
           call rebuild_london_sites '{"p_stage":"base"}'
           max=$(curl -sS "$SUPABASE_URL/rest/v1/london_sites?select=id&order=id.desc&limit=1" \
@@ -102,4 +106,11 @@ jobs:
               echo "— $stage $from–$to"
               call rebuild_london_sites "{\"p_stage\":\"$stage\",\"p_from\":$from,\"p_to\":$to}"
             done
+          done
+          # LVMF view flags (0086), chunked finer: the background areas are
+          # large polygons and the overlap test is slow.
+          for from in $(seq 0 2000 "$max"); do
+            to=$((from + 1999))
+            echo "— lvmf $from–$to"
+            call tag_london_sites_lvmf "{\"p_from\":$from,\"p_to\":$to}"
           done

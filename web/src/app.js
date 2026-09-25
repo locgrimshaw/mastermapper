@@ -1,4 +1,4 @@
-import { initLondonSift } from "./londonsift.js?v=ls9";
+import { initLondonSift } from "./londonsift.js?v=ls10";
 
 // Front-end feature switches. The generative designers — the housing layout
 // generator (layoutgen.js) and the data-centre campus generator (dcgen.js) —
@@ -1178,6 +1178,7 @@ const OVERLAY_TREE = [
   // sites sifter's inputs sit in one place.
   { key: "london", title: "London", subs: [
     { key: "londonplan",   title: "London Plan designations" },
+    { key: "londonviews",  title: "Protected views (LVMF)" },
     { key: "londonaccess", title: "Transport access" },
   ]},
   // Data-centre layers live in their own branch, hidden until the
@@ -1330,6 +1331,10 @@ const MAP_OVERLAYS = [
   { key: "gla_sil",  group: "londonplan", label: "Strategic Industrial Locations (SIL)", color: "#8b5a2b", dataset: "gla_sil", minZoom: 9 },
   { key: "gla_lsis", group: "londonplan", label: "Locally Significant Industrial Sites (LSIS)", color: "#d9a066", dataset: "gla_lsis", minZoom: 9 },
   { key: "gla_mol",  group: "londonplan", label: "Metropolitan Open Land (MOL)", color: "#2b8a3e", dataset: "gla_mol", minZoom: 9 },
+  // London View Management Framework protected vistas (migration 0086).
+  { key: "gla_lvmf_corridor", group: "londonviews", label: "Landmark viewing corridors", color: "#c2255c", dataset: "gla_lvmf_corridor", minZoom: 8, nameLabel: true },
+  { key: "gla_lvmf_wider",    group: "londonviews", label: "Wider setting consultation areas", color: "#f06595", dataset: "gla_lvmf_wider", minZoom: 8 },
+  { key: "gla_lvmf_ext",      group: "londonviews", label: "Background (extension) areas", color: "#e599f7", dataset: "gla_lvmf_ext", minZoom: 8 },
   { key: "gla_sinc", group: "londonplan", label: "Sites of Importance for Nature Conservation (SINC)", color: "#0ca678", dataset: "gla_sinc", minZoom: 10 },
   { key: "hdt",                 group: "policy", label: "Housing Delivery Test",         color: "#e03131", dataset: "hdt", minZoom: 5 },
   // Decision culture: share of applications approved over 3 years (PlanIt).
@@ -1746,6 +1751,9 @@ const LAYER_INFO = {
   gla_sil:      { about: "Strategic Industrial Locations (Preferred Industrial Locations and Industrial Business Parks): London Plan Policy E5 protects them for industry, logistics and related uses. Residential and office-led schemes inside a SIL face a strong presumption against unless the plan-led process releases the land.", source: "GLA planning data map (London Datastore, OGL v2); boundaries set by the boroughs" },
   gla_lsis:     { about: "Locally Significant Industrial Sites: borough-designated industrial land protected by London Plan Policy E6, one step below SIL. Some are flagged for co-location, where intensified industrial space can share a site with homes — so an LSIS can be an opportunity as much as a constraint. The borough's own label (e.g. 'LSIS co-location', 'Borough Employment Area') is shown on each site.", source: "GLA planning data map (London Datastore, OGL v2); boundaries set by the boroughs" },
   gla_sinc:     { about: "Sites of Importance for Nature Conservation, graded Metropolitan, Borough (Grade I / II) or Local importance. London Plan Policy G6 protects them in proportion to grade: Metropolitan and Borough Grade I sites are a serious constraint, Local sites far less so.", source: "Greenspace Information for Greater London (GiGL) via the GLA planning data map (OGL v3)" },
+  gla_lvmf_corridor: { about: "London View Management Framework: the Landmark Viewing Corridor of each protected vista — the line from a designated viewing place (Parliament Hill, Primrose Hill, Greenwich Park, Alexandra Palace…) to a strategic landmark (St Paul's, the Palace of Westminster, the Tower). Development that would breach the corridor's threshold plane should be refused (London Plan HC4). The GLA data maps where each corridor lies, not the threshold height, which varies along it: check the LVMF SPG view sheet for the height at a given site.", source: "GLA planning data map, digitised from the LVMF SPG coordinates (OGL v2)" },
+  gla_lvmf_wider:    { about: "London View Management Framework: the Wider Setting Consultation Area either side of a viewing corridor. Development here that would be visible in the view is assessed for its effect on the landmark's setting and on the composition of the view — a consultation zone and a height sensitivity, not a ban.", source: "GLA planning data map, digitised from the LVMF SPG coordinates (OGL v2)" },
+  gla_lvmf_ext:      { about: "London View Management Framework: the background (extension) area behind a strategic landmark. Tall buildings here can appear behind the landmark in the protected view, so they should preserve or enhance the viewer's ability to recognise and appreciate it. Large areas, often well beyond the landmark; mainly a tall-building sensitivity.", source: "GLA planning data map, digitised from the LVMF SPG coordinates (OGL v2)" },
   gla_mol:      { about: "Metropolitan Open Land: London's strategic open land, given the same level of protection as Green Belt by London Plan Policy G3. Development is inappropriate except in very special circumstances.", source: "GLA planning data map (London Datastore, OGL v2); boundaries set by the boroughs" },
   central_activities_zone: { about: "The Central Activities Zone: London's commercial core, where London Plan policy overrides normal borough expectations on mix, density and affordable housing.", source: "GLA / MHCLG planning.data.gov.uk (OGL v3)" },
   hdt:                 { about: "The Housing Delivery Test: net homes delivered against the requirement over the previous three years. NPPF (Aug 2026) Annex D ¶12 attaches three cumulative consequences. Below 95% (amber) the authority must prepare an action plan. Below 85% (orange) a 20% buffer is added to its deliverable land supply on top of that. Below 75% (red) an evidenced unmet need for housing is DEEMED to exist for the purpose of policy S5(1)(j) — which is the route to approval OUTSIDE a settlement boundary, and the single strongest positional argument an applicant can have. Green is passing. Results supersede on the day the next annual measurement publishes.", source: "MHCLG Housing Delivery Test measurement (OGL v3); consequences per NPPF Aug 2026 Annex D ¶11-13" },
@@ -5028,6 +5036,14 @@ function hoverContentForOverlay(def, p) {
             row(p.status, "framework status"),
             row(p.doc_type, "planning framework"),
             row(p.designated, "London Plan designation")];
+  } else if (d === "gla_lvmf_corridor" || d === "gla_lvmf_wider" || d === "gla_lvmf_ext") {
+    title = p.name || "Protected vista";
+    kind = { gla_lvmf_corridor: "LVMF landmark viewing corridor",
+             gla_lvmf_wider: "LVMF wider setting consultation area",
+             gla_lvmf_ext: "LVMF background (extension) area" }[d];
+    rows = [row(p.ref, "LVMF view"),
+            row(d === "gla_lvmf_corridor" ? "refuse above the threshold plane" : "assess effect on the view", "London Plan HC4"),
+            row("location only — threshold heights are in the LVMF view sheets", "data")];
   } else if (d === "gla_sil" || d === "gla_mol" || d === "gla_lsis" || d === "gla_sinc") {
     const GLA_KIND = {
       gla_sil:  ["Strategic Industrial Location", "Strategic Industrial Location — London Plan E5"],

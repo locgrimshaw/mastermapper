@@ -124,7 +124,7 @@ const GATE_DEFS = {
   headroom:    { title: "Intensification headroom", metrics: ["headroom"],
                  about: "How much taller the neighbourhood is than the site: the 75th-percentile storey count of buildings within ~300 m minus the site's own average. A low shed among mid-rise blocks scores high." },
   constraints: { title: "Constraints", special: "constraints",
-                 about: "Remove sites under hard or costly designations. Strategic Industrial Locations are protected for industry and logistics (London Plan E5) and Metropolitan Open Land has Green Belt-level protection (G3); Locally Significant Industrial Sites (E6) are protected by the borough but some allow co-location with homes; Sites of Importance for Nature Conservation (G6) matter most at Metropolitan and Borough Grade I. All are tested against the whole plot, so a site clipping one is flagged. Flood zones, conservation areas and listed buildings are tested against the site; Article 4 directions in London mostly remove office-to-residential permitted development." },
+                 about: "Remove sites under hard or costly designations. Strategic Industrial Locations are protected for industry and logistics (London Plan E5) and Metropolitan Open Land has Green Belt-level protection (G3); Locally Significant Industrial Sites (E6) are protected by the borough but some allow co-location with homes; Sites of Importance for Nature Conservation (G6) matter most at Metropolitan and Borough Grade I. London View Management Framework protected vistas limit height rather than development: a viewing corridor refuses anything above its threshold plane, and the wider setting and background areas are assessed for their effect on the view — so they are off by default and flagged on each site; tick them to screen out height-sensitive land. All are tested against the whole plot, so a site clipping one is flagged. Flood zones, conservation areas and listed buildings are tested against the site; Article 4 directions in London mostly remove office-to-residential permitted development." },
   policy:      { title: "Policy areas & ownership", special: "policy",
                  about: "Keep only sites inside a London Plan Opportunity Area (the capital's planned growth locations), the Central Activities Zone, a Mayoral development corporation (LLDC, OPDC), or on public land (council and other public-body titles). Several ticks = any of them." },
   borough:     { title: "Boroughs", special: "borough",
@@ -137,6 +137,9 @@ const CONSTRAINT_OPTS = [
   { key: "in_lsis", label: "Locally Significant Industrial Site" },
   { key: "sinc_major", label: "SINC — Metropolitan or Borough I" },
   { key: "sinc_any", label: "SINC — any grade" },
+  { key: "lvmf_corridor", label: "LVMF viewing corridor" },
+  { key: "lvmf_wider", label: "LVMF wider setting area" },
+  { key: "lvmf_ext", label: "LVMF background area" },
   { key: "flood3", label: "Flood zone 3" },
   { key: "flood2", label: "Flood zone 2" },
   { key: "conservation", label: "Conservation area" },
@@ -294,7 +297,7 @@ export function initLondonSift(deps) {
         <button type="button" id="ls-export">Export CSV</button>
         <button type="button" class="ghost" id="ls-reset">Reset to preset</button>
       </div>
-      <p class="hint ls-foot">Sources: MHCLG brownfield registers, OpenStreetMap, OS Open Greenspace, TfL (PTAL, timetables), DfT connectivity metric, ONS private rents, VOA rating list, agent office reports, HM Land Registry, planning.data.gov.uk, GLA planning data map (Opportunity Areas, SIL, LSIS, MOL), GiGL (SINCs). Borough-level figures (rents, approval rate, plan supply) apply to every site in the borough.</p>
+      <p class="hint ls-foot">Sources: MHCLG brownfield registers, OpenStreetMap, OS Open Greenspace, TfL (PTAL, timetables), DfT connectivity metric, ONS private rents, VOA rating list, agent office reports, HM Land Registry, planning.data.gov.uk, GLA planning data map (Opportunity Areas, SIL, LSIS, MOL, LVMF protected vistas), GiGL (SINCs). Borough-level figures (rents, approval rate, plan supply) apply to every site in the borough.</p>
     </div>`;
 
   const $ = id => document.getElementById(id);
@@ -945,6 +948,7 @@ export function initLondonSift(deps) {
       r.in_sil && "Strategic Industrial Location", r.in_mol && "Metropolitan Open Land",
       r.in_lsis && "Locally Significant Industrial Site",
       r.sinc_grade && `SINC · ${r.sinc_grade.replace(/ importance/i, "")}`,
+      r.lvmf_view && `LVMF ${r.lvmf_corridor ? "corridor" : r.lvmf_wider ? "wider setting" : "background"}: ${r.lvmf_view}`,
       r.in_caz && "CAZ", r.in_devcorp && "Development corporation", r.public_land && "Public land",
       r.flood3 && "Flood zone 3", !r.flood3 && r.flood2 && "Flood zone 2", r.conservation && "Conservation area",
       (r.listed_n || 0) > 0 && `${r.listed_n} listed building${r.listed_n > 1 ? "s" : ""}`,
@@ -1008,7 +1012,7 @@ export function initLondonSift(deps) {
       "ptal", "ptal_ai", "z1_min", "z1_via", "stn_name", "stn_m", "conn_pt", "conn_emp", "conn_all",
       "resi_rent", "resi_rent_2b", "office_submkt", "office_prime", "office_mid", "office_voa_pm2", "office_n",
       "price_ppm2", "price_trend", "rent_chg", "rent_g5", "approval_pct", "plan_vs_lhn", "land_value", "cil",
-      "in_oa", "oa_name", "in_sil", "in_mol", "in_lsis", "sinc_grade", "in_caz", "in_devcorp", "public_land", "article4", "conservation", "listed_n", "flood3", "flood2", "tpo", "aqma",
+      "in_oa", "oa_name", "in_sil", "in_mol", "in_lsis", "sinc_grade", "lvmf_corridor", "lvmf_wider", "lvmf_ext", "lvmf_view", "in_caz", "in_devcorp", "public_land", "article4", "conservation", "listed_n", "flood3", "flood2", "tpo", "aqma",
       "storeys_site", "storeys_ctx", "dwellings_max", "permission"];
     const q = v => v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
     const lines = [cols.join(",")];

@@ -29,9 +29,10 @@ does the interactive scoring and reporting.
   travel time, residential and office rents, growth, constraints and height
   headroom, plus London Plan designations (Opportunity Areas, Strategic
   Industrial Locations, Locally Significant Industrial Sites, Metropolitan
-  Open Land, Sites of Importance for Nature Conservation — also in the
-  **London** data-layers group with the CAZ and PTAL, loaded from the GLA
-  planning data map by migration 0084). Each gate
+  Open Land, Sites of Importance for Nature Conservation, and the London
+  View Management Framework protected vistas — also in the **London**
+  data-layers group with the CAZ and PTAL, loaded from the GLA planning data
+  map by migrations 0084 and 0086). Each gate
   filters, scores or is off; gate order sets the funnel
   and the ranking weights. Presets for office-led, build-to-rent and broad
   screens; export the ranked shortlist as CSV. Data: `london_sites`
