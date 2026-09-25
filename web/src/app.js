@@ -279,9 +279,9 @@ const state = {
   colourMode: "single",  // "single" | "spectrum"
   // The IMD/price choropleth is now context, OFF by default (the app leads with
   // the site-appraisal funnel, not deprivation colours). Toggled from the
-  // "Map layers" block. lsoa-fill stays rendered at opacity 0 when off so
-  // click-to-inspect and draw-a-plot (which queryRenderedFeatures on it) keep
-  // working — visibility:none would break those.
+  // "Map layers" block. The coloured lsoa-color layer switches by visibility;
+  // a separate transparent lsoa-fill stays on as the hit target for
+  // click-to-inspect and draw-a-plot (which queryRenderedFeatures on it).
   imdOn: false,
   fillOpacity: 0.85,     // deprivation choropleth opacity (per-layer slider)
   // House prices are now an INDEPENDENT layer (their own group in the Data
@@ -638,7 +638,10 @@ async function loadData() {
   // tiles), loaded like crime/amenities. Optional: absent file → no station
   // mode, everything else works.
   try {
-    const sr = await fetch(dataUrl("data/stations.geojson"), { cache: "no-store" });
+    // no-cache (revalidate) rather than no-store: GitHub Pages answers a
+    // conditional request with 304 when the file is unchanged, so it stays
+    // fresh without re-downloading 300 KB on every visit.
+    const sr = await fetch(dataUrl("data/stations.geojson"), { cache: "no-cache" });
     if (sr.ok) {
       state.stationsData = await sr.json();
       state.hasStations = (state.stationsData.features || []).length > 0;
@@ -674,16 +677,19 @@ async function loadData() {
     maxzoom: 13,
   });
 
+  // The deprivation choropleth itself. Switched with `visibility` (not by
+  // zeroing its opacity): a fill at opacity 0 is still tessellated and has its
+  // colour expression evaluated for every area on every tile, which made the
+  // map sluggish while the layer was off.
   map.addLayer({
-    id: "lsoa-fill",
+    id: "lsoa-color",
     type: "fill",
     source: "lsoa",
     "source-layer": SOURCE_LAYER,
+    layout: { visibility: state.imdOn ? "visible" : "none" },
     paint: {
       "fill-color": fillColorExpression(),
-      // OFF by default (opacity 0) — kept rendered so queryRenderedFeatures
-      // interactions still work. setImdVisible() flips this.
-      "fill-opacity": state.imdOn ? state.fillOpacity : 0,
+      "fill-opacity": state.fillOpacity,
       // Paint each polygon's own outline in its own fill colour. Because
       // tippecanoe simplifies shared borders slightly differently per
       // polygon, adjacent LSOAs can leave hairline gaps that show the bright
@@ -691,6 +697,17 @@ async function loadData() {
       // closes those sub-pixel slivers without needing a tile rebuild.
       "fill-outline-color": fillColorExpression(),
     },
+  });
+
+  // Hit target for click-to-inspect, hover and draw-a-plot, which all
+  // queryRenderedFeatures on "lsoa-fill": always on, one flat transparent
+  // colour, so it costs a single cheap tessellation and no colour maths.
+  map.addLayer({
+    id: "lsoa-fill",
+    type: "fill",
+    source: "lsoa",
+    "source-layer": SOURCE_LAYER,
+    paint: { "fill-color": "#000000", "fill-opacity": 0 },
   });
 
   // Soft hairline between areas — just enough to read boundaries, not so much
@@ -714,15 +731,23 @@ async function loadData() {
   // is baked in as environment_norm so no per-country colour maths is needed.
   // Renders nothing if the tiles predate SIMD (harmless).
   map.addLayer({
+    id: "simd-color",
+    type: "fill",
+    source: "lsoa",
+    "source-layer": "simd",
+    layout: { visibility: state.imdOn ? "visible" : "none" },
+    paint: {
+      "fill-color": fillColorExpression(),
+      "fill-opacity": state.fillOpacity,
+      "fill-outline-color": fillColorExpression(),
+    },
+  });
+  map.addLayer({   // hit target, as lsoa-fill
     id: "simd-fill",
     type: "fill",
     source: "lsoa",
     "source-layer": "simd",
-    paint: {
-      "fill-color": fillColorExpression(),
-      "fill-opacity": state.imdOn ? state.fillOpacity : 0,
-      "fill-outline-color": fillColorExpression(),
-    },
+    paint: { "fill-color": "#000000", "fill-opacity": 0 },
   });
   map.addLayer({
     id: "simd-line",
@@ -739,17 +764,18 @@ async function loadData() {
 
   // House-price choropleth — its own layer above the deprivation fills so the
   // two can be shown independently (or together, blended via their opacity
-  // sliders). Kept at opacity 0 when off, like lsoa-fill, so toggling is a
-  // cheap paint change rather than a layout pass.
+  // sliders). Switched with visibility — nothing queries it, and an opacity-0
+  // fill still costs a full tessellation and colour pass per tile.
   if (state.hasPrice) {
     map.addLayer({
       id: "price-fill",
       type: "fill",
       source: "lsoa",
       "source-layer": SOURCE_LAYER,
+      layout: { visibility: state.priceOn ? "visible" : "none" },
       paint: {
         "fill-color": priceFillColorExpression(),
-        "fill-opacity": state.priceOn ? state.priceOpacity : 0,
+        "fill-opacity": state.priceOpacity,
         "fill-outline-color": priceFillColorExpression(),
       },
     });
@@ -846,7 +872,8 @@ async function loadData() {
   }
 
   // --- National Green Belt display overlay (optional static layer) ---------
-  loadGreenbelt();
+  // Loaded on first use: the file is 1.5 MB and the layer starts off.
+  initGreenbeltToggle();
 
   // Pre-bake the point-overlay icon badges so they're registered before the
   // first overlay toggle needs them.
@@ -1007,15 +1034,20 @@ function updateDataSourceNote() {
 // ---- National Green Belt display overlay ----------------------------------
 
 // Load web/data/greenbelt.geojson (built by pipeline/build_greenbelt_layer.py)
-// and add a hidden fill overlay + its toggle. Entirely optional: if the file is
-// absent (not built yet) the rest of the map is unaffected.
-async function loadGreenbelt() {
+// and add its (hidden) fill overlay. Entirely optional: if the file is absent
+// (not built yet) the rest of the map is unaffected. Returns the area count.
+let _greenbeltLoading = null;
+function loadGreenbelt() {
+  if (!_greenbeltLoading) _greenbeltLoading = _loadGreenbelt();
+  return _greenbeltLoading;
+}
+async function _loadGreenbelt() {
   try {
-    const r = await fetch(dataUrl("data/greenbelt.geojson"), { cache: "no-store" });
-    if (!r.ok) return;
+    const r = await fetch(dataUrl("data/greenbelt.geojson"), { cache: "no-cache" });
+    if (!r.ok) return 0;
     const gj = await r.json();
     const n = (gj.features || []).length;
-    if (!n) return;
+    if (!n) return 0;
     state.hasGreenbelt = true;
     if (!map.getSource("greenbelt")) {
       map.addSource("greenbelt", { type: "geojson", data: gj });
@@ -1031,37 +1063,43 @@ async function loadGreenbelt() {
         },
       }, beforeId);
     }
-    buildGreenbeltToggle(n);
+    return n;
   } catch (err) {
     console.warn("[greenbelt] load failed:", err.message);
+    return 0;
   }
 }
 
 // Reveal the Green Belt row (inside the always-visible "Map layers" block) and
-// wire its checkbox.
-function buildGreenbeltToggle(count) {
+// wire its checkbox; the data arrives the first time it is ticked.
+function initGreenbeltToggle() {
   const row = document.getElementById("greenbelt-row");
   const cb = document.getElementById("greenbelt-show");
   if (!row || !cb) return;
   row.hidden = false;
   const cnt = document.getElementById("greenbelt-count");
-  if (cnt && count) cnt.textContent = `${count.toLocaleString()} areas`;
-  cb.addEventListener("change", (e) => {
+  cb.addEventListener("change", async (e) => {
+    const on = e.target.checked;
+    if (on && !map.getLayer("greenbelt-fill")) {
+      if (cnt) cnt.textContent = "loading…";
+      const n = await loadGreenbelt();
+      if (cnt) cnt.textContent = n ? `${n.toLocaleString()} areas` : "unavailable";
+    }
     if (!map.getLayer("greenbelt-fill")) return;
-    map.setLayoutProperty("greenbelt-fill", "visibility", e.target.checked ? "visible" : "none");
-    greenbeltAttributionShown = e.target.checked;
+    map.setLayoutProperty("greenbelt-fill", "visibility", cb.checked ? "visible" : "none");
+    greenbeltAttributionShown = cb.checked;
     updateDataSourceNote();
   });
 }
 
-// Master toggle for the IMD/price choropleth (now a context layer, OFF by
-// default). lsoa-fill stays rendered at opacity 0 when off so click-to-inspect
-// and draw-a-plot (which queryRenderedFeatures on it) keep working — hence we
-// flip opacity, not visibility. The boundary line and legend follow.
+// Master toggle for the deprivation choropleth (a context layer, OFF by
+// default). The coloured layers switch by visibility; the transparent
+// lsoa-fill / simd-fill hit targets stay on so click-to-inspect and
+// draw-a-plot keep working. The boundary line and legend follow.
 function setImdVisible(on) {
   state.imdOn = on;
-  for (const id of ["lsoa-fill", "simd-fill"])
-    if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", on ? state.fillOpacity : 0);
+  for (const id of ["lsoa-color", "simd-color"])
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
   for (const id of ["lsoa-line", "simd-line"])
     if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
   updateLegendVisibility();
@@ -1070,8 +1108,7 @@ function setImdVisible(on) {
 // Deprivation choropleth transparency (Data layers panel slider).
 function setImdOpacity(v) {
   state.fillOpacity = v;
-  if (!state.imdOn) return;
-  for (const id of ["lsoa-fill", "simd-fill"])
+  for (const id of ["lsoa-color", "simd-color"])
     if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", v);
 }
 
@@ -1079,14 +1116,14 @@ function setImdOpacity(v) {
 function setPriceVisible(on) {
   state.priceOn = on;
   if (map.getLayer("price-fill"))
-    map.setPaintProperty("price-fill", "fill-opacity", on ? state.priceOpacity : 0);
+    map.setLayoutProperty("price-fill", "visibility", on ? "visible" : "none");
   buildLegend();
   updateLegendVisibility();
 }
 
 function setPriceOpacity(v) {
   state.priceOpacity = v;
-  if (state.priceOn && map.getLayer("price-fill"))
+  if (map.getLayer("price-fill"))
     map.setPaintProperty("price-fill", "fill-opacity", v);
 }
 
@@ -3857,7 +3894,7 @@ function wireSideBoxes() {
 // only if it matches the fill exactly).
 function applyFillColor() {
   const expr = fillColorExpression();
-  for (const id of ["lsoa-fill", "simd-fill"]) {
+  for (const id of ["lsoa-color", "simd-color"]) {
     if (!map.getLayer(id)) continue;
     map.setPaintProperty(id, "fill-color", expr);
     map.setPaintProperty(id, "fill-outline-color", expr);
@@ -6678,7 +6715,7 @@ function runDeepDive(catchment, meta) {
   // The mask dims everything outside the catchment, so we keep the choropleth
   // reasonably visible (it shows through inside the catchment) rather than
   // dimming it everywhere.
-  if (state.imdOn) for (const id of ["lsoa-fill", "simd-fill"])
+  if (state.imdOn) for (const id of ["lsoa-color", "simd-color"])
     if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", 0.6);
   closeDetail();
   const bbox = turf.bbox(deep.catchment);
@@ -7105,9 +7142,9 @@ function setAccessRow(kind, label, value) {
 function exitDeepDive() {
   deep.active = false;
   clearDeepDiveMapArtifacts();
-  for (const id of ["lsoa-fill", "simd-fill"])
+  for (const id of ["lsoa-color", "simd-color"])
     if (map.getLayer(id))
-      map.setPaintProperty(id, "fill-opacity", state.imdOn ? state.fillOpacity : 0);
+      map.setPaintProperty(id, "fill-opacity", state.fillOpacity);
   setDeepPanelOpen(false);
   const panel = document.getElementById("deepdive-panel");
   if (panel) panel.innerHTML = "";
