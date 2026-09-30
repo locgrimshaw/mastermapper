@@ -134,9 +134,7 @@ jobs:
         env:
           OSM_PBF_SRC: ${{ vars.OSM_PBF_SRC }}
         run: |
-          mkdir -p data/raw
-          PBF_URL="${OSM_PBF_SRC:-https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf}"
-          curl -fL --retry 3 --retry-delay 15 -o data/raw/uk.osm.pbf "$PBF_URL"
+          bash .github/scripts/fetch_osm_pbf.sh data/raw/uk.osm.pbf "${OSM_PBF_SRC:-}"
           # running track (sidings/yards are dropped by the builder)
           osmium tags-filter data/raw/uk.osm.pbf w/railway=rail -o data/raw/rail.osm.pbf --overwrite
           cat > data/raw/rail_export.json <<'EOF'

@@ -76,9 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p data/raw
-          PBF_URL="${OSM_SRC:-https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf}"
-          echo "Downloading OSM PBF (~1.8 GB): $PBF_URL"
-          curl -fL --retry 3 --retry-delay 15 -o data/raw/uk.osm.pbf "$PBF_URL"
+          bash .github/scripts/fetch_osm_pbf.sh data/raw/uk.osm.pbf "${OSM_SRC:-}"
           df -h /
           # Keep only ways/relations that could possibly classify. The tag set
           # mirrors pipeline/build_osm_lowvalue.py — widen BOTH together.
