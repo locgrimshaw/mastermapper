@@ -2555,6 +2555,14 @@ footer {
   width: 10px; height: 10px; border-radius: 2px; flex: none;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
 }
+.bh-legend[hidden] { display: none; }
+/* Cold-to-hot ramp key under the traffic and service layers. */
+.ov-legend { flex-direction: column; gap: 2px; margin-right: 8px; }
+.ov-ramp { display: block; height: 7px; border-radius: 4px; }
+.ov-ramp-lbl { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim); }
+.ov-ramp-unit { font-size: 10px; color: var(--text-dim); }
+.ov-legend .bh-key { margin-right: 8px; }
+.ov-legend:has(.bh-key) { flex-direction: row; flex-wrap: wrap; }
 
 /* Land assembler: basket rows + assemble-mode state. */
 #dd-assemble-toggle.active { background: #f59f00; border-color: #f59f00; color: #1a1a1a; }

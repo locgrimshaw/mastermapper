@@ -1,0 +1,218 @@
+name: Build transport layers
+
+# Traffic and service-level layers for "Transport & connectivity", each a
+# PMTiles file on Supabase Storage (tiles bucket), same architecture as PTAL:
+#
+#   roads     road_traffic.pmtiles  DfT AADF on OS Open Roads + busiest
+#             junctions + count points           (pipeline/build_road_traffic.py)
+#   bus       bus_network.pmtiles   BODS timetable: buses/day per stop-to-stop
+#             link (routed on OS Open Roads) and per stop; also refreshes the
+#             bus_stop dataset's frequencies     (pipeline/build_bus_network.py)
+#   rail      rail_usage.pmtiles    National Rail timetable: trains/day over
+#             every section of OSM track         (pipeline/build_rail_usage.py)
+#   stations  rail_station_planned dataset: new / under construction / proposed
+#             stations from Wikidata + OSM       (pipeline/build_planned_stations.py)
+#
+# Needs: SUPABASE_URL / SUPABASE_SERVICE_KEY; rail also NR_EMAIL / NR_PASSWORD
+# (National Rail Open Data, as load-rail-links.yml). No other keys: DfT, OS
+# Open Roads, BODS, Wikidata and Geofabrik are all open downloads.
+# Re-run monthly-ish (timetables roll; AADF updates each June).
+#
+# Licences: DfT / OS / BODS OGL v3; timetable © Rail Delivery Group open data;
+# OSM ODbL; Wikidata CC0.
+
+on:
+  schedule:
+    - cron: "40 2 8 * *"     # 8th of each month
+  workflow_dispatch:
+    inputs:
+      layers:
+        description: "Layers to build (comma list): roads, bus, rail, stations"
+        required: false
+        default: "roads,bus,rail,stations"
+
+permissions:
+  contents: read
+
+env:
+  LAYERS: ${{ inputs.layers || 'roads,bus,rail,stations' }}
+
+jobs:
+  roads:
+    if: ${{ contains(inputs.layers || 'roads,bus,rail,stations', 'roads') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq tippecanoe
+          pip install -r pipeline/requirements.txt pyogrio shapely pyproj
+      - name: Build road traffic (downloads DfT AADF + OS Open Roads)
+        env: { PYTHONUNBUFFERED: "1" }
+        run: python pipeline/build_road_traffic.py
+      - name: Tile
+        run: |
+          tippecanoe -o road_traffic.pmtiles -Z4 -z14 \
+            -j "$(python pipeline/tile_zoom_filter.py 4 14)" \
+            --coalesce --reorder --hilbert \
+            --drop-densest-as-needed --extend-zooms-if-still-dropping \
+            --force data/raw/road_traffic.geojsonl
+          ls -la road_traffic.pmtiles
+      - uses: actions/upload-artifact@v4
+        with: { name: road_traffic-pmtiles, path: road_traffic.pmtiles, compression-level: 0 }
+      - name: Upload to Supabase storage
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: bash .github/scripts/upload_tiles.sh road_traffic.pmtiles
+
+  bus:
+    if: ${{ contains(inputs.layers || 'roads,bus,rail,stations', 'bus') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq tippecanoe
+          pip install -r pipeline/requirements.txt pyogrio shapely pyproj
+      - name: Download OS Open Roads (for routing links onto streets)
+        run: |
+          mkdir -p data/raw
+          curl -fL --retry 3 --retry-delay 15 -o data/raw/oproad_gb.zip \
+            "https://api.os.uk/downloads/v1/products/OpenRoads/downloads?area=GB&format=ESRI%C2%AE+Shapefile&redirect"
+          ls -la data/raw/oproad_gb.zip
+      - name: Build bus network (downloads the national BODS GTFS, ~1 GB)
+        env:
+          BUS_GTFS_SRC: ${{ vars.BUS_GTFS_SRC }}
+          PYTHONUNBUFFERED: "1"
+        run: python pipeline/build_bus_network.py
+      - name: Tile
+        run: |
+          tippecanoe -o bus_network.pmtiles -Z6 -z14 \
+            -j "$(python pipeline/tile_zoom_filter.py 6 14)" \
+            --coalesce --reorder --hilbert \
+            --drop-densest-as-needed --extend-zooms-if-still-dropping \
+            --force data/raw/bus_network.geojsonl
+          ls -la bus_network.pmtiles
+      - uses: actions/upload-artifact@v4
+        with: { name: bus_network-pmtiles, path: bus_network.pmtiles, compression-level: 0 }
+      - name: Upload to Supabase storage
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: bash .github/scripts/upload_tiles.sh bus_network.pmtiles
+      # The bus_stop dataset (connectivity scores, stop popups) takes the same
+      # per-stop frequencies — build_bus.py reads data/raw/bus_stop_freq.csv.
+      - name: Refresh bus_stop frequencies in Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: bus_stop
+        run: |
+          python pipeline/build_bus.py
+          python supabase/loaders/load_datasets.py
+
+  rail:
+    if: ${{ contains(inputs.layers || 'roads,bus,rail,stations', 'rail') || contains(inputs.layers || 'roads,bus,rail,stations', 'stations') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq tippecanoe osmium-tool
+          pip install -r pipeline/requirements.txt
+      - name: Download the UK OSM extract and pull rail features (osmium)
+        env:
+          OSM_PBF_SRC: ${{ vars.OSM_PBF_SRC }}
+        run: |
+          mkdir -p data/raw
+          PBF_URL="${OSM_PBF_SRC:-https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf}"
+          curl -fL --retry 3 --retry-delay 15 -o data/raw/uk.osm.pbf "$PBF_URL"
+          # running track (sidings/yards are dropped by the builder)
+          osmium tags-filter data/raw/uk.osm.pbf w/railway=rail -o data/raw/rail.osm.pbf --overwrite
+          cat > data/raw/rail_export.json <<'EOF'
+          { "attributes": { "type": false, "id": false },
+            "include_tags": ["railway", "service", "usage", "name"],
+            "linear_tags": ["railway=rail"] }
+          EOF
+          osmium export data/raw/rail.osm.pbf -c data/raw/rail_export.json \
+            --geometry-types=linestring -o data/raw/osm_rail.geojson -f geojson --overwrite
+          # stations under construction / proposed (lifecycle tagging)
+          osmium tags-filter data/raw/uk.osm.pbf \
+            nwr/railway=construction,proposed nwr/construction:railway nwr/proposed:railway \
+            -o data/raw/planned.osm.pbf --overwrite
+          cat > data/raw/planned_export.json <<'EOF'
+          { "attributes": { "type": true, "id": true } }
+          EOF
+          osmium export data/raw/planned.osm.pbf -c data/raw/planned_export.json \
+            -o data/raw/osm_planned_stations.geojson -f geojson --overwrite
+          ls -la data/raw/osm_rail.geojson data/raw/osm_planned_stations.geojson
+          rm -f data/raw/uk.osm.pbf
+
+      - name: New & planned stations -> Supabase
+        if: ${{ contains(env.LAYERS, 'stations') }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: rail_station_planned
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python pipeline/build_planned_stations.py
+          python supabase/loaders/load_datasets.py
+
+      - name: Download the National Rail timetable (DTD/CIF)
+        id: tt
+        if: ${{ contains(env.LAYERS, 'rail') }}
+        env:
+          NR_EMAIL: ${{ secrets.NR_EMAIL }}
+          NR_PASSWORD: ${{ secrets.NR_PASSWORD }}
+        run: |
+          if [ -z "${NR_EMAIL:-}" ] || [ -z "${NR_PASSWORD:-}" ]; then
+            echo "::warning::NR_EMAIL / NR_PASSWORD not set — rail usage skipped (see load-rail-links.yml)"
+            echo "ok=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          TOKEN=$(curl -fsS -X POST "https://opendata.nationalrail.co.uk/authenticate" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "username=${NR_EMAIL}" --data-urlencode "password=${NR_PASSWORD}" \
+            | python3 -c "import sys, json; print(json.load(sys.stdin)['token'])")
+          curl -fSL -o data/raw/rail_timetable.zip -H "X-Auth-Token: ${TOKEN}" \
+            "https://opendata.nationalrail.co.uk/api/staticfeeds/3.0/timetable"
+          ls -la data/raw/rail_timetable.zip
+          echo "ok=1" >> "$GITHUB_OUTPUT"
+
+      - name: Build rail usage
+        if: ${{ steps.tt.outputs.ok == '1' }}
+        env: { PYTHONUNBUFFERED: "1" }
+        run: python pipeline/build_rail_usage.py
+      - name: Tile
+        if: ${{ steps.tt.outputs.ok == '1' }}
+        run: |
+          tippecanoe -o rail_usage.pmtiles -Z4 -z13 \
+            -j "$(python pipeline/tile_zoom_filter.py 4 13)" \
+            --coalesce --reorder --hilbert \
+            --drop-densest-as-needed --extend-zooms-if-still-dropping \
+            --force data/raw/rail_usage.geojsonl
+          ls -la rail_usage.pmtiles
+      - uses: actions/upload-artifact@v4
+        if: ${{ steps.tt.outputs.ok == '1' }}
+        with:
+          name: rail_usage
+          path: |
+            rail_usage.pmtiles
+            data/raw/rail_pairs.csv
+          compression-level: 0
+      - name: Upload to Supabase storage
+        if: ${{ steps.tt.outputs.ok == '1' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: bash .github/scripts/upload_tiles.sh rail_usage.pmtiles
