@@ -39,6 +39,28 @@ does the interactive scoring and reporting.
   (migration 0083), rebuilt by the "Rebuild London sites" workflow; Zone 1
   times come from a TfL + national-rail graph (`pipeline/build_london_transit.py`).
 
+## Transport layers
+
+Under **Transport & connectivity**, four layers show how busy the network is,
+all on one cold-to-hot colour ramp (blue = quiet, red = busiest):
+
+- **Road traffic** — DfT annual average daily flow drawn on OS Open Roads,
+  plus the busiest junctions and the DfT count points
+  (`pipeline/build_road_traffic.py`).
+- **Rail lines by trains/day** — every section of track loaded with the
+  passenger trains timetabled over it on a weekday, from the National Rail
+  timetable routed along OSM track (`pipeline/build_rail_usage.py`).
+- **Bus corridors / stops by buses/day** — the BODS national timetable for one
+  real weekday, stop-to-stop links routed along the streets
+  (`pipeline/build_bus_network.py`, `pipeline/road_snap.py`).
+- **New & planned stations** — opened since 2019, under construction and
+  proposed, from Wikidata and OSM lifecycle tags
+  (`pipeline/build_planned_stations.py`).
+
+Rail and bus figures are scheduled service, the standard proxy for use — no
+open data gives passenger loadings by section or stop. Built by the "Build
+transport layers" workflow.
+
 ## How to run this (no terminal needed)
 
 If you don't use a command prompt, follow **`docs/WEBSITE_ONLY_GUIDE.md`** —

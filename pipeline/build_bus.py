@@ -100,9 +100,29 @@ def _hhmm_ok(t):
         return False
 
 
+FREQ_CSV = RAW / "bus_stop_freq.csv"
+
+
+def load_freq_csv():
+    """Per-stop figures from build_bus_network.py — one real Tuesday with the
+    calendar exceptions and frequency trips honoured, buses only. Preferred
+    over the quick pass below, which counts every service that runs on ANY
+    Tuesday and so double-counts overlapping timetable versions."""
+    deps, routes, trips = {}, {}, {}
+    with FREQ_CSV.open(newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            deps[r["atco"]] = round(float(r["buses_hr"] or 0) * 12)
+            trips[r["atco"]] = int(r["trips_day"] or 0)
+            routes[r["atco"]] = {x.strip() for x in (r["routes"] or "").split(",") if x.strip()}
+    print(f"[bus] {FREQ_CSV.name}: {len(deps):,} served stops")
+    return deps, routes, trips
+
+
 def load_gtfs_frequencies():
     """stop_id -> (weekday daytime departures, set of route short names).
     Returns None when no GTFS source is configured."""
+    if FREQ_CSV.exists():
+        return load_freq_csv()
     src = os.environ.get("BUS_GTFS_SRC", "").strip()
     if src and (not GTFS_FILE.exists() or GTFS_FILE.stat().st_size < 1e6):
         fetch(src, GTFS_FILE)
@@ -166,9 +186,11 @@ def main():
         for atco, (name, locality, stype, lon, lat) in stops.items():
             props = {"locality": locality or None, "stop_type": stype}
             if freq:
-                deps, routes = freq
+                deps, routes = freq[0], freq[1]
                 d = deps.get(atco, 0)
                 props["buses_hr"] = round(d / 12.0, 1)
+                if len(freq) > 2:
+                    props["trips_day"] = freq[2].get(atco, 0)
                 rt = sorted(x for x in routes.get(atco, ()) if x)
                 if rt:
                     props["routes"] = ", ".join(rt)

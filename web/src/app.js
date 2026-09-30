@@ -1629,16 +1629,16 @@ const MAP_OVERLAYS = [
     dataset: "rail_usage", minZoom: 5,
     tiles: { file: "rail_usage.pmtiles", sourceLayer: "rail_links", minzoom: 5, render: "line",
              sortKey: "trains", width: valueWidth("trains", 900, [0.8, 3, 1.5, 6, 2.5, 10]) },
-    cap: { color: hotCold("trains", [0, 20, 60, 120, 250, 500, 900]) },
-    legend: { stops: ["<20", "60", "120", "250", "500", "900+"], unit: "passenger trains per weekday, both directions" } },
+    cap: { color: hotCold("trains", [0, 25, 75, 150, 300, 600, 1000]) },
+    legend: { stops: ["<25", "75", "150", "300", "600", "1000+"], unit: "passenger trains per weekday, both directions" } },
   { key: "rail_station_planned", group: "railservice", label: "New & planned stations", color: "#7048e8",
     dataset: "rail_station_planned", render: "point", minZoom: 5, lim: 2000,
     radius: ["interpolate", ["linear"], ["zoom"], 5, 3.5, 10, 6, 14, 8],
     cap: { color: ["match", ["get", "status"],
              "opened", "#2f9e44", "under construction", "#f08c00",
-             "approved", "#1c7ed6", "proposed", "#7048e8", "#868e96"] },
+             "proposed", "#7048e8", "#868e96"] },
     legend: { swatches: [["#2f9e44", "opened since 2019"], ["#f08c00", "under construction"],
-                         ["#1c7ed6", "funded / approved"], ["#7048e8", "proposed"]] } },
+                         ["#7048e8", "proposed"]] } },
   // Bus: weekday journeys over each stop-to-stop link and from each stop,
   // from the BODS timetable (pipeline/build_bus_network.py).
   { key: "bus_links", group: "bus", label: "Bus corridors by buses/day", color: "#e8432d",
@@ -5244,7 +5244,7 @@ function hoverContentForOverlay(def, p) {
   } else if (d === "rail_station_planned") {
     title = p.name || "Station";
     kind = { opened: "New station", "under construction": "Station under construction",
-             approved: "Funded / approved station", proposed: "Proposed station" }[p.status] || "Station";
+             proposed: "Proposed station" }[p.status] || "Station";
     rows = [row(p.status, "status"),
             row(p.opened || p.expected, p.opened ? "opened" : "expected"),
             row(p.line, "line"),

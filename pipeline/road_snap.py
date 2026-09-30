@@ -25,7 +25,6 @@ Licence: OS Open Roads © Crown copyright (OGL v3).
 """
 
 import heapq
-import math
 import zipfile
 from pathlib import Path
 
