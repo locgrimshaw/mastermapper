@@ -41,25 +41,17 @@ does the interactive scoring and reporting.
 
 ## Transport layers
 
-Under **Transport & connectivity**, four layers show how busy the network is,
-all on one cold-to-hot colour ramp (blue = quiet, red = busiest):
+Under **Transport & connectivity**: bus routes and bus stops (with weekday
+frequency in the tooltip), and **New & planned stations** — opened since 2019,
+under construction and proposed, from Wikidata and OSM lifecycle tags
+(`pipeline/build_planned_stations.py`, refreshed monthly by the "Build
+transport layers" workflow).
 
-- **Road traffic** — DfT annual average daily flow drawn on OS Open Roads,
-  plus the busiest junctions and the DfT count points
-  (`pipeline/build_road_traffic.py`).
-- **Rail lines by trains/day** — every section of track loaded with the
-  passenger trains timetabled over it on a weekday, from the National Rail
-  timetable routed along OSM track (`pipeline/build_rail_usage.py`).
-- **Bus corridors / stops by buses/day** — the BODS national timetable for one
-  real weekday, stop-to-stop links routed along the streets
-  (`pipeline/build_bus_network.py`, `pipeline/road_snap.py`).
-- **New & planned stations** — opened since 2019, under construction and
-  proposed, from Wikidata and OSM lifecycle tags
-  (`pipeline/build_planned_stations.py`).
-
-Rail and bus figures are scheduled service, the standard proxy for use — no
-open data gives passenger loadings by section or stop. Built by the "Build
-transport layers" workflow.
+The repo also keeps traffic and service-level builders that are not drawn on
+the map: road traffic from DfT counts (`pipeline/build_road_traffic.py`), bus
+corridors routed along the streets (`pipeline/build_bus_network.py`,
+`pipeline/road_snap.py`) and rail trains per section
+(`pipeline/build_rail_usage.py`). See `docs/transport-layers-methodology.docx`.
 
 ## How to run this (no terminal needed)
 

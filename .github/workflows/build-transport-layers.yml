@@ -16,7 +16,9 @@ name: Build transport layers
 # Needs: SUPABASE_URL / SUPABASE_SERVICE_KEY; rail also NR_EMAIL / NR_PASSWORD
 # (National Rail Open Data, as load-rail-links.yml). No other keys: DfT, OS
 # Open Roads, BODS, Wikidata and Geofabrik are all open downloads.
-# Re-run monthly-ish (timetables roll; AADF updates each June).
+# The map now shows only the stations layer; the scheduled run refreshes just
+# that. The traffic/service heatmap builders (roads, bus, rail) are kept for
+# reuse and can still be run by hand — their tiles are no longer drawn.
 #
 # Licences: DfT / OS / BODS OGL v3; timetable © Rail Delivery Group open data;
 # OSM ODbL; Wikidata CC0.
@@ -29,17 +31,17 @@ on:
       layers:
         description: "Layers to build (comma list): roads, bus, rail, stations"
         required: false
-        default: "roads,bus,rail,stations"
+        default: "stations"
 
 permissions:
   contents: read
 
 env:
-  LAYERS: ${{ inputs.layers || 'roads,bus,rail,stations' }}
+  LAYERS: ${{ inputs.layers || 'stations' }}
 
 jobs:
   roads:
-    if: ${{ contains(inputs.layers || 'roads,bus,rail,stations', 'roads') }}
+    if: ${{ contains(inputs.layers || 'stations', 'roads') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -70,7 +72,7 @@ jobs:
         run: bash .github/scripts/upload_tiles.sh road_traffic.pmtiles
 
   bus:
-    if: ${{ contains(inputs.layers || 'roads,bus,rail,stations', 'bus') }}
+    if: ${{ contains(inputs.layers || 'stations', 'bus') }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -119,7 +121,7 @@ jobs:
           python supabase/loaders/load_datasets.py
 
   rail:
-    if: ${{ contains(inputs.layers || 'roads,bus,rail,stations', 'rail') || contains(inputs.layers || 'roads,bus,rail,stations', 'stations') }}
+    if: ${{ contains(inputs.layers || 'stations', 'rail') || contains(inputs.layers || 'stations', 'stations') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
