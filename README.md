@@ -39,6 +39,30 @@ does the interactive scoring and reporting.
   (migration 0083), rebuilt by the "Rebuild London sites" workflow; Zone 1
   times come from a TfL + national-rail graph (`pipeline/build_london_transit.py`).
 
+## Sport & Leisure
+
+A **Sport & Leisure** layer group and a stadium catchment sidebar, for
+looking at stadia as place anchors and regeneration tools:
+
+- **Stadia** — 576 grounds from OpenStreetMap, coloured by sport and sized by
+  capacity, with clubs, current leagues, capacity and opening year from
+  Wikidata. Filter by sport, league and capacity; a matching-stadia list sits
+  under the layer row.
+- **Pitches, tracks & sports centres**, **hotels** (rooms and bedspaces,
+  estimated where not recorded), **event, conference & performance venues**
+  (capacity where known) and **food & drink**.
+- **Click a stadium → Analyse catchment**: walk, cycle and drive zones on the
+  street network (Valhalla) and a public-transport zone (rail + walking), all
+  four drawable at once. The selected zone drives the sidebar: hotels and
+  bedspaces (also within 1/3/5 km), venues and capacity, sports facilities and
+  pitch area, other stadia, food & drink, stations and bus service, parking,
+  public land and land value — then the standard deprivation, population,
+  density, house prices, brownfield and amenities blocks.
+
+Data: `pipeline/build_sport_leisure.py` (monthly "Load Sport & Leisure
+datasets" workflow); migration 0087 (`stadium_catchment_summary`,
+`point_rail_access`); front end `web/src/stadia.js`.
+
 ## Transport layers
 
 Under **Transport & connectivity**: bus routes and bus stops (with weekday

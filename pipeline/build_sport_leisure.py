@@ -81,7 +81,8 @@ SPORT = {"soccer": "Football", "american_football": "American football",
          "rugby_union": "Rugby union", "rugby_league": "Rugby league",
          "rugby": "Rugby", "cricket": "Cricket", "athletics": "Athletics",
          "running": "Athletics", "horse_racing": "Horse racing",
-         "greyhound_racing": "Greyhound racing", "motor": "Motorsport",
+         "greyhound_racing": "Greyhound racing", "dog_racing": "Greyhound racing",
+         "motor": "Motorsport",
          "motocross": "Motorsport", "speedway": "Speedway", "tennis": "Tennis",
          "golf": "Golf", "hockey": "Hockey", "field_hockey": "Hockey",
          "ice_hockey": "Ice hockey", "basketball": "Basketball",
@@ -89,6 +90,22 @@ SPORT = {"soccer": "Football", "american_football": "American football",
          "multi": "Multi-sport", "netball": "Netball", "bowls": "Bowls",
          "equestrian": "Equestrian", "cycling": "Cycling", "boxing": "Boxing",
          "swimming": "Swimming", "darts": "Darts", "snooker": "Snooker"}
+
+
+# Club "leagues" from Wikidata P118 include cup competitions and leagues that
+# no longer exist but carry no end date; neither belongs in a league filter.
+DEFUNCT_LEAGUES = re.compile(r"^Scottish Football League|^Football League\b|^Football Conference$")
+RL_LEAGUES = {"Championship": "RFL Championship", "League 1": "RFL League 1"}
+WD_SPORT = {"association football": "Football", "dog racing": "Greyhound racing",
+            "rugby union": "Rugby union", "rugby league": "Rugby league"}
+
+
+def clean_league(lab, club_sports):
+    if not lab or re.search(r"\bCup\b|Trophy|Shield", lab) or DEFUNCT_LEAGUES.search(lab):
+        return None
+    if lab in RL_LEAGUES and any("league" in s.lower() for s in club_sports):
+        return RL_LEAGUES[lab]
+    return lab
 
 
 def sport_label(v):
@@ -295,20 +312,20 @@ def main():
         club_ids = current_ids(ent, "P466")
         club_names = [wd.label(c) for c in club_ids if wd.label(c)]
         leagues, sports = [], sports_of(t)
+        def wd_sport(q):
+            lab = wd.label(q)
+            return WD_SPORT.get(lab.lower(), lab.capitalize()) if lab else None
         for c in club_ids:
+            club_sports = [x for x in (wd_sport(sp) for sp in current_ids(wd.cache.get(c), "P641")) if x]
             for lg in current_ids(wd.cache.get(c), "P118"):
-                lab = wd.label(lg)
+                lab = clean_league(wd.label(lg), club_sports or sports)
                 if lab and lab not in leagues:
                     leagues.append(lab)
-            for sp in current_ids(wd.cache.get(c), "P641"):
-                lab = wd.label(sp)
-                if lab and lab.capitalize() not in sports and not sports:
-                    sports.append(lab.capitalize())
+            for lab in club_sports:
+                if lab not in sports and not sports:
+                    sports.append(lab)
         if not sports:
-            for sp in current_ids(ent, "P641"):
-                lab = wd.label(sp)
-                if lab:
-                    sports.append(lab.capitalize())
+            sports = [x for x in (wd_sport(sp) for sp in current_ids(ent, "P641")) if x]
         opened = None
         for v in (ent or {}).get("P1619", []):
             m = re.match(r"[+-]?(\d{4})", v.get("time", ""))
