@@ -1,12 +1,18 @@
 import { initLondonSift } from "./londonsift.js?v=ls10";
+import { initStadia, stadiumColor, stadiumRadius } from "./stadia.js?v=st1";
 
 // Front-end feature switches. The generative designers — the housing layout
 // generator (layoutgen.js) and the data-centre campus generator (dcgen.js) —
 // are withdrawn from the app for now: their code stays, but no button opens
 // them and layouts saved from them are not drawn. Set
 // FEATURES: { generativeDesign: true } in config.js to bring them back.
-const FEATURES = Object.assign({ generativeDesign: false },
+// The traffic/service heatmaps (road AADF, rail trains/day, bus corridors and
+// busy stops) are likewise hidden but kept: FEATURES: { trafficLayers: true }.
+const FEATURES = Object.assign({ generativeDesign: false, trafficLayers: false },
   (window.MASTERMAPPER_CONFIG && window.MASTERMAPPER_CONFIG.FEATURES) || {});
+// Sport & Leisure stadium module (web/src/stadia.js), set up before the
+// layers panel is built.
+let STADIA = null;
 
 // app.js — Welfare Mapper prototype
 // England socio-economic site appraisal tool.
@@ -1242,9 +1248,17 @@ const OVERLAY_TREE = [
     // originally added beside PTAL for the PBSA story, but they describe how
     // connected a place is, which is this branch's whole subject.
     { key: "access", title: "Accessibility scores" },
-    { key: "roadtraffic", title: "Road traffic" },
-    { key: "railservice", title: "Rail service" },
+    ...(FEATURES.trafficLayers ? [{ key: "roadtraffic", title: "Road traffic" }] : []),
+    { key: "railservice", title: FEATURES.trafficLayers ? "Rail service" : "Rail stations" },
     { key: "bus", title: "Bus network" },
+  ]},
+  // Sport & Leisure: stadia and what sits around them — sports facilities,
+  // hotels, event venues, food & drink (pipeline/build_sport_leisure.py).
+  { key: "sportleisure", title: "Sport &amp; Leisure", subs: [
+    { key: "stadia",    title: "Stadia" },
+    { key: "sportfac",  title: "Sports pitches &amp; facilities" },
+    { key: "visitor",   title: "Hotels &amp; venues" },
+    { key: "fooddrink", title: "Food &amp; drink" },
   ]},
   // London-only evidence: London Plan designations from the GLA planning data
   // map (migration 0084) and TfL's PTAL grid. Kept together so the London
@@ -1592,24 +1606,25 @@ const MAP_OVERLAYS = [
   // The network's shape from OSM route=bus relations; frequencies live on
   // the stops (BODS GTFS) — together they read as service, not just streets.
   { key: "bus_route", group: "bus", label: "Bus routes (OSM)", color: "#0c8599", dataset: "bus_route", render: "line", minZoom: 9, lim: 4000 },
-  { key: "bus_stop", group: "bus", label: "Bus stops (frequency-coloured)", color: "#1098ad", dataset: "bus_stop", render: "point", minZoom: 10, lim: 8000,
+  { key: "bus_stop", group: "bus", label: FEATURES.trafficLayers ? "Bus stops (frequency-coloured)" : "Bus stops", color: "#1098ad", dataset: "bus_stop", render: "point", minZoom: 10, lim: 8000,
     radius: ["interpolate", ["linear"], ["zoom"], 10, 2, 13, 3.5, 16, 6],
     numFilter: z => z < 12 ? { key: "buses_hr", min: 8 } : z < 14 ? { key: "buses_hr", min: 2 } : null,
-    cap: { color: ["case", ["!", ["has", "buses_hr"]], "#868e96",
+    ...(FEATURES.trafficLayers ? { cap: { color: ["case", ["!", ["has", "buses_hr"]], "#868e96",
            ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "buses_hr"]], 0],
-            0, "#ced4da", 1, "#96f2d7", 4, "#38d9a9", 8, "#0ca678", 16, "#087f5b"]] } },
+            0, "#ced4da", 1, "#96f2d7", 4, "#38d9a9", 8, "#0ca678", 16, "#087f5b"]] } } : {}) },
 
-  // Traffic and service levels, all tile-served and all on ONE cold-to-hot
+  // Traffic and service levels (`traffic: true`), hidden unless
+  // FEATURES.trafficLayers — the code and tiles are kept. All tile-served and all on ONE cold-to-hot
   // ramp so a busy road, a busy line and a busy bus corridor read the same
   // way side by side. Each carries a `legend` shown under its row while on.
   // Road traffic: DfT AADF on OS Open Roads (pipeline/build_road_traffic.py).
-  { key: "road_traffic", group: "roadtraffic", label: "Road traffic (vehicles/day)", color: "#e8432d",
+  { key: "road_traffic", traffic: true, group: "roadtraffic", label: "Road traffic (vehicles/day)", color: "#e8432d",
     dataset: "road_traffic", minZoom: 5,
     tiles: { file: "road_traffic.pmtiles", sourceLayer: "roads", minzoom: 5, render: "line",
              sortKey: "aadf", width: valueWidth("aadf", 150000, [0.6, 2.5, 1.4, 5.5, 3, 10]) },
     cap: { color: hotCold("aadf", [0, 5000, 15000, 30000, 60000, 100000, 150000]) },
     legend: { stops: ["<5k", "15k", "30k", "60k", "100k", "150k+"], unit: "motor vehicles/day, both directions (AADF)" } },
-  { key: "road_junctions", group: "roadtraffic", label: "Busiest junctions", color: "#a8132b",
+  { key: "road_junctions", traffic: true, group: "roadtraffic", label: "Busiest junctions", color: "#a8132b",
     dataset: "road_junction", minZoom: 7,
     tiles: { file: "road_traffic.pmtiles", sourceLayer: "junctions", minzoom: 7, render: "point",
              sortKey: "aadf",
@@ -1618,14 +1633,14 @@ const MAP_OVERLAYS = [
                13, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "aadf"]], 0], 20000, 4, 200000, 12]] },
     cap: { color: hotCold("aadf", [0, 20000, 40000, 70000, 100000, 150000, 220000]) },
     legend: { stops: ["<20k", "40k", "70k", "100k", "150k", "220k+"], unit: "vehicles through the junction/day" } },
-  { key: "traffic_counts", group: "roadtraffic", label: "Traffic count points (DfT)", color: "#495057",
+  { key: "traffic_counts", traffic: true, group: "roadtraffic", label: "Traffic count points (DfT)", color: "#495057",
     dataset: "traffic_count", minZoom: 10,
     tiles: { file: "road_traffic.pmtiles", sourceLayer: "counts", minzoom: 10, render: "point",
              radius: ["interpolate", ["linear"], ["zoom"], 10, 2.5, 14, 5], stroke: "#212529" },
     cap: { color: hotCold("aadf", [0, 5000, 15000, 30000, 60000, 100000, 150000]) } },
   // Rail: trains per weekday over each section of track, from the National
   // Rail timetable routed onto OSM track (pipeline/build_rail_usage.py).
-  { key: "rail_usage", group: "railservice", label: "Rail lines by trains/day", color: "#e8432d",
+  { key: "rail_usage", traffic: true, group: "railservice", label: "Rail lines by trains/day", color: "#e8432d",
     dataset: "rail_usage", minZoom: 5,
     tiles: { file: "rail_usage.pmtiles", sourceLayer: "rail_links", minzoom: 5, render: "line",
              sortKey: "trains", width: valueWidth("trains", 900, [0.8, 3, 1.5, 6, 2.5, 10]) },
@@ -1641,13 +1656,13 @@ const MAP_OVERLAYS = [
                          ["#7048e8", "proposed"]] } },
   // Bus: weekday journeys over each stop-to-stop link and from each stop,
   // from the BODS timetable (pipeline/build_bus_network.py).
-  { key: "bus_links", group: "bus", label: "Bus corridors by buses/day", color: "#e8432d",
+  { key: "bus_links", traffic: true, group: "bus", label: "Bus corridors by buses/day", color: "#e8432d",
     dataset: "bus_link", minZoom: 6,
     tiles: { file: "bus_network.pmtiles", sourceLayer: "bus_links", minzoom: 6, render: "line",
              sortKey: "trips", width: valueWidth("trips", 1200, [0.5, 2.5, 1, 4.5, 1.5, 8]) },
     cap: { color: hotCold("trips", [0, 20, 60, 150, 300, 600, 1000]) },
     legend: { stops: ["<20", "60", "150", "300", "600", "1000+"], unit: "bus journeys per weekday over the link" } },
-  { key: "bus_stops_busy", group: "bus", label: "Bus stops by buses/day", color: "#f58b2e",
+  { key: "bus_stops_busy", traffic: true, group: "bus", label: "Bus stops by buses/day", color: "#f58b2e",
     dataset: "bus_stop_freq", minZoom: 9,
     tiles: { file: "bus_network.pmtiles", sourceLayer: "bus_stops", minzoom: 9, render: "point",
              sortKey: "trips",
@@ -1656,6 +1671,40 @@ const MAP_OVERLAYS = [
                15, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "trips"]], 0], 0, 3, 1500, 10]] },
     cap: { color: hotCold("trips", [0, 20, 60, 150, 300, 600, 1000]) },
     legend: { stops: ["<20", "60", "150", "300", "600", "1000+"], unit: "departures per weekday" } },
+  // Sport & Leisure (OSM + Wikidata). Stadia are a single national load (576)
+  // filtered client-side by sport / league / capacity (stadia.js); the rest
+  // stream per view.
+  { key: "stadium", group: "stadia", label: "Stadia (colour = sport, size = capacity)", color: "#2f9e44",
+    dataset: "stadium", render: "point", minZoom: 5, lim: 2000, radius: stadiumRadius(),
+    cap: { color: stadiumColor() },
+    onLayers: (key, srcId, before) => STADIA && STADIA.onLayers(key, srcId, before) },
+  { key: "sports_facility", group: "sportfac", label: "Pitches, tracks & sports centres", color: "#40c057",
+    dataset: "sports_facility", render: "point", minZoom: 12, lim: 8000,
+    radius: ["interpolate", ["linear"], ["zoom"], 12, 2.5, 16, 6],
+    cap: { color: ["match", ["get", "kind"], "pitch", "#40c057", "track", "#e8590c",
+           "sports_centre", "#1c7ed6", "sports_hall", "#1c7ed6", "golf_course", "#94d82d",
+           "ice_rink", "#22b8cf", "#868e96"] } },
+  { key: "hotel", group: "visitor", label: "Hotels & accommodation (size = rooms)", color: "#d6336c",
+    dataset: "hotel", render: "point", minZoom: 9, lim: 6000,
+    numFilter: z => z < 11 ? { key: "rooms", min: 150 } : z < 13 ? { key: "rooms", min: 40 } : null,
+    radius: ["interpolate", ["linear"], ["zoom"],
+      9, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "rooms"]], 0], 0, 2, 600, 8],
+      14, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "rooms"]], 0], 0, 4, 600, 14]],
+    cap: { color: ["match", ["get", "type"], "hotel", "#d6336c", "motel", "#d6336c",
+           "guest_house", "#f783ac", "hostel", "#ae3ec9", "apartment", "#9c36b5", "#d6336c"] } },
+  { key: "event_venue", group: "visitor", label: "Event, conference & performance venues", color: "#f59f00",
+    dataset: "event_venue", render: "point", minZoom: 8, lim: 4000,
+    radius: ["interpolate", ["linear"], ["zoom"],
+      8, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "capacity"]], 0], 0, 2.5, 5000, 7],
+      14, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "capacity"]], 0], 0, 5, 5000, 13]],
+    cap: { color: ["match", ["get", "kind"], "conference_centre", "#f59f00", "exhibition_centre", "#f59f00",
+           "events_venue", "#fab005", "theatre", "#e8590c", "concert_hall", "#e8590c",
+           "music_venue", "#c92a2a", "arts_centre", "#f76707", "#f59f00"] } },
+  { key: "food_drink", group: "fooddrink", label: "Pubs, bars, restaurants & cafés", color: "#7950f2",
+    dataset: "food_drink", render: "point", minZoom: 14, lim: 8000,
+    radius: ["interpolate", ["linear"], ["zoom"], 14, 2.5, 17, 5],
+    cap: { color: ["match", ["get", "kind"], "pub", "#7950f2", "bar", "#9775fa",
+           "restaurant", "#f03e3e", "cafe", "#fd7e14", "fast_food", "#ffa94d", "#868e96"] } },
   // Power grid
   // Power layers thin by VOLTAGE at wide zooms (via the RPC's numeric prop
   // filter) — a national view shows the 275/400 kV backbone, zooming in adds
@@ -1715,7 +1764,7 @@ const MAP_OVERLAYS = [
   // a place. It is now a footprint layer shaded by height, served from PMTiles
   // (setBuildingsVisible) because 1.5M polygons can't come from a bbox RPC.
   // The building_height POINT dataset stays in map_features, currently unused.
-];
+].filter(o => !o.traffic || FEATURES.trafficLayers);
 
 // How a public body is described. One copy: this existed three times over
 // (two popup builders and the deep-dive card) and had already drifted —
@@ -1848,10 +1897,15 @@ const LAYER_INFO = {
   road_junctions:     { about: "Junctions where two or more counted roads meet, sized and coloured by the vehicles passing through each day — estimated as the sum of the incident roads' flows halved (every vehicle enters and leaves). Large grade-separated interchanges appear as a cluster of dots.", source: "Derived from DfT AADF on OS Open Roads (OGL v3)" },
   traffic_counts:     { about: "The DfT count points behind the road colours: the figure, the year, whether it was counted that year or estimated, and the junctions bounding the counted link.", source: "DfT road traffic statistics (OGL v3)" },
   rail_usage:         { about: "Every section of passenger railway coloured and sized by the trains timetabled over it on a normal weekday, both directions — fast trains count on the track they pass through, not just where they stop. It measures service, not passengers: no open data gives loadings by section. Built from the National Rail timetable routed along OpenStreetMap track.", source: "National Rail timetable (Rail Delivery Group, open data) · track © OpenStreetMap contributors (ODbL)" },
-  rail_station_planned: { about: "New stations opened since 2019, stations under construction, and funded or proposed stations. Compiled from Wikidata and OpenStreetMap lifecycle tags, so proposals are only as current as those sources — check the promoter before relying on one.", source: "Wikidata (CC0) · © OpenStreetMap contributors (ODbL)" },
+  rail_station_planned: { about: "New stations opened since 2019, stations under construction, and proposed stations. Compiled from Wikidata and OpenStreetMap lifecycle tags, so proposals are only as current as those sources — check the promoter before relying on one.", source: "Wikidata (CC0) · © OpenStreetMap contributors (ODbL)" },
   bus_links:          { about: "The bus network coloured and sized by the buses timetabled over each stop-to-stop link on a normal weekday (both directions) — the busy corridors glow red. This is scheduled service, the standard proxy for use: no open data gives bus boardings by stop across Great Britain.", source: "Bus Open Data Service timetable (DfT, OGL v3)" },
   bus_stops_busy:     { about: "Every served bus stop, sized and coloured by weekday departures, with the average buses/hour 07:00–19:00 and the routes calling.", source: "Bus Open Data Service timetable (DfT, OGL v3)" },
-  bus_stop:           { about: "Every active bus stop (NaPTAN). Once the national timetable is loaded, colour shows weekday daytime frequency (buses/hour, 07:00–19:00) and the tooltip lists the routes serving the stop. Wide zooms show frequent-service stops first.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
+  stadium:            { about: "Every stadium mapped in OpenStreetMap (576), coloured by its main sport and sized by capacity. Capacity, resident clubs, the clubs' current leagues and the opening year come from Wikidata where the ground is linked (capacity for about half, league for about 40%). Filter by sport, league and capacity below the row; click a stadium for its card and 'Analyse catchment' for the full walk / cycle / drive / public-transport catchment sidebar.", source: "© OpenStreetMap contributors (ODbL) · Wikidata (CC0)" },
+  sports_facility:    { about: "Pitches, athletics tracks, sports centres and halls, golf courses and ice rinks from OpenStreetMap (about 145,000), with sport, surface, access and mapped area. Coverage reflects OSM mapping — very good for pitches in towns, patchier for school and private grounds.", source: "© OpenStreetMap contributors (ODbL)" },
+  hotel:              { about: "Hotels, guest houses, hostels, motels and serviced apartments from OpenStreetMap (about 22,000), sized by rooms. Rooms are recorded for about 1 in 12; the rest are estimated — from the brand's typical size, from the building footprint × storeys (calibrated on hotels with recorded rooms), or the typical size for the type — and the popup says which. Bedspaces = rooms × 2. Wide zooms show the larger hotels first.", source: "© OpenStreetMap contributors (ODbL)" },
+  event_venue:        { about: "Conference, exhibition and events venues, theatres, concert halls, music venues and arts centres from OpenStreetMap (about 3,600). Capacity from the OSM tag or Wikidata where recorded — known for only about 1 in 20, so treat totals as a floor.", source: "© OpenStreetMap contributors (ODbL) · Wikidata (CC0)" },
+  food_drink:         { about: "Pubs, bars, restaurants, cafés and fast food from OpenStreetMap (about 169,000) — the matchday and visitor economy around a ground. Shown from z14.", source: "© OpenStreetMap contributors (ODbL)" },
+  bus_stop:           { about: "Every active bus stop (NaPTAN). The tooltip gives the weekday daytime frequency (buses/hour, 07:00–19:00) and the routes serving the stop. Wide zooms show the more frequent stops first; every stop appears from z14.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
   grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },
   sssi:               { about: "Sites of Special Scientific Interest — statutory wildlife and geology designation; a hard constraint on development.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
   sac:                { about: "Special Areas of Conservation — habitat protection under the Habitats Regulations.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
@@ -2777,6 +2831,7 @@ function renderOverlay(key, def, fc) {
     // The comparables layer honours the shared flats/houses filter from the
     // moment it is created, not only after the control is next touched.
     if (key === "ppd_sales" && marketPtype !== "all") setMarketPtype(marketPtype);
+    if (def.onLayers) def.onLayers(key, srcId, before);
     if (hasIcon) {
       map.addLayer({ id: `ov-${key}-icon`, type: "symbol", source: srcId, minzoom: 9,
         layout: {
@@ -3130,6 +3185,7 @@ function agentRentsCardHTML(p) {
 function openOverlayCard(key, p, lngLat) {
   hoverCardHide();
   if (key === "la_rents") { openRentCard(p, lngLat); return; }
+  if (key === "stadium" && STADIA) { STADIA.openCard(p, lngLat); return; }
   if (key === "agent_rents") {
     openClickPopup({ closeButton: true, maxWidth: "340px", offset: 10 }, lngLat,
       agentRentsCardHTML(p));
@@ -3750,6 +3806,7 @@ function buildLayersPanel() {
                               opacityKey: `ov:${o.key}`, info: LAYER_INFO[o.key] });
         // The rents layer carries nine series and three metrics; a picker
         // under its own row beats 27 toggles, and switching is a repaint.
+        if (o.key === "stadium") return r + (STADIA ? STADIA.filterHTML() : "");
         return o.key === "la_rents" ? r + rentControlsHTML() : r + overlayLegendHTML(o);
       }).join("");
       // Deprivation rides inside Plans & policy areas as its own collapsed
@@ -5259,6 +5316,38 @@ function hoverContentForOverlay(def, p) {
     rows = [row(p.trips != null ? Number(p.trips).toLocaleString() : null, "departures/weekday"),
             row(p.bph != null ? `${p.bph}/hr` : null, "07:00–19:00 average"),
             row(p.routes, "routes")];
+  } else if (d === "stadium") {
+    title = p.name || "Stadium";
+    kind = p.sport ? `Stadium · ${p.sport}` : "Stadium";
+    rows = [row(p.capacity ? Number(p.capacity).toLocaleString() : null, "capacity"),
+            row(p.clubs, "clubs"), row(p.league, "league"), row(p.opened, "opened")];
+  } else if (d === "sports_facility") {
+    const K = { pitch: "Pitch", track: "Track", sports_centre: "Sports centre", sports_hall: "Sports hall",
+                golf_course: "Golf course", ice_rink: "Ice rink" };
+    title = p.name || [p.sport, (K[p.kind] || "Sports facility").toLowerCase()].filter(Boolean).join(" ") || "Sports facility";
+    kind = K[p.kind] || "Sports facility";
+    rows = [row(p.sport, "sport"),
+            row(p.area_m2 ? (p.area_m2 >= 10000 ? `${(p.area_m2 / 1e4).toFixed(2)} ha` : `${Number(p.area_m2).toLocaleString()} m²`) : null, "area"),
+            row(p.surface, "surface"), row(p.access, "access")];
+  } else if (d === "hotel") {
+    const K = { hotel: "Hotel", motel: "Motel", guest_house: "Guest house", hostel: "Hostel", apartment: "Serviced apartments" };
+    const SRC = { tagged: "recorded", brand: "estimated from brand", footprint: "estimated from building size", typical: "typical for type" };
+    title = p.name || K[p.type] || "Hotel";
+    kind = [K[p.type] || "Hotel", p.brand].filter(Boolean).join(" · ");
+    rows = [row(p.rooms != null ? `${p.rooms} rooms` : null, SRC[p.rooms_src] || "rooms"),
+            row(p.beds != null ? `${p.beds}` : null, "bedspaces (≈2 per room)"),
+            row(p.stars ? "★".repeat(Number(p.stars)) : null, "stars")];
+  } else if (d === "event_venue") {
+    const K = { conference_centre: "Conference centre", events_venue: "Events venue", exhibition_centre: "Exhibition centre",
+                theatre: "Theatre", concert_hall: "Concert hall", music_venue: "Music venue", arts_centre: "Arts centre" };
+    title = p.name || K[p.kind] || "Venue";
+    kind = K[p.kind] || "Venue";
+    rows = [row(p.capacity ? Number(p.capacity).toLocaleString() : "not recorded", "capacity"), row(p.operator, "operator")];
+  } else if (d === "food_drink") {
+    const K = { pub: "Pub", bar: "Bar", restaurant: "Restaurant", cafe: "Café", fast_food: "Fast food" };
+    title = p.name || K[p.kind] || "Food & drink";
+    kind = K[p.kind] || "Food & drink";
+    rows = [row(p.brand, "brand")];
   } else if (d === "bus_route") {
     title = p.ref ? `Bus ${p.ref}` : (p.name || "Bus route");
     kind = p.name && p.ref ? p.name : "Bus route";
@@ -5866,6 +5955,21 @@ function wireInteractions() {
     // the dispatcher (not layer-specific click handlers) so they work on touch.
     if (deep.active) {
       if (tapDeepDiveLayers(point, box, nearest, coarse)) return true;
+    }
+
+    // 0. Stadia, when the user has switched them on: a ground often shares its
+    // spot with a station (Old Trafford's is 6 m away), and the stadium card is
+    // what someone who turned the stadium layer on is reaching for.
+    if (map.getLayer("ov-stadium-pt")) {
+      let hits = null;
+      try { hits = map.queryRenderedFeatures(box, { layers: ["ov-stadium-pt"] }); } catch (_) {}
+      if (hits && hits.length) {
+        const f = nearest(hits);
+        openOverlayCard("stadium", f.properties || {},
+          { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] });
+        setDrawer(false);
+        return true;
+      }
     }
 
     // 1. Station dot (rich card) — highest priority.
@@ -7345,6 +7449,7 @@ function setAccessRow(kind, label, value) {
 function exitDeepDive() {
   deep.active = false;
   clearDeepDiveMapArtifacts();
+  if (STADIA) STADIA.clear();
   for (const id of ["lsoa-color", "simd-color"])
     if (map.getLayer(id))
       map.setPaintProperty(id, "fill-opacity", state.fillOpacity);
@@ -13198,6 +13303,7 @@ function buildDeepDivePanel(meta) {
     </div>
 
     <div class="dd-body${meta.station ? " dd-body5" : ""}">
+      ${meta.stadium && STADIA ? STADIA.sectionHTML(meta.stadium) : ""}
       ${meta.station ? ddGroup("keyfacts", "Key facts", `
         <div id="dd-keyfacts-detail"><p class="hint">Looking up the local authority…</p></div>
         <section class="dd-block collapsed" data-section="majorapps">
@@ -13437,6 +13543,7 @@ function buildDeepDivePanel(meta) {
 
   setDeepPanelOpen(true);
   panel.querySelector(".dd-close").addEventListener("click", exitDeepDive);
+  if (meta.stadium && STADIA) STADIA.wirePanel(panel);
   const backBtn = panel.querySelector("#dd-back-batch");
   if (backBtn) backBtn.addEventListener("click", exitDeepDive);
   panel.querySelectorAll(".dd-block-head").forEach(head => {
@@ -17109,6 +17216,13 @@ document.addEventListener("focusin", e => {
   if (btn) _placeTip(btn);
 });
 
+STADIA = initStadia({ map, getSupabase, runDeepDive, fetchIsochrone, areaWeightedScore,
+  openClickPopup, esc: _esc,
+  setOverlay: (key, on) => {
+    const cb = document.querySelector(`input[data-ov="${key}"]`);
+    if (cb && cb.checked !== on) { cb.checked = on; cb.dispatchEvent(new Event("change", { bubbles: true })); }
+    else if (!cb) toggleMapOverlay(key, on);
+  } });
 buildLayersPanel();       // the grouped Data layers tree (box 1) — must run
                           // first: buildSliders/wireImdToggle bind to elements
                           // the tree renders (#sliders, #imd-show, …).

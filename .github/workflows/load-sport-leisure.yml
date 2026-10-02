@@ -1,0 +1,79 @@
+name: Load Sport & Leisure datasets
+
+# Stadia, sports facilities, hotels, event venues and food & drink for the
+# Sport & Leisure layer group and the stadium catchment sidebar
+# (pipeline/build_sport_leisure.py, migration 0087). OpenStreetMap via the UK
+# extract, enriched from Wikidata (capacity, clubs, leagues, opening year).
+# The loader fully replaces each dataset. Re-run monthly-ish.
+#
+# Licences: © OpenStreetMap contributors (ODbL); Wikidata CC0.
+
+on:
+  schedule:
+    - cron: "10 4 12 * *"      # 12th of each month
+  workflow_dispatch:
+    inputs:
+      osm_pbf_url:
+        description: "OSM PBF to build from (blank = Geofabrik UK, then the openstreetmap.fr mirror)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
+          pip install -r pipeline/requirements.txt shapely
+
+      - name: Extract sport, hotel, venue and food & drink features (osmium)
+        env:
+          OSM_PBF_SRC: ${{ inputs.osm_pbf_url }}
+        run: |
+          set -euo pipefail
+          bash .github/scripts/fetch_osm_pbf.sh data/raw/uk.osm.pbf "${OSM_PBF_SRC:-}"
+          osmium tags-filter data/raw/uk.osm.pbf \
+            nwr/leisure=stadium,pitch,sports_centre,track,golf_course,ice_rink,sports_hall \
+            nwr/tourism=hotel,motel,hostel,guest_house,apartment \
+            nwr/amenity=conference_centre,events_venue,exhibition_centre,theatre,music_venue,concert_hall,arts_centre,pub,bar,restaurant,cafe,fast_food \
+            -o data/raw/sport.osm.pbf --overwrite
+          rm -f data/raw/uk.osm.pbf
+          cat > data/raw/sport_export.json <<'EOF'
+          { "attributes": { "type": true, "id": true },
+            "linear_tags": false, "area_tags": true,
+            "exclude_tags": ["created_by", "source", "note", "fixme", "check_date"] }
+          EOF
+          osmium export data/raw/sport.osm.pbf -c data/raw/sport_export.json \
+            -f geojsonseq -o data/raw/osm_sport.geojsonseq --overwrite
+          wc -l data/raw/osm_sport.geojsonseq
+
+      # Wikidata entity cache between runs — only new/changed ids are fetched.
+      - uses: actions/cache@v4
+        with:
+          path: data/raw/wikidata_cache.json
+          key: wikidata-sport-${{ github.run_id }}
+          restore-keys: wikidata-sport-
+
+      - name: Build datasets
+        env: { PYTHONUNBUFFERED: "1" }
+        run: python pipeline/build_sport_leisure.py
+
+      - name: Load into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATASETS: stadium,sports_facility,hotel,event_venue,food_drink
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL / SUPABASE_SERVICE_KEY secrets."; exit 1
+          fi
+          python supabase/loaders/load_datasets.py

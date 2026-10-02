@@ -27,6 +27,9 @@ window.MASTERMAPPER_CONFIG = {
   // and data-centre generative designers are withdrawn from the app for now;
   // their code is kept. Uncomment to bring them back:
   //   FEATURES: { generativeDesign: true },
+  // The road/rail/bus traffic heatmaps are hidden the same way; to show them:
+  //   FEATURES: { trafficLayers: true },
+  // (both together: FEATURES: { generativeDesign: true, trafficLayers: true })
 
   // Site-wide viability defaults: every key here overrides the built-in
   // figure in VIAB_SCHEMA (web/src/app.js) as the value ALL users start
