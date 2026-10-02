@@ -60,34 +60,45 @@ exception when duplicate_object then null; end $p$;
 grant select on public.stadium_metrics to anon, authenticated;
 
 -- Area-weighted population / jobs / deprivation inside a polygon.
+-- England: LSOA polygons (map_features 'lsoa_boundary') joined to lsoa_imd
+-- (population, IMD, prices) and lsoa_jobs, weighted by the share of each LSOA
+-- inside g. Scotland: simd holds data-zone centroids without population, so
+-- deprivation is the plain average of the data zones whose centroid falls in g
+-- and population is left null rather than guessed.
 create or replace function public._area_people(g geometry)
 returns table (pop numeric, jobs numeric, imd numeric, income numeric, health numeric,
                employment numeric, ppm2 numeric)
 language sql stable
 set search_path = public, extensions
 as $$
-  with parts as (
-    select i.population::numeric * st_area(st_intersection(i.geom, g)::geography)
-             / nullif(st_area(i.geom::geography), 0) as w_pop,
-           coalesce(j.jobs, 0)::numeric * st_area(st_intersection(i.geom, g)::geography)
-             / nullif(st_area(i.geom::geography), 0) as w_jobs,
+  with eng as (
+    select (st_area(st_intersection(st_makevalid(b.geom), g)::geography)
+              / nullif(st_area(b.geom::geography), 0))::numeric as share,
+           i.population, coalesce(j.jobs, 0) jobs,
            i.overall_norm, i.income_norm, i.health_norm, i.employment_norm, i.price_per_m2
-    from lsoa_imd i left join lsoa_jobs j using (lsoa_code)
-    where i.geom && g and st_intersects(i.geom, g)
-    union all
-    select s.population::numeric * st_area(st_intersection(s.geom, g)::geography)
-             / nullif(st_area(s.geom::geography), 0), 0,
-           s.overall_norm, s.income_norm, s.health_norm, s.employment_norm, s.price_per_m2
-    from simd s
-    where s.geom && g and st_intersects(s.geom, g)
+    from map_features b
+    join lsoa_imd i on i.lsoa_code = b.source_id
+    left join lsoa_jobs j on j.lsoa_code = b.source_id
+    where b.dataset = 'lsoa_boundary' and b.geom && g and st_intersects(b.geom, g)
+  ),
+  e as (
+    select sum(population * share) pop, sum(jobs * share) jobs,
+           sum(population * share * overall_norm) / nullif(sum(population * share) filter (where overall_norm is not null), 0) imd,
+           sum(population * share * income_norm) / nullif(sum(population * share) filter (where income_norm is not null), 0) income,
+           sum(population * share * health_norm) / nullif(sum(population * share) filter (where health_norm is not null), 0) health,
+           sum(population * share * employment_norm) / nullif(sum(population * share) filter (where employment_norm is not null), 0) employment,
+           sum(population * share * price_per_m2) / nullif(sum(population * share) filter (where price_per_m2 is not null), 0) ppm2
+    from eng
+  ),
+  sc as (
+    select avg(z.overall_norm) imd, avg(z.income_norm) income, avg(z.health_norm) health,
+           avg(z.employment_norm) employment, avg(z.price_per_m2) ppm2
+    from simd z where z.geom && g and st_intersects(z.geom, g)
   )
-  select sum(w_pop)::numeric, sum(w_jobs)::numeric,
-         sum(w_pop * overall_norm) / nullif(sum(w_pop) filter (where overall_norm is not null), 0),
-         sum(w_pop * income_norm) / nullif(sum(w_pop) filter (where income_norm is not null), 0),
-         sum(w_pop * health_norm) / nullif(sum(w_pop) filter (where health_norm is not null), 0),
-         sum(w_pop * employment_norm) / nullif(sum(w_pop) filter (where employment_norm is not null), 0),
-         sum(w_pop * price_per_m2) / nullif(sum(w_pop) filter (where price_per_m2 is not null), 0)
-  from parts;
+  select e.pop, e.jobs,
+         coalesce(e.imd, sc.imd), coalesce(e.income, sc.income), coalesce(e.health, sc.health),
+         coalesce(e.employment, sc.employment), coalesce(e.ppm2, sc.ppm2)
+  from e, sc;
 $$;
 
 -- Hectares of a dataset's polygons inside g (clipped).
@@ -146,9 +157,12 @@ begin
       regen := null;
     end;
 
-    select i.lad_name into lad from lsoa_imd i where st_intersects(i.geom, s.geom) limit 1;
+    select b.props->>'lad_name' into lad from map_features b
+    where b.dataset = 'lsoa_boundary' and st_intersects(b.geom, s.geom) limit 1;
     if lad is null then
-      select z.council_name into lad from simd z where st_intersects(z.geom, s.geom) limit 1;
+      select z.council_name into lad from simd z
+      where st_dwithin(z.geom::geography, o, 5000)
+      order by z.geom <-> s.geom limit 1;
     end if;
 
     update stadium_metrics sm set
@@ -158,8 +172,9 @@ begin
       opened = (s.props->>'opened')::int, cost_real_gbp = (s.props->>'cost_real_gbp')::bigint,
       area_name = lad,
       nation = case
-        when exists (select 1 from lsoa_imd i where st_intersects(i.geom, s.geom)) then 'England'
-        when exists (select 1 from simd z where st_intersects(z.geom, s.geom)) then 'Scotland'
+        when exists (select 1 from map_features b where b.dataset = 'lsoa_boundary'
+                     and st_intersects(b.geom, s.geom)) then 'England'
+        when exists (select 1 from simd z where st_dwithin(z.geom::geography, o, 5000)) then 'Scotland'
         when st_x(s.geom) < -5.4 and st_y(s.geom) between 54 and 55.4 then 'Northern Ireland'
         else 'Wales' end,
       pop_800 = round(p8.pop), pop_1500 = round(p15.pop), pop_3000 = round(p30.pop),
