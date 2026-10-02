@@ -81,7 +81,7 @@ as $$
     from simd s
     where s.geom && g and st_intersects(s.geom, g)
   )
-  select sum(w_pop), sum(w_jobs),
+  select sum(w_pop)::numeric, sum(w_jobs)::numeric,
          sum(w_pop * overall_norm) / nullif(sum(w_pop) filter (where overall_norm is not null), 0),
          sum(w_pop * income_norm) / nullif(sum(w_pop) filter (where income_norm is not null), 0),
          sum(w_pop * health_norm) / nullif(sum(w_pop) filter (where health_norm is not null), 0),
@@ -95,7 +95,7 @@ create or replace function public._mf_ha(p_dataset text, g geometry)
 returns numeric language sql stable
 set search_path = public, extensions
 as $$
-  select coalesce(sum(st_area(st_intersection(m.geom, g)::geography)), 0) / 1e4
+  select (coalesce(sum(st_area(st_intersection(m.geom, g)::geography)), 0) / 1e4)::numeric
   from map_features m
   where m.dataset = p_dataset and m.geom && g and st_intersects(m.geom, g);
 $$;
@@ -129,7 +129,7 @@ begin
     select * into p15 from _area_people(g15);
     select * into p30 from _area_people(g30);
 
-    select st_area(st_intersection(st_union(m.geom), g8)::geography) / 1e4 into regen
+    select (st_area(st_intersection(st_union(m.geom), g8)::geography) / 1e4)::numeric into regen
     from (select geom from map_features
           where dataset in ('osm_parking','osm_brownfield','osm_retail','osm_industrial',
                             'osm_storage','osm_leisure_lowdensity','public_parcel')
@@ -156,13 +156,13 @@ begin
         else 'Wales' end,
       pop_800 = round(p8.pop), pop_1500 = round(p15.pop), pop_3000 = round(p30.pop),
       jobs_800 = round(p8.jobs), jobs_1500 = round(p15.jobs),
-      dens_1500 = round(p15.pop / (pi() * 1.5 * 1.5)),
+      dens_1500 = round(p15.pop / (pi() * 1.5 * 1.5)::numeric),
       imd_1500 = round(p15.imd * 100, 1), imd_income = round(p15.income * 100, 1),
       imd_health = round(p15.health * 100, 1), imd_employment = round(p15.employment * 100, 1),
       parking_ha = round(_mf_ha('osm_parking', g8), 2),
       brownfield_ha = round(coalesce((select sum(st_area(st_intersection(b.geom::geometry, g8)::geography)) / 1e4
                        from brownfield b where b.geom::geometry && g8
-                         and st_intersects(b.geom::geometry, g8)), 0)
+                         and st_intersects(b.geom::geometry, g8))::numeric, 0)
                      + _mf_ha('osm_brownfield', g8), 2),
       public_ha = round(_mf_ha('public_parcel', g8), 2),
       lowvalue_ha = round(_mf_ha('osm_retail', g8) + _mf_ha('osm_industrial', g8)
@@ -170,13 +170,13 @@ begin
       regen_ha = round(coalesce(regen, 0), 2),
       green_ha = round(coalesce((select sum(st_area(st_intersection(c.geom, g8)::geography)) / 1e4
                   from planning_constraints c where c.kind = 'green_space'
-                    and c.geom && g8 and st_intersects(c.geom, g8)), 0), 2),
+                    and c.geom && g8 and st_intersects(c.geom, g8))::numeric, 0), 2),
       flood3_share = round(coalesce((select st_area(st_intersection(st_union(c.geom), g8)::geography)
                      / st_area(g8::geography) from planning_constraints c
-                     where c.kind = 'flood_zone_3' and c.geom && g8 and st_intersects(c.geom, g8)), 0), 3),
+                     where c.kind = 'flood_zone_3' and c.geom && g8 and st_intersects(c.geom, g8))::numeric, 0), 3),
       conservation_share = round(coalesce((select st_area(st_intersection(st_union(c.geom), g8)::geography)
                      / st_area(g8::geography) from planning_constraints c
-                     where c.kind = 'conservation_area' and c.geom && g8 and st_intersects(c.geom, g8)), 0), 3),
+                     where c.kind = 'conservation_area' and c.geom && g8 and st_intersects(c.geom, g8))::numeric, 0), 3),
       listed_800 = (select count(*) from planning_constraints c
                     where c.kind = 'listed_building' and c.geom && g8 and st_intersects(c.geom, g8)),
       hotels_3k = (select count(*) from map_features m where m.dataset = 'hotel'
