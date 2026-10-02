@@ -95,7 +95,7 @@ create or replace function public._mf_ha(p_dataset text, g geometry)
 returns numeric language sql stable
 set search_path = public, extensions
 as $$
-  select (coalesce(sum(st_area(st_intersection(m.geom, g)::geography)), 0) / 1e4)::numeric
+  select (coalesce(sum(st_area(st_intersection(st_makevalid(m.geom), g)::geography)), 0) / 1e4)::numeric
   from map_features m
   where m.dataset = p_dataset and m.geom && g and st_intersects(m.geom, g);
 $$;
@@ -168,7 +168,7 @@ begin
       imd_1500 = round(p15.imd * 100, 1), imd_income = round(p15.income * 100, 1),
       imd_health = round(p15.health * 100, 1), imd_employment = round(p15.employment * 100, 1),
       parking_ha = round(_mf_ha('osm_parking', g8), 2),
-      brownfield_ha = round(coalesce((select sum(st_area(st_intersection(b.geom::geometry, g8)::geography)) / 1e4
+      brownfield_ha = round(coalesce((select sum(st_area(st_intersection(st_makevalid(b.geom::geometry), g8)::geography)) / 1e4
                        from brownfield b where b.geom::geometry && g8
                          and st_intersects(b.geom::geometry, g8))::numeric, 0)
                      + _mf_ha('osm_brownfield', g8), 2),
@@ -176,7 +176,7 @@ begin
       lowvalue_ha = round(_mf_ha('osm_retail', g8) + _mf_ha('osm_industrial', g8)
                     + _mf_ha('osm_storage', g8) + _mf_ha('osm_leisure_lowdensity', g8), 2),
       regen_ha = round(coalesce(regen, 0), 2),
-      green_ha = round(coalesce((select sum(st_area(st_intersection(c.geom, g8)::geography)) / 1e4
+      green_ha = round(coalesce((select sum(st_area(st_intersection(st_makevalid(c.geom), g8)::geography)) / 1e4
                   from planning_constraints c where c.kind = 'green_space'
                     and c.geom && g8 and st_intersects(c.geom, g8))::numeric, 0), 2),
       flood3_share = round(coalesce((select st_area(st_intersection(st_union(st_collectionextract(st_makevalid(c.geom), 3)), g8)::geography)
