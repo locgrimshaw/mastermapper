@@ -47,8 +47,8 @@ under construction and proposed, from Wikidata and OSM lifecycle tags
 (`pipeline/build_planned_stations.py`, refreshed monthly by the "Build
 transport layers" workflow).
 
-The repo also keeps traffic and service-level builders that are not drawn on
-the map: road traffic from DfT counts (`pipeline/build_road_traffic.py`), bus
+Traffic and service-level heatmaps are built and tiled but **hidden** in the
+app; set `FEATURES: { trafficLayers: true }` in `web/config.js` to show them: road traffic from DfT counts (`pipeline/build_road_traffic.py`), bus
 corridors routed along the streets (`pipeline/build_bus_network.py`,
 `pipeline/road_snap.py`) and rail trains per section
 (`pipeline/build_rail_usage.py`). See `docs/transport-layers-methodology.docx`.

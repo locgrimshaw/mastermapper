@@ -5,7 +5,9 @@ import { initLondonSift } from "./londonsift.js?v=ls10";
 // are withdrawn from the app for now: their code stays, but no button opens
 // them and layouts saved from them are not drawn. Set
 // FEATURES: { generativeDesign: true } in config.js to bring them back.
-const FEATURES = Object.assign({ generativeDesign: false },
+// The traffic/service heatmaps (road AADF, rail trains/day, bus corridors and
+// busy stops) are likewise hidden but kept: FEATURES: { trafficLayers: true }.
+const FEATURES = Object.assign({ generativeDesign: false, trafficLayers: false },
   (window.MASTERMAPPER_CONFIG && window.MASTERMAPPER_CONFIG.FEATURES) || {});
 
 // app.js — Welfare Mapper prototype
@@ -1242,7 +1244,8 @@ const OVERLAY_TREE = [
     // originally added beside PTAL for the PBSA story, but they describe how
     // connected a place is, which is this branch's whole subject.
     { key: "access", title: "Accessibility scores" },
-    { key: "railservice", title: "Rail stations" },
+    ...(FEATURES.trafficLayers ? [{ key: "roadtraffic", title: "Road traffic" }] : []),
+    { key: "railservice", title: FEATURES.trafficLayers ? "Rail service" : "Rail stations" },
     { key: "bus", title: "Bus network" },
   ]},
   // London-only evidence: London Plan designations from the GLA planning data
@@ -1591,12 +1594,46 @@ const MAP_OVERLAYS = [
   // The network's shape from OSM route=bus relations; frequencies live on
   // the stops (BODS GTFS) — together they read as service, not just streets.
   { key: "bus_route", group: "bus", label: "Bus routes (OSM)", color: "#0c8599", dataset: "bus_route", render: "line", minZoom: 9, lim: 4000 },
-  { key: "bus_stop", group: "bus", label: "Bus stops", color: "#1098ad", dataset: "bus_stop", render: "point", minZoom: 10, lim: 8000,
+  { key: "bus_stop", group: "bus", label: FEATURES.trafficLayers ? "Bus stops (frequency-coloured)" : "Bus stops", color: "#1098ad", dataset: "bus_stop", render: "point", minZoom: 10, lim: 8000,
     radius: ["interpolate", ["linear"], ["zoom"], 10, 2, 13, 3.5, 16, 6],
-    numFilter: z => z < 12 ? { key: "buses_hr", min: 8 } : z < 14 ? { key: "buses_hr", min: 2 } : null },
+    numFilter: z => z < 12 ? { key: "buses_hr", min: 8 } : z < 14 ? { key: "buses_hr", min: 2 } : null,
+    ...(FEATURES.trafficLayers ? { cap: { color: ["case", ["!", ["has", "buses_hr"]], "#868e96",
+           ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "buses_hr"]], 0],
+            0, "#ced4da", 1, "#96f2d7", 4, "#38d9a9", 8, "#0ca678", 16, "#087f5b"]] } } : {}) },
 
-  // New, under-construction and proposed stations (Wikidata + OSM lifecycle
-  // tags, pipeline/build_planned_stations.py), coloured by status.
+  // Traffic and service levels (`traffic: true`), hidden unless
+  // FEATURES.trafficLayers — the code and tiles are kept. All tile-served and all on ONE cold-to-hot
+  // ramp so a busy road, a busy line and a busy bus corridor read the same
+  // way side by side. Each carries a `legend` shown under its row while on.
+  // Road traffic: DfT AADF on OS Open Roads (pipeline/build_road_traffic.py).
+  { key: "road_traffic", traffic: true, group: "roadtraffic", label: "Road traffic (vehicles/day)", color: "#e8432d",
+    dataset: "road_traffic", minZoom: 5,
+    tiles: { file: "road_traffic.pmtiles", sourceLayer: "roads", minzoom: 5, render: "line",
+             sortKey: "aadf", width: valueWidth("aadf", 150000, [0.6, 2.5, 1.4, 5.5, 3, 10]) },
+    cap: { color: hotCold("aadf", [0, 5000, 15000, 30000, 60000, 100000, 150000]) },
+    legend: { stops: ["<5k", "15k", "30k", "60k", "100k", "150k+"], unit: "motor vehicles/day, both directions (AADF)" } },
+  { key: "road_junctions", traffic: true, group: "roadtraffic", label: "Busiest junctions", color: "#a8132b",
+    dataset: "road_junction", minZoom: 7,
+    tiles: { file: "road_traffic.pmtiles", sourceLayer: "junctions", minzoom: 7, render: "point",
+             sortKey: "aadf",
+             radius: ["interpolate", ["linear"], ["zoom"],
+               7, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "aadf"]], 0], 20000, 2, 200000, 6],
+               13, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "aadf"]], 0], 20000, 4, 200000, 12]] },
+    cap: { color: hotCold("aadf", [0, 20000, 40000, 70000, 100000, 150000, 220000]) },
+    legend: { stops: ["<20k", "40k", "70k", "100k", "150k", "220k+"], unit: "vehicles through the junction/day" } },
+  { key: "traffic_counts", traffic: true, group: "roadtraffic", label: "Traffic count points (DfT)", color: "#495057",
+    dataset: "traffic_count", minZoom: 10,
+    tiles: { file: "road_traffic.pmtiles", sourceLayer: "counts", minzoom: 10, render: "point",
+             radius: ["interpolate", ["linear"], ["zoom"], 10, 2.5, 14, 5], stroke: "#212529" },
+    cap: { color: hotCold("aadf", [0, 5000, 15000, 30000, 60000, 100000, 150000]) } },
+  // Rail: trains per weekday over each section of track, from the National
+  // Rail timetable routed onto OSM track (pipeline/build_rail_usage.py).
+  { key: "rail_usage", traffic: true, group: "railservice", label: "Rail lines by trains/day", color: "#e8432d",
+    dataset: "rail_usage", minZoom: 5,
+    tiles: { file: "rail_usage.pmtiles", sourceLayer: "rail_links", minzoom: 5, render: "line",
+             sortKey: "trains", width: valueWidth("trains", 900, [0.8, 3, 1.5, 6, 2.5, 10]) },
+    cap: { color: hotCold("trains", [0, 25, 75, 150, 300, 600, 1000]) },
+    legend: { stops: ["<25", "75", "150", "300", "600", "1000+"], unit: "passenger trains per weekday, both directions" } },
   { key: "rail_station_planned", group: "railservice", label: "New & planned stations", color: "#7048e8",
     dataset: "rail_station_planned", render: "point", minZoom: 5, lim: 2000,
     radius: ["interpolate", ["linear"], ["zoom"], 5, 3.5, 10, 6, 14, 8],
@@ -1605,6 +1642,23 @@ const MAP_OVERLAYS = [
              "proposed", "#7048e8", "#868e96"] },
     legend: { swatches: [["#2f9e44", "opened since 2019"], ["#f08c00", "under construction"],
                          ["#7048e8", "proposed"]] } },
+  // Bus: weekday journeys over each stop-to-stop link and from each stop,
+  // from the BODS timetable (pipeline/build_bus_network.py).
+  { key: "bus_links", traffic: true, group: "bus", label: "Bus corridors by buses/day", color: "#e8432d",
+    dataset: "bus_link", minZoom: 6,
+    tiles: { file: "bus_network.pmtiles", sourceLayer: "bus_links", minzoom: 6, render: "line",
+             sortKey: "trips", width: valueWidth("trips", 1200, [0.5, 2.5, 1, 4.5, 1.5, 8]) },
+    cap: { color: hotCold("trips", [0, 20, 60, 150, 300, 600, 1000]) },
+    legend: { stops: ["<20", "60", "150", "300", "600", "1000+"], unit: "bus journeys per weekday over the link" } },
+  { key: "bus_stops_busy", traffic: true, group: "bus", label: "Bus stops by buses/day", color: "#f58b2e",
+    dataset: "bus_stop_freq", minZoom: 9,
+    tiles: { file: "bus_network.pmtiles", sourceLayer: "bus_stops", minzoom: 9, render: "point",
+             sortKey: "trips",
+             radius: ["interpolate", ["linear"], ["zoom"],
+               9, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "trips"]], 0], 0, 1.5, 1500, 5],
+               15, ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", "trips"]], 0], 0, 3, 1500, 10]] },
+    cap: { color: hotCold("trips", [0, 20, 60, 150, 300, 600, 1000]) },
+    legend: { stops: ["<20", "60", "150", "300", "600", "1000+"], unit: "departures per weekday" } },
   // Power grid
   // Power layers thin by VOLTAGE at wide zooms (via the RPC's numeric prop
   // filter) — a national view shows the 275/400 kV backbone, zooming in adds
@@ -1664,7 +1718,7 @@ const MAP_OVERLAYS = [
   // a place. It is now a footprint layer shaded by height, served from PMTiles
   // (setBuildingsVisible) because 1.5M polygons can't come from a bbox RPC.
   // The building_height POINT dataset stays in map_features, currently unused.
-];
+].filter(o => !o.traffic || FEATURES.trafficLayers);
 
 // How a public body is described. One copy: this existed three times over
 // (two popup builders and the deep-dive card) and had already drifted —
@@ -1731,14 +1785,34 @@ function parcelMatchHTML(pr) {
 // tooltip on every Data layers row. Keyed by overlay key; special non-overlay
 // rows (deprivation, prices, green belt, stations, transit) are passed
 // explicitly in buildLayersPanel.
+// Cold-to-hot ramp shared by the traffic and service layers: blue (quiet)
+// through teal and yellow to red (busiest). Saturated throughout so the pale
+// middle of a classic diverging ramp never washes out on the light basemap.
+function hotCold(prop, stops) {
+  const RAMP = ["#3a53a4", "#2b8cbe", "#1fb3b0", "#f2c12e", "#f58b2e", "#e8432d", "#a8132b"];
+  const e = ["interpolate", ["linear"], ["coalesce", ["to-number", ["get", prop]], 0]];
+  stops.forEach((v, i) => e.push(v, RAMP[i]));
+  return e;
+}
+// Line width that grows with the value AND the zoom. `w` = [min, max] pairs at
+// z6, z10 and z14; the zoom interpolate stays outermost as MapLibre requires.
+function valueWidth(prop, max, w) {
+  const v = ["coalesce", ["to-number", ["get", prop]], 0];
+  const at = (a, b) => ["interpolate", ["linear"], v, 0, a, max, b];
+  return ["interpolate", ["linear"], ["zoom"], 6, at(w[0], w[1]), 10, at(w[2], w[3]), 14, at(w[4], w[5])];
+}
 // Key under a layer row, shown while the layer is on. The strings are the
 // static `legend` text from MAP_OVERLAYS, so nothing here needs escaping.
 function overlayLegendHTML(o) {
   const lg = o.legend;
-  if (!lg || !lg.swatches) return "";
-  const items = lg.swatches.map(([c, l]) =>
-    `<span class="bh-key"><span class="bh-sw" style="background:${c}"></span>${l}</span>`).join("");
-  return `<div id="ovleg-${o.key}" class="bh-legend ov-legend" hidden>${items}</div>`;
+  if (!lg) return "";
+  const RAMP = ["#3a53a4", "#2b8cbe", "#1fb3b0", "#f2c12e", "#f58b2e", "#e8432d", "#a8132b"];
+  const items = lg.swatches
+    ? lg.swatches.map(([c, l]) => `<span class="bh-key"><span class="bh-sw" style="background:${c}"></span>${l}</span>`).join("")
+    : `<span class="ov-ramp" style="background:linear-gradient(90deg,${RAMP.join(",")})"></span>` +
+      `<span class="ov-ramp-lbl">${lg.stops.map(t => `<span>${t}</span>`).join("")}</span>`;
+  return `<div id="ovleg-${o.key}" class="bh-legend ov-legend" hidden>${items}` +
+         (lg.unit ? `<span class="ov-ramp-unit">${lg.unit}</span>` : "") + `</div>`;
 }
 
 const LAYER_INFO = {
@@ -1773,7 +1847,13 @@ const LAYER_INFO = {
   building_height:    { about: "Every building in OpenStreetMap, drawn as its actual footprint, on a cool-to-warm ramp: blue for single-storey through yellow and orange to dark red for towers. Streams nationwide from z13. Height itself is a SAMPLE, not a survey — excellent for landmarks and city centres, patchy across suburbia — so a building OSM has not given a height is drawn in neutral grey rather than left out or guessed at as low rise. Hover to see which.", source: "OpenStreetMap contributors (ODbL)" },
   public_parcel:      { about: "Land parcels in public ownership, from two sources of differing certainty — click a parcel to see which. BEST: a coordinate or UPRN the owner published in its own asset register, which gives one locator per holding. WEAKER: a CCOD ownership record matched to an HMLR INSPIRE parcel by postcode centroid, which can stand for only one parcel per postcode however many the body owns there, with individual flats excluded so a single ex-right-to-buy flat can't claim a whole block. FADED WITH A DASHED EDGE means the parcel's size contradicts the register — the owner's locator is precise but landed in a title far larger (or smaller) than the holding it describes, so the boundary is not trustworthy. Those are kept on the map as leads but excluded from every hectare total and capacity estimate. INDICATIVE either way — the exact title-to-polygon link is HMLR's licensed National Polygon Service.", source: "HM Land Registry CCOD + INSPIRE index polygons © Crown copyright and database right; local authority and Cabinet Office asset registers (OGL); OS Open UPRN © Crown copyright (OGL)" },
   bus_route:          { about: "Every mapped bus route (OpenStreetMap route relations) as lines, with route number and operator on hover. Coverage reflects OSM mapping — dense in urban areas, occasionally patchy on rural services.", source: "OpenStreetMap contributors (ODbL)" },
+  road_traffic:       { about: "Every motorway and A road, coloured and sized by annual average daily traffic (all motor vehicles, both directions) — blue is quiet, red is the busiest. DfT counts or estimates every major-road link each year; the figure is drawn on OS Open Roads geometry, each link taking the nearest count on the same road number. B roads are sampled, so only some are coloured; minor roads show only the link a sample count sits on. Slip roads are not counted and are left out.", source: "DfT road traffic statistics (AADF) · OS Open Roads © Crown copyright (OGL v3)" },
+  road_junctions:     { about: "Junctions where two or more counted roads meet, sized and coloured by the vehicles passing through each day — estimated as the sum of the incident roads' flows halved (every vehicle enters and leaves). Large grade-separated interchanges appear as a cluster of dots.", source: "Derived from DfT AADF on OS Open Roads (OGL v3)" },
+  traffic_counts:     { about: "The DfT count points behind the road colours: the figure, the year, whether it was counted that year or estimated, and the junctions bounding the counted link.", source: "DfT road traffic statistics (OGL v3)" },
+  rail_usage:         { about: "Every section of passenger railway coloured and sized by the trains timetabled over it on a normal weekday, both directions — fast trains count on the track they pass through, not just where they stop. It measures service, not passengers: no open data gives loadings by section. Built from the National Rail timetable routed along OpenStreetMap track.", source: "National Rail timetable (Rail Delivery Group, open data) · track © OpenStreetMap contributors (ODbL)" },
   rail_station_planned: { about: "New stations opened since 2019, stations under construction, and proposed stations. Compiled from Wikidata and OpenStreetMap lifecycle tags, so proposals are only as current as those sources — check the promoter before relying on one.", source: "Wikidata (CC0) · © OpenStreetMap contributors (ODbL)" },
+  bus_links:          { about: "The bus network coloured and sized by the buses timetabled over each stop-to-stop link on a normal weekday (both directions) — the busy corridors glow red. This is scheduled service, the standard proxy for use: no open data gives bus boardings by stop across Great Britain.", source: "Bus Open Data Service timetable (DfT, OGL v3)" },
+  bus_stops_busy:     { about: "Every served bus stop, sized and coloured by weekday departures, with the average buses/hour 07:00–19:00 and the routes calling.", source: "Bus Open Data Service timetable (DfT, OGL v3)" },
   bus_stop:           { about: "Every active bus stop (NaPTAN). The tooltip gives the weekday daytime frequency (buses/hour, 07:00–19:00) and the routes serving the stop. Wide zooms show the more frequent stops first; every stop appears from z14.", source: "DfT NaPTAN + Bus Open Data Service timetable (OGL v3)" },
   grey_belt_candidate: { about: "A MODEL, not a designation: Green Belt land that is already previously-developed in character — built-up areas and registered brownfield inside the Green Belt, minus hard environmental designations (SSSI/SAC/SPA/Ramsar/ancient woodland). A first screen for NPPF 'grey belt' potential; always verify against the local plan.", source: "Derived in-database from MHCLG Green Belt × OS built-up areas × brownfield registers" },
   sssi:               { about: "Sites of Special Scientific Interest — statutory wildlife and geology designation; a hard constraint on development.", source: "Natural England via planning.data.gov.uk (OGL v3)" },
@@ -5144,6 +5224,26 @@ function hoverContentForOverlay(def, p) {
             row(p.stated_ha != null ? `${Number(p.stated_ha).toFixed(2)} ha stated` +
                 (p.area_mismatch ? " ⚠ disagrees with the parcel" : "") : null, "register says"),
             row(m ? `${m.tier} — ${m.label}` : (p.match || null), "how we know")];
+  } else if (d === "road_traffic" || d === "traffic_count") {
+    const n = Number(p.aadf);
+    title = p.road ? (/^[MAB]\d/.test(p.road) ? p.road : "Minor road") : "Road";
+    kind = d === "traffic_count" ? "DfT traffic count point" : "Road traffic";
+    rows = [row(n ? `${n.toLocaleString()}/day` : null, "motor vehicles (AADF)"),
+            row(p.hgv != null && p.hgv !== "" ? `${p.hgv}%` : null, "heavy goods vehicles"),
+            row(p.year ? `${p.year} · ${p.est === "C" ? "counted" : "estimated"}` : null, "figure"),
+            row(p.from && p.to ? `${p.from} → ${p.to}` : null, "DfT link"),
+            row(p.la, "authority")];
+  } else if (d === "road_junction") {
+    title = p.roads || "Junction";
+    kind = "Road junction";
+    rows = [row(p.aadf ? `${Number(p.aadf).toLocaleString()}/day` : null, "vehicles through"),
+            row("sum of the counted roads' flows ÷ 2", "estimate")];
+  } else if (d === "rail_usage") {
+    title = p.from && p.to ? `${p.from} – ${p.to}` : "Rail line";
+    kind = "Rail line usage";
+    rows = [row(p.trains != null ? `${Number(p.trains).toLocaleString()}` : null, "passenger trains/weekday"),
+            row(p.tph != null ? `${p.tph}` : null, "trains/hour, 07:00–19:00 average"),
+            row(p.stopping != null ? `${Number(p.stopping).toLocaleString()}` : null, "of which stop at both ends")];
   } else if (d === "rail_station_planned") {
     title = p.name || "Station";
     kind = { opened: "New station", "under construction": "Station under construction",
@@ -5152,6 +5252,16 @@ function hoverContentForOverlay(def, p) {
             row(p.opened || p.expected, p.opened ? "opened" : "expected"),
             row(p.line, "line"),
             row(p.source, "source")];
+  } else if (d === "bus_link") {
+    title = p.routes ? `Routes ${p.routes}` : "Bus link";
+    kind = "Bus corridor";
+    rows = [row(p.trips != null ? Number(p.trips).toLocaleString() : null, "buses/weekday over this link")];
+  } else if (d === "bus_stop_freq") {
+    title = p.name || "Bus stop";
+    kind = "Bus stop";
+    rows = [row(p.trips != null ? Number(p.trips).toLocaleString() : null, "departures/weekday"),
+            row(p.bph != null ? `${p.bph}/hr` : null, "07:00–19:00 average"),
+            row(p.routes, "routes")];
   } else if (d === "bus_route") {
     title = p.ref ? `Bus ${p.ref}` : (p.name || "Bus route");
     kind = p.name && p.ref ? p.name : "Bus route";
