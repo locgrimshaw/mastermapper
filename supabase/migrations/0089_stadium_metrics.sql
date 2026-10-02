@@ -54,7 +54,9 @@ create table if not exists public.stadium_metrics (
   updated_at    timestamptz default now()
 );
 alter table public.stadium_metrics enable row level security;
-create policy stadium_metrics_read on public.stadium_metrics for select using (true);
+do $p$ begin
+  create policy stadium_metrics_read on public.stadium_metrics for select using (true);
+exception when duplicate_object then null; end $p$;
 grant select on public.stadium_metrics to anon, authenticated;
 
 -- Area-weighted population / jobs / deprivation inside a polygon.
@@ -133,7 +135,8 @@ begin
                             'osm_storage','osm_leisure_lowdensity','public_parcel')
             and geom && g8 and st_intersects(geom, g8)
           union all
-          select geom from brownfield where geom && g8 and st_intersects(geom, g8)) m;
+          select geom::geometry from brownfield
+          where geom::geometry && g8 and st_intersects(geom::geometry, g8)) m;
 
     select i.lad_name into lad from lsoa_imd i where st_intersects(i.geom, s.geom) limit 1;
     if lad is null then
@@ -157,8 +160,9 @@ begin
       imd_1500 = round(p15.imd * 100, 1), imd_income = round(p15.income * 100, 1),
       imd_health = round(p15.health * 100, 1), imd_employment = round(p15.employment * 100, 1),
       parking_ha = round(_mf_ha('osm_parking', g8), 2),
-      brownfield_ha = round(coalesce((select sum(st_area(st_intersection(b.geom, g8)::geography)) / 1e4
-                       from brownfield b where b.geom && g8 and st_intersects(b.geom, g8)), 0)
+      brownfield_ha = round(coalesce((select sum(st_area(st_intersection(b.geom::geometry, g8)::geography)) / 1e4
+                       from brownfield b where b.geom::geometry && g8
+                         and st_intersects(b.geom::geometry, g8)), 0)
                      + _mf_ha('osm_brownfield', g8), 2),
       public_ha = round(_mf_ha('public_parcel', g8), 2),
       lowvalue_ha = round(_mf_ha('osm_retail', g8) + _mf_ha('osm_industrial', g8)
