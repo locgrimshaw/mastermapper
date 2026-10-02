@@ -1,5 +1,6 @@
 import { initLondonSift } from "./londonsift.js?v=ls10";
-import { initStadia, stadiumColor, stadiumRadius } from "./stadia.js?v=st1";
+import { initStadia, stadiumColor, stadiumRadius } from "./stadia.js?v=st2";
+import { initStudies } from "./studies.js?v=sy1";
 
 // Front-end feature switches. The generative designers — the housing layout
 // generator (layoutgen.js) and the data-centre campus generator (dcgen.js) —
@@ -17222,7 +17223,21 @@ STADIA = initStadia({ map, getSupabase, runDeepDive, fetchIsochrone, areaWeighte
     const cb = document.querySelector(`input[data-ov="${key}"]`);
     if (cb && cb.checked !== on) { cb.checked = on; cb.dispatchEvent(new Event("change", { bubbles: true })); }
     else if (!cb) toggleMapOverlay(key, on);
+  },
+  openStudy: () => STUDIES && STUDIES.open() });
+// Studies (top bar): long-form analysis pages. A ground picked on a study
+// page flies the map to it and opens its card.
+const STUDIES = initStudies({ getSupabase,
+  onShowStadium: r => {
+    const lngLat = { lng: r.lng, lat: r.lat };
+    const cb = document.querySelector('input[data-ov="stadium"]');
+    if (cb && !cb.checked) { cb.checked = true; cb.dispatchEvent(new Event("change", { bubbles: true })); }
+    map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 14), duration: 1200 });
+    map.once("moveend", () => STADIA.openCard({ name: r.name, capacity: r.capacity, sport: r.sport, sport1: r.sport,
+      clubs: r.clubs, league: r.league, opened: r.opened }, lngLat));
   } });
+for (const id of ["open-studies", "studies-toggle"])
+  document.getElementById(id)?.addEventListener("click", () => STUDIES.open());
 buildLayersPanel();       // the grouped Data layers tree (box 1) — must run
                           // first: buildSliders/wireImdToggle bind to elements
                           // the tree renders (#sliders, #imd-show, …).

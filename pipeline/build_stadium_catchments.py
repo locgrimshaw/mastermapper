@@ -24,8 +24,9 @@ Per stadium:
                              800 m / 1.5 km / 3 km rings and each catchment —
                              one consistent source for all four nations.
 
-Inputs (env): GTFS_ZIP (BODS all-regions GTFS), POP_NPZ (npz with lat, lon,
-pop arrays — see POP_CSV_ZIP to build it), ISO_VH (Valhalla cache JSON),
+Inputs (env): GTFS_ZIP (BODS all-regions GTFS), POP_NPZ (lat/lon/pop npz,
+built from the HDX CSV on first run), ISO_VH (Valhalla cache JSON, filled by
+fetch_valhalla() unless WAIT_VH is set),
 SUPABASE_URL / SUPABASE_KEY (read stadium_metrics, stations, station_links).
 Output: data/raw/stadium_catchments.json — {"iso": [...], "metrics": [...]}
 for the loader.
@@ -41,6 +42,7 @@ import math
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -266,6 +268,57 @@ def discs(points, budget_s, origin):
     return unary_union(geoms)
 
 
+POP_CSV_URL = ("https://data.humdata.org/dataset/b9a7b4a3-75a7-4de1-b741-27d78e8d0564/resource/"
+               "674a0049-1a75-4f9a-a07b-654bda75456e/download/population_gbr_2019-07-01.csv.zip")
+
+
+def ensure_pop():
+    """Meta's 2019 GB grid (~1.2 GB CSV, 19m cells) -> compact npz, once."""
+    if POP_NPZ.exists():
+        return
+    zp = POP_NPZ.with_suffix(".csv.zip")
+    if not zp.exists():
+        print(f"[iso] downloading {POP_CSV_URL}", flush=True)
+        urllib.request.urlretrieve(POP_CSV_URL, zp)
+    lat, lon, pop = [], [], []
+    with zipfile.ZipFile(zp) as zf:
+        fh = io.TextIOWrapper(zf.open(zf.namelist()[0]), "utf-8", newline="")
+        rd = csv.reader(fh)
+        next(rd)
+        for r in rd:
+            lat.append(float(r[0])); lon.append(float(r[1])); pop.append(float(r[2]))
+    np.savez(POP_NPZ, lat=np.array(lat, "float32"), lon=np.array(lon, "float32"), pop=np.array(pop, "float32"))
+
+
+def fetch_valhalla(st):
+    """Walk 15 / drive 20 isochrones from the public Valhalla server, cached in
+    ISO_VH so a re-run only fetches new grounds. ~1 request a second."""
+    out = json.loads(ISO_VH.read_text()) if ISO_VH.exists() else {}
+    for i, s in enumerate(st):
+        for mode, costing, mins in (("walk", "pedestrian", 15), ("drive", "auto", 20)):
+            k = f"{s['source_id']}|{mode}"
+            if out.get(k):
+                continue
+            body = {"locations": [{"lat": s["lat"], "lon": s["lng"]}], "costing": costing,
+                    "contours": [{"time": mins}], "polygons": True}
+            url = "https://valhalla1.openstreetmap.de/isochrone?json=" + urllib.parse.quote(json.dumps(body))
+            for a in range(5):
+                try:
+                    req = urllib.request.Request(url, headers={"X-Client-Id": "mastermapper", "User-Agent": "MasterMapper/1.0"})
+                    gj = json.load(urllib.request.urlopen(req, timeout=40))
+                    out[k] = next((f["geometry"] for f in gj.get("features", [])
+                                   if f["geometry"]["type"] in ("Polygon", "MultiPolygon")), None)
+                    break
+                except Exception:
+                    time.sleep(3 + 5 * a)
+            time.sleep(1.1)
+        if i % 25 == 0:
+            ISO_VH.write_text(json.dumps(out))
+            print(f"[iso] valhalla {i}/{len(st)}", flush=True)
+    ISO_VH.write_text(json.dumps(out))
+    return out
+
+
 class Pop:
     def __init__(self, path):
         z = np.load(path)
@@ -303,7 +356,8 @@ def main():
         if l["minutes"] and l["trains_day"]:
             links.setdefault(l["crs_from"], []).append((l["crs_to"], float(l["minutes"]), int(l["trains_day"])))
     print(f"[iso] {len(st)} stadia, {len(stations)} stations, {sum(map(len, links.values())):,} rail links", flush=True)
-    vh = json.loads(ISO_VH.read_text()) if ISO_VH.exists() else {}
+    vh = (json.loads(ISO_VH.read_text()) if ISO_VH.exists() else {}) if os.environ.get("WAIT_VH") else fetch_valhalla(st)
+    ensure_pop()
     pop = Pop(POP_NPZ)
     print(f"[iso] population grid: {len(pop.p):,} cells, {pop.p.sum() / 1e6:.1f}m people", flush=True)
     g = Gtfs(GTFS_ZIP)
@@ -318,6 +372,13 @@ def main():
         m = {"source_id": s["source_id"],
              "pop_800": round(pop.ring(sx, sy, 800)), "pop_1500": round(pop.ring(sx, sy, 1500)),
              "pop_3000": round(pop.ring(sx, sy, 3000))}
+        # (local runs alongside the Valhalla fetch: wait for its cache to catch up)
+        while os.environ.get("WAIT_VH") and f"{s['source_id']}|drive" not in vh:
+            time.sleep(20)
+            try:
+                vh = json.loads(ISO_VH.read_text())
+            except ValueError:      # caught mid-write
+                pass
         for mode, mins in (("walk", 15), ("drive", 20)):
             gj = vh.get(f"{s['source_id']}|{mode}")
             if gj:
@@ -326,6 +387,9 @@ def main():
                 m[f"reach_{mode}{mins}"] = round(p) if p is not None else None
                 isos.append({"stadium": s["source_id"], "mode": mode, "minutes": mins, "pop": m[f"reach_{mode}{mins}"],
                              "geom": mapping(shape(gj).simplify(0.0003))})
+        metrics.append(m)
+        if s["lng"] < -5.4 and 54.0 < s["lat"] < 55.4:
+            continue    # Northern Ireland: BODS has no NI timetable
         budget = max(BUDGETS) * 60
         best = csa(sx, sy, x, y, conns, fp, budget)
         rail = rail_hops(sx, sy, best, x, y, stations, links, budget)
@@ -334,20 +398,48 @@ def main():
             bs = b * 60
             gb = discs([(p, t) for p, t in pts if t < bs], bs, (sx, sy)).simplify(40)
             p = pop.poly(gb)
+            m[f"reach_pt{b}"] = round(p)
             if b == 45:
-                m["reach_pt45"] = round(p)
                 m["pt45_stops"] = sum(1 for _, t in best.items() if t < bs)
                 m["pt45_stations"] = sum(1 for _, t in rail.items() if t < bs)
             isos.append({"stadium": s["source_id"], "mode": "pt", "minutes": b, "pop": round(p),
                          "geom": mapping(to_wgs_t(gb))})
-        metrics.append(m)
         if k % 25 == 0:
             print(f"[iso] {k}/{len(st)} {s['name']}: walk15 {m.get('reach_walk15')}, drive20 "
                   f"{m.get('reach_drive20')}, pt45 {m.get('reach_pt45')} ({time.time() - t_start:.0f}s)", flush=True)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps({"iso": isos, "metrics": metrics}))
     print(f"[iso] wrote {OUT} — {len(isos)} isochrones, {len(metrics)} stadia", flush=True)
+    if os.environ.get("SUPABASE_SERVICE_KEY"):
+        load(isos, metrics)
     return 0
+
+
+def post(path, rows, prefer):
+    key = os.environ["SUPABASE_SERVICE_KEY"]
+    for i in range(0, len(rows), 200):
+        req = urllib.request.Request(f"{SB_URL}/rest/v1/{path}", method="POST",
+                                     data=json.dumps(rows[i:i + 200]).encode(),
+                                     headers={"apikey": key, "Authorization": "Bearer " + key,
+                                              "Content-Type": "application/json", "Prefer": prefer})
+        urllib.request.urlopen(req, timeout=300).read()
+
+
+def load(isos, metrics):
+    """Upsert the polygons (map_features 'stadium_iso') and the metric columns;
+    then run derive_stadium_metrics() / classify_stadia() in SQL."""
+    post("map_features?on_conflict=dataset,source_id", [
+        {"dataset": "stadium_iso", "source_id": f"{r['stadium']}|{r['mode']}{r['minutes']}",
+         "name": f"{r['mode']} {r['minutes']} min",
+         "props": {k: r[k] for k in ("stadium", "mode", "minutes", "pop")},
+         "geom": f"SRID=4326;{shape(r['geom']).wkt}"} for r in isos],
+        "resolution=merge-duplicates,return=minimal")
+    for m in metrics:
+        m["dens_1500"] = round(m["pop_1500"] / (math.pi * 2.25))
+    keys = sorted({k for m in metrics for k in m})
+    post("stadium_metrics?on_conflict=source_id", [{k: m.get(k) for k in keys} for m in metrics],
+         "resolution=merge-duplicates,return=minimal")
+    print("[iso] loaded; now run select derive_stadium_metrics(); select classify_stadia();", flush=True)
 
 
 if __name__ == "__main__":

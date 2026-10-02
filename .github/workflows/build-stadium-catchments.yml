@@ -1,0 +1,57 @@
+name: Build stadium catchments
+
+# Walk / drive / public-transport catchments and populations for every stadium
+# (pipeline/build_stadium_catchments.py), loaded into map_features
+# ('stadium_iso') and stadium_metrics, then the derived matchday, index and
+# typology columns are recomputed (migration 0090). Run after "Load Sport &
+# Leisure datasets" and rebuild_stadium_metrics(); quarterly is plenty.
+#
+# Needs repo variable BUS_GTFS_SRC (the BODS all-regions GTFS URL, as for
+# load-bus.yml). Licences: BODS OGL v3; OSM ODbL (Valhalla); Meta population
+# CC BY 4.0.
+
+on:
+  schedule:
+    - cron: "40 5 20 1,4,7,10 *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt shapely pyproj numpy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            data/raw/iso_vh.json
+            data/raw/pop_gbr.npz
+          key: stadium-catchments-${{ github.run_id }}
+          restore-keys: stadium-catchments-
+      - name: Fetch the national timetable
+        env: { BUS_GTFS_SRC: "${{ vars.BUS_GTFS_SRC }}" }
+        run: |
+          if [ -z "$BUS_GTFS_SRC" ]; then echo "::error::Set repo variable BUS_GTFS_SRC."; exit 1; fi
+          curl -fsSL --retry 4 -o data/raw/bus-gtfs.zip "$BUS_GTFS_SRC"
+      - name: Build and load catchments
+        env:
+          PYTHONUNBUFFERED: "1"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python pipeline/build_stadium_catchments.py
+      - name: Recompute derived metrics
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          for f in derive_stadium_metrics classify_stadia; do
+            curl -fsS -X POST "$SUPABASE_URL/rest/v1/rpc/$f" -H "apikey: $SUPABASE_SERVICE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" -H "Content-Type: application/json" -d '{}'; echo
+          done

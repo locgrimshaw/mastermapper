@@ -159,3 +159,8 @@ $$;
 
 revoke execute on function public.derive_stadium_metrics() from public, anon, authenticated;
 revoke execute on function public.classify_stadia() from public, anon, authenticated;
+-- The refresh workflow calls these over REST with the service key.
+grant execute on function public.derive_stadium_metrics() to service_role;
+grant execute on function public.classify_stadia() to service_role;
+grant execute on function public.rebuild_stadium_metrics(int, int) to service_role;
+grant execute on function public.set_stadium_reach() to service_role;
