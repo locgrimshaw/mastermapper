@@ -1,5 +1,5 @@
 import { initLondonSift } from "./londonsift.js?v=ls10";
-import { initStadia, stadiumColor, stadiumRadius } from "./stadia.js?v=st2";
+import { initStadia, stadiumColor, stadiumRadius } from "./stadia.js?v=st3";
 import { initStudies } from "./studies.js?v=sy1";
 
 // Front-end feature switches. The generative designers — the housing layout

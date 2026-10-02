@@ -20,16 +20,11 @@ point with their area kept):
                   theatre|concert_hall|music_venue|arts_centre. kind, capacity.
   food_drink      amenity=pub|bar|restaurant|cafe|fast_food. kind, name.
 
-Hotel rooms. OSM tags rooms on ~10% of hotels, so the figure comes from the
-first rule that applies, and `rooms_src` says which:
-  tagged     the OSM rooms tag
-  brand      median of tagged hotels of the same brand (5+ tagged), e.g.
-             Premier Inn, Travelodge
-  footprint  mapped building footprint x storeys (building:levels, else 3)
-             -> rooms by a log-log fit (rooms = a * floorspace^b) calibrated
-             each run on hotels with both a tagged room count and a
-             footprint; clamped 5-1,500
-  typical    median tagged rooms for that accommodation type
+Hotel rooms. OSM tags rooms on ~8% of hotels; the rest are modelled from the
+floorspace of the building each hotel occupies (pipeline/hotel_rooms.py:
+footprint × storeys, GHSL building height, brand and type, calibrated and
+cross-validated on the tagged hotels). `rooms_src` = override | tagged |
+model | brand | typical.
 Bedspaces = rooms x 2 (standard double-occupancy bedspace convention).
 
 Capacity (stadia and venues): the OSM capacity tag, else Wikidata P1083.
@@ -49,11 +44,12 @@ Run:  python pipeline/build_sport_leisure.py
 """
 
 import csv
+import glob
 import json
 import math
 import os
 import re
-import statistics
+import subprocess
 import sys
 import time
 import urllib.error
@@ -63,9 +59,14 @@ from pathlib import Path
 
 from shapely.geometry import shape
 
+from hotel_rooms import estimate, ghs_heights, join_buildings
+
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 SRC = Path(os.environ.get("SPORT_SRC") or RAW / "osm_sport.geojsonseq")
+# OSM buildings + building:parts (with levels / height), for hotel floorspace
+# (an .osm.pbf, streamed through `osmium export`, or a geojsonseq file)
+BUILDINGS = Path(os.environ.get("BUILDINGS_SRC") or RAW / "buildings.osm.pbf")
 OUT = ROOT / "supabase" / "datasets_import.csv"
 WD_CACHE = RAW / "wikidata_cache.json"
 UA = "MasterMapper/1.0 (https://github.com/locgrimshaw/mastermapper)"
@@ -314,6 +315,7 @@ def main():
         elif t.get("leisure") in FACILITY:
             rows["sports_facility"].append(base)
         elif t.get("tourism") in HOTEL:
+            base["geom"] = f["geometry"]
             rows["hotel"].append(base)
         elif t.get("amenity") in VENUE:
             rows["event_venue"].append(base)
@@ -404,63 +406,37 @@ def main():
             "surface": t.get("surface"), "access": t.get("access"),
         })
 
-    # hotels: rooms by tagged / brand / footprint / typical
-    tagged = [(r, num(r["t"].get("rooms"))) for r in rows["hotel"]]
-    by_brand, by_type = {}, {}
-    for r, n in tagged:
-        if n and 1 <= n <= 2000:
-            b = (r["t"].get("brand") or "").strip().lower()
-            if b:
-                by_brand.setdefault(b, []).append(n)
-            by_type.setdefault(r["t"].get("tourism"), []).append(n)
-    brand_med = {b: statistics.median(v) for b, v in by_brand.items() if len(v) >= 5}
-    type_med = {k: statistics.median(v) for k, v in by_type.items() if v}
-    # Rooms from floorspace (footprint x storeys), calibrated each run on
-    # hotels that have BOTH a tagged room count and a mapped footprint, as a
-    # log-log fit rooms = a * floorspace^b. Large hotels carry far more
-    # non-bedroom space (function rooms, restaurants, back of house), so a
-    # single rooms-per-m2 ratio overstated big city-centre hotels ~2x.
-    pts = []
-    for r, n in tagged:
-        if n and 5 <= n <= 2000 and r["area"] > 80 and r["t"].get("building") \
-                and r["t"].get("tourism") == "hotel":
-            lv = min(num(r["t"].get("building:levels")) or 3, 40)
-            pts.append((math.log(r["area"] * lv), math.log(n)))
-    if len(pts) >= 30:
-        mx = sum(x for x, _ in pts) / len(pts)
-        my = sum(y for _, y in pts) / len(pts)
-        fb = sum((x - mx) * (y - my) for x, y in pts) / max(1e-9, sum((x - mx) ** 2 for x, _ in pts))
-        fb = max(0.3, min(1.0, fb))
-        fa = math.exp(my - fb * mx)
+    # hotels: rooms from overrides / OSM tag / building-floorspace model /
+    # brand / type (pipeline/hotel_rooms.py)
+    if BUILDINGS.exists() and BUILDINGS.suffix == ".pbf":
+        cfg = RAW / "buildings_export.json"
+        cfg.write_text(json.dumps({"attributes": {"type": True, "id": True}, "linear_tags": False,
+                                   "area_tags": True, "include_tags": ["building", "building:part",
+                                   "building:levels", "height"]}))
+        proc = subprocess.Popen(["osmium", "export", str(BUILDINGS), "-c", str(cfg), "-f", "geojsonseq",
+                                 "-o", "-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, encoding="utf-8")
+        match, cell_lv = join_buildings(rows["hotel"], proc.stdout)
+        proc.wait()
+    elif BUILDINGS.exists():
+        with BUILDINGS.open(encoding="utf-8") as fh:
+            match, cell_lv = join_buildings(rows["hotel"], fh)
     else:
-        fa, fb = 0.65 / 30, 1.0
-    print(f"[sport] footprint fit: rooms = {fa:.3f} x floorspace^{fb:.2f} from {len(pts)} tagged hotels "
-          f"(2,000 m2 -> {fa * 2000 ** fb:.0f} rooms, 20,000 m2 -> {fa * 20000 ** fb:.0f})", flush=True)
-    src_count = {}
-    for r, n in tagged:
+        print(f"[sport] {BUILDINGS} missing — hotel rooms fall back to brand / type medians", flush=True)
+        match, cell_lv = {}, {}
+    ghs = ghs_heights(rows["hotel"], sorted(glob.glob(str(RAW / "ghs" / "*.tif"))))
+    rooms = estimate(rows["hotel"], match, cell_lv, ghs)
+    for r in rows["hotel"]:
         t = r["t"]
-        kind = t.get("tourism")
-        src = "tagged"
-        if not n or not (1 <= n <= 2000):
-            b = (t.get("brand") or "").strip().lower()
-            if b in brand_med:
-                n, src = round(brand_med[b]), "brand"
-            elif r["area"] > 80 and t.get("building"):
-                lv = num(t.get("building:levels")) or 3
-                n, src = max(5, min(1500, round(fa * (r["area"] * min(lv, 40)) ** fb))), "footprint"
-            else:
-                n, src = round(type_med.get(kind, 10)), "typical"
-        src_count[src] = src_count.get(src, 0) + 1
+        n, src = rooms[r["id"]]
         stars = num(t.get("stars"))
         emit("hotel", r, {
-            "type": kind, "brand": t.get("brand") or None,
+            "type": t.get("tourism"), "brand": t.get("brand") or None,
             "stars": stars if stars and stars <= 5 else None,
             "rooms": n, "rooms_src": src, "beds": n * 2,
             "operator": (t.get("operator") or "")[:80] or None,
             "website": t.get("website"),
         })
-    print(f"[sport] hotels: rooms from {src_count}; brand medians for {len(brand_med)} brands; "
-          f"type medians {type_med}", flush=True)
 
     # event venues
     n_cap = 0

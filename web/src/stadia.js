@@ -402,7 +402,7 @@ export function initStadia(d) {
             Object.keys(h.by_stars || {}).length ? ["Star rating", Object.entries(h.by_stars).sort().map(([k, n]) => `${k === "unrated" ? "unrated" : k + "★"} ${n}`).join(" · ")] : null])
       + ((h.top || []).length ? `<div class="st-list-tbl">${h.top.slice(0, 8).map(x =>
           `<div><span>${esc(x.name || x.brand || "Hotel")}</span><b>${fmt(x.rooms)}${est(x.src)} rooms</b><i>${km(x.dist_m)}</i></div>`).join("")}</div>` : "")
-      + `<p class="hint">Rooms are tagged in OpenStreetMap for ${fmt(h.tagged)} of ${fmt(h.n)} catchment hotels; the rest (*) are estimated from the brand, the building footprint × storeys, or the typical size for the type. Bedspaces = rooms × 2.</p>`
+      + `<p class="hint">Rooms are tagged in OpenStreetMap for ${fmt(h.tagged)} of ${fmt(h.n)} catchment hotels. The rest (*) are modelled from the floorspace of the building each hotel occupies (footprint × storeys, building height from GHSL), its brand and its type, calibrated on the tagged hotels. That is typically within ±35% for a single hotel and much closer in total. Bedspaces = rooms × 2.</p>`
       + `<div class="st-sub">Event, conference &amp; performance venues</div>`
       + grid([[fmt(v.n), "venues in catchment"], [v.cap_n ? fmt(v.capacity) : "—", `capacity (${fmt(v.cap_n)} known)`],
               [`${fmt(v.bands?.["1000"])} / ${fmt(v.bands?.["3000"])} / ${fmt(v.bands?.["5000"])}`, "within 1 / 3 / 5 km"]])

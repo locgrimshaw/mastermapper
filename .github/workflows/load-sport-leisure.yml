@@ -24,7 +24,7 @@ permissions:
 jobs:
   load:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,7 +33,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
-          pip install -r pipeline/requirements.txt shapely
+          pip install -r pipeline/requirements.txt shapely numpy rasterio
 
       - name: Extract sport, hotel, venue and food & drink features (osmium)
         env:
@@ -46,6 +46,9 @@ jobs:
             nwr/tourism=hotel,motel,hostel,guest_house,apartment \
             nwr/amenity=conference_centre,events_venue,exhibition_centre,theatre,music_venue,concert_hall,arts_centre,pub,bar,restaurant,cafe,fast_food \
             -o data/raw/sport.osm.pbf --overwrite
+          # buildings + parts, for hotel floorspace (pipeline/hotel_rooms.py)
+          osmium tags-filter data/raw/uk.osm.pbf w/building w/building:part r/building \
+            -o data/raw/buildings.osm.pbf --overwrite
           rm -f data/raw/uk.osm.pbf
           cat > data/raw/sport_export.json <<'EOF'
           { "attributes": { "type": true, "id": true },
@@ -62,6 +65,17 @@ jobs:
           path: data/raw/wikidata_cache.json
           key: wikidata-sport-${{ github.run_id }}
           restore-keys: wikidata-sport-
+
+      # JRC GHSL average building height, 2018, ~90 m (CC BY 4.0): storeys and
+      # density for hotels whose building has no levels/height tag.
+      - name: Fetch GHSL building-height tiles
+        run: |
+          mkdir -p data/raw/ghs
+          B=https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_BUILT_H_GLOBE_R2023A/GHS_BUILT_H_ANBH_E2018_GLOBE_R2023A_4326_3ss/V1-0/tiles
+          for t in R3_C18 R4_C18 R4_C19 R5_C18; do
+            curl -fsSL --retry 4 -o /tmp/ghs.zip "$B/GHS_BUILT_H_ANBH_E2018_GLOBE_R2023A_4326_3ss_V1_0_$t.zip" \
+              && unzip -o -q -j /tmp/ghs.zip '*.tif' -d data/raw/ghs || echo "::warning::GHSL tile $t unavailable"
+          done
 
       - name: Build datasets
         env: { PYTHONUNBUFFERED: "1" }
