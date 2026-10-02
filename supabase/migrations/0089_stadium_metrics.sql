@@ -32,7 +32,7 @@ create table if not exists public.stadium_metrics (
   -- people
   pop_800 int, pop_1500 int, pop_3000 int, jobs_800 int, jobs_1500 int,
   dens_1500 numeric,               -- residents per km2
-  imd_1500 numeric,                -- pop-weighted deprivation, 0-100 (100 = most deprived)
+  imd_1500 numeric,                -- pop-weighted IMD/SIMD national percentile, 0-100 (100 = most deprived)
   imd_income numeric, imd_health numeric, imd_employment numeric,
   -- land supply within 800 m (ha; components can overlap, regen_ha is their union)
   parking_ha numeric, brownfield_ha numeric, public_ha numeric,
@@ -180,8 +180,8 @@ begin
       pop_800 = round(p8.pop), pop_1500 = round(p15.pop), pop_3000 = round(p30.pop),
       jobs_800 = round(p8.jobs), jobs_1500 = round(p15.jobs),
       dens_1500 = round(p15.pop / (pi() * 1.5 * 1.5)::numeric),
-      imd_1500 = round(p15.imd * 100, 1), imd_income = round(p15.income * 100, 1),
-      imd_health = round(p15.health * 100, 1), imd_employment = round(p15.employment * 100, 1),
+      imd_1500 = round(p15.imd, 1), imd_income = round(p15.income, 1),
+      imd_health = round(p15.health, 1), imd_employment = round(p15.employment, 1),
       parking_ha = round(_mf_ha('osm_parking', g8), 2),
       brownfield_ha = round(coalesce((select sum(st_area(st_intersection(st_makevalid(b.geom::geometry), g8)::geography)) / 1e4
                        from brownfield b where b.geom::geometry && g8
