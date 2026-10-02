@@ -129,7 +129,12 @@ begin
     select * into p15 from _area_people(g15);
     select * into p30 from _area_people(g30);
 
-    select (st_area(st_intersection(st_union(m.geom), g8)::geography) / 1e4)::numeric into regen
+    -- Union of every regenerable-land polygon in the ring. Source polygons are
+    -- sometimes invalid (self-intersecting OSM rings), so make them valid and
+    -- keep only the areal part; if GEOS still fails, fall back to the summed
+    -- area (an overstatement, capped at the ring).
+    begin
+    select (st_area(st_intersection(st_union(st_collectionextract(st_makevalid(m.geom), 3)), g8)::geography) / 1e4)::numeric into regen
     from (select geom from map_features
           where dataset in ('osm_parking','osm_brownfield','osm_retail','osm_industrial',
                             'osm_storage','osm_leisure_lowdensity','public_parcel')
@@ -137,6 +142,9 @@ begin
           union all
           select geom::geometry from brownfield
           where geom::geometry && g8 and st_intersects(geom::geometry, g8)) m;
+    exception when others then
+      regen := null;
+    end;
 
     select i.lad_name into lad from lsoa_imd i where st_intersects(i.geom, s.geom) limit 1;
     if lad is null then
@@ -171,10 +179,10 @@ begin
       green_ha = round(coalesce((select sum(st_area(st_intersection(c.geom, g8)::geography)) / 1e4
                   from planning_constraints c where c.kind = 'green_space'
                     and c.geom && g8 and st_intersects(c.geom, g8))::numeric, 0), 2),
-      flood3_share = round(coalesce((select st_area(st_intersection(st_union(c.geom), g8)::geography)
+      flood3_share = round(coalesce((select st_area(st_intersection(st_union(st_collectionextract(st_makevalid(c.geom), 3)), g8)::geography)
                      / st_area(g8::geography) from planning_constraints c
                      where c.kind = 'flood_zone_3' and c.geom && g8 and st_intersects(c.geom, g8))::numeric, 0), 3),
-      conservation_share = round(coalesce((select st_area(st_intersection(st_union(c.geom), g8)::geography)
+      conservation_share = round(coalesce((select st_area(st_intersection(st_union(st_collectionextract(st_makevalid(c.geom), 3)), g8)::geography)
                      / st_area(g8::geography) from planning_constraints c
                      where c.kind = 'conservation_area' and c.geom && g8 and st_intersects(c.geom, g8))::numeric, 0), 3),
       listed_800 = (select count(*) from planning_constraints c
