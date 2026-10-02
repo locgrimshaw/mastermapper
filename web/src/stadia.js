@@ -191,7 +191,23 @@ export function initStadia(d) {
       S.notes[mode] = `Routing service unavailable — ${T}-min ${m.label.toLowerCase()} shown as a detour-adjusted ring.`;
       return ring(lng, lat, T * m.mpm);
     }
-    // Public transport: walk from the stadium, plus every station within reach
+    // Public transport at 30 / 45 min: the precomputed timetable isochrone
+    // (bus, tram, Underground and rail, leaving 17:00 Saturday) when there is one.
+    if (T === 30 || T === 45) {
+      const row = await metricsFor(S.st);
+      if (row) {
+        try {
+          const { data } = await getSupabase().from("map_features").select("geom,props")
+            .eq("dataset", "stadium_iso").eq("source_id", `${row.source_id}|pt${T}`).maybeSingle();
+          if (data && data.geom) {
+            S.notes.pt = `${T} min by public transport leaving the ground at 17:00 on a Saturday — every bus, tram, Underground and rail service in the national timetable (BODS + National Rail), walking on from each stop with the time left. Reaches ${fmt(data.props?.pop)} people.`;
+            S.ptReached = row.pt45_stations;
+            return { type: "Feature", properties: {}, geometry: data.geom };
+          }
+        } catch (_) {}
+      }
+    }
+    // Otherwise: walk from the stadium, plus every station within reach
     // by direct train (timetable minutes + walk + interchange), each with the
     // walking time it has left as a ring.
     const sites = [ring(lng, lat, T * WALK_MPM)];
@@ -272,6 +288,7 @@ export function initStadia(d) {
     drawZones();
     if (S.showAll) buildOthers();
     loadSummary(zone);
+    loadAnchor(S.st);
   }
   async function buildOthers() {
     for (const m of MODES) {
@@ -298,6 +315,7 @@ export function initStadia(d) {
     const seg = MODES.map(m => `<button type="button" class="lt-seg-btn st-mode${m.k === S.analyse ? " active" : ""}" data-m="${m.k}" style="--mc:${m.color}">${m.label}</button>`).join("");
     const mins = [10, 15, 20, 30, 45, 60].map(v => `<option value="${v}"${v === S.mins[S.analyse] ? " selected" : ""}>${v} min</option>`).join("");
     return block("st-facts", "Stadium", `<div class="dd-kv">${facts}</div>`)
+      + block("st-anchor", "Place-anchor profile", `<div id="st-anchor"><p class="hint">Loading…</p></div>`)
       + block("st-catch", "Catchment · travel modes", `
         <div class="lt-seg st-modes" role="group" aria-label="Catchment mode">${seg}</div>
         <div class="st-catch-row">
@@ -433,5 +451,100 @@ export function initStadia(d) {
       + `<p class="hint">Land value is the MHCLG/VOA residential benchmark for the authority (an appraisal benchmark, not a site valuation). Brownfield sites, deprivation, population and house prices follow below.</p>`);
   }
 
-  return { filterHTML, onLayers, openCard, profile, sectionHTML, wirePanel, clear, applyFilter };
+  // ---- place-anchor profile (stadium_metrics, migrations 0089/0090) ----------
+  let METRICS = null;
+  async function allMetrics() {
+    if (METRICS) return METRICS;
+    const sb = getSupabase();
+    if (!sb) return [];
+    const { data } = await sb.from("stadium_metrics").select("*").limit(2000);
+    METRICS = data || [];
+    return METRICS;
+  }
+  async function metricsFor(st) {
+    if (!st) return null;
+    const all = await allMetrics();
+    let best = null, bd = 1e9;
+    for (const r of all) {
+      const dd = Math.hypot(r.lng - st.lng, (r.lat - st.lat) * 1.6);
+      if (dd < bd) { bd = dd; best = r; }
+    }
+    return bd < 0.003 ? best : null;
+  }
+  const pctOf = (all, k, v) => {
+    const xs = all.map(r => r[k]).filter(x => x != null);
+    return xs.length && v != null ? Math.round(100 * xs.filter(x => x <= v).length / xs.length) : null;
+  };
+  const bar = (label, v, color, note = "") => `
+    <div class="st-ix"><span>${label}</span>
+      <div class="st-ix-bar"><i style="width:${v == null ? 0 : v}%;background:${color}"></i></div>
+      <b>${v == null ? "—" : Math.round(v)}</b>${note ? `<em>${note}</em>` : ""}</div>`;
+  const ha = v => v == null ? "—" : `${Number(v).toFixed(1)} ha`;
+
+  async function loadAnchor(st) {
+    const el = () => document.getElementById("st-anchor");
+    const row = await metricsFor(st);
+    if (S.st !== st || !el()) return;
+    if (!row) { el().innerHTML = `<p class="hint">No benchmark row for this ground yet.</p>`; return; }
+    const all = (await allMetrics()).filter(r => (r.capacity || 0) >= 1000);
+    const everyday = (row.pop_800 || 0) + (row.jobs_800 || 0);
+    const crowd = row.capacity && row.fill_rate ? Math.round(row.capacity * row.fill_rate) : null;
+    const peers = all.filter(r => r.source_id !== row.source_id && (row.tier === r.tier
+        || (row.capacity && r.capacity && Math.abs(Math.log(r.capacity / row.capacity)) < 0.25)))
+      .sort((a, b) => Math.abs(Math.log((a.capacity || 1) / (row.capacity || 1))) - Math.abs(Math.log((b.capacity || 1) / (row.capacity || 1))))
+      .slice(0, 6);
+    const cols = [["capacity", "Seats", fmt], ["reach_pt45", "PT 45 min", v => v == null ? "—" : `${(v / 1e3).toFixed(0)}k`],
+      ["regen_ha", "Land 800 m", v => v == null ? "—" : Math.round(v)], ["imd_1500", "Depriv.", v => v == null ? "—" : Math.round(v)],
+      ["beds_per_100", "Beds/100", v => v == null ? "—" : Math.round(v)], ["anchor_index", "Anchor", v => v == null ? "—" : Math.round(v)]];
+    const prow = (r, me) => `<tr${me ? ' class="me"' : ""}><td>${esc(r.name || "")}</td>${cols.map(([k, , f]) => `<td>${f(r[k])}</td>`).join("")}</tr>`;
+    const reachMax = Math.max(row.reach_drive20 || 0, row.reach_pt45 || 0, 1);
+    const rbar = (l, v, c) => `<div class="st-reach"><span>${l}</span><div><i style="width:${Math.max(1, 100 * (v || 0) / reachMax)}%;background:${c}"></i></div><b>${fmt(v)}</b></div>`;
+    el().innerHTML = `
+      <div class="st-typo"><span class="st-chip">${esc(row.typology || "—")}</span><span class="st-chip ghost">${esc(row.tier || "")}</span>${row.nation ? `<span class="st-chip ghost">${esc(row.nation)}</span>` : ""}</div>
+      <div class="st-sub">Indices · percentile among ${all.length} UK grounds with 1,000+ seats</div>
+      ${bar("Regeneration", row.regen_index, "#e8590c")}
+      ${bar("Social value", row.social_index, "#2f9e44")}
+      ${bar("Visitor economy", row.visitor_index, "#7048e8")}
+      ${bar("Place anchor", row.anchor_index, "#1c2533")}
+      <div class="st-sub">Matchday vs everyday</div>
+      ${grid([[fmt(row.matchdays), "matchdays / yr (est.)"], [fmt(row.idle_days), "days with no fixture"],
+              [row.annual_visits ? (row.annual_visits >= 1e6 ? `${(row.annual_visits / 1e6).toFixed(1)}m` : `${Math.round(row.annual_visits / 1e3)}k`) : "—", "matchday visits / yr"]])}
+      ${crowd && everyday ? `<div class="st-surge"><div><i style="width:${Math.min(100, 100 * everyday / Math.max(everyday, crowd))}%"></i><span>Everyday: ${fmt(everyday)} residents + workers within 800 m</span></div>
+        <div><i class="c" style="width:${Math.min(100, 100 * crowd / Math.max(everyday, crowd))}%"></i><span>Matchday crowd: ${fmt(crowd)}</span></div></div>
+        <p class="hint">On a matchday the area within 10 minutes' walk holds <b>${row.surge_ratio}×</b> its everyday population; on the other ${row.idle_days} days the ground is a ${row.capacity ? `${fmt(row.capacity)}-seat` : ""} structure with nothing on. Matchdays and fill rate are modelled for the ${esc(row.tier)} tier.</p>` : ""}
+      <div class="st-sub">Network reach · people</div>
+      ${rbar("Walk 15 min", row.reach_walk15, "#2f9e44")}
+      ${rbar("PT 30 min", row.reach_pt30, "#9775fa")}
+      ${rbar("PT 45 min", row.reach_pt45, "#7048e8")}
+      ${rbar("Drive 20 min", row.reach_drive20, "#e8590c")}
+      <p class="hint">Public transport leaves the ground at 17:00 on a Saturday. It reaches <b>${row.pt_share != null ? Math.round(row.pt_share * 100) + "%" : "—"}</b> as many people as a 20-minute drive (UK median ${Math.round(100 * median(all.map(r => r.pt_share)))}%).</p>
+      <div class="st-sub">Land supply within 800 m</div>
+      ${grid([[ha(row.regen_ha), "regenerable land (union)"], [ha(row.parking_ha), "parking"], [ha(row.public_ha), "public ownership"]])}
+      ${kv([["Brownfield", ha(row.brownfield_ha)], ["Retail, industrial & storage", ha(row.lowvalue_ha)],
+            ["Green space", ha(row.green_ha)],
+            ["Constraints", `flood zone 3 ${Math.round(100 * (row.flood3_share || 0))}% · conservation ${Math.round(100 * (row.conservation_share || 0))}% · ${fmt(row.listed_800)} listed buildings`],
+            ["UK percentile (land)", `${pctOf(all, "regen_ha", row.regen_ha) ?? "—"}th`]])}
+      <div class="st-sub">Hotel fit</div>
+      ${grid([[row.beds_per_100 != null ? fmt(Math.round(row.beds_per_100)) : "—", "bedspaces per 100 seats (5 km)"],
+              [fmt(row.beds_1k), "bedspaces within 1 km"], [fmt(row.beds_5k), "within 5 km"]])}
+      <p class="hint">${row.beds_per_100 != null && row.beds_per_100 < 25 ? "Thin hotel supply for the crowd — visiting fans and event-day stays leak to other places." : "Hotel supply could absorb a share of visiting demand."} UK median ${Math.round(median(all.map(r => r.beds_per_100)))} per 100 seats.</p>
+      <div class="st-sub">Social value &amp; community reach</div>
+      ${kv([["Deprivation within 1.5 km", row.imd_1500 != null ? `${Math.round(row.imd_1500)}th percentile (100 = most deprived)` : "—"],
+            ["Income · health · employment", [row.imd_income, row.imd_health, row.imd_employment].map(v => v == null ? "—" : Math.round(v)).join(" · ")],
+            ["People within 15 min walk", fmt(row.reach_walk15)],
+            ["Schools within 1.5 km", fmt(row.schools_1500)],
+            ["Sports facilities · pitches (1.5 km)", `${fmt(row.sport_fac_1500)} · ${ha(row.pitch_ha_1500)}`]])}
+      ${peers.length ? `<div class="st-sub">Peers · ${row.tier ? esc(row.tier) + " or similar size" : "similar size"}</div>
+        <div class="st-peer-wrap"><table class="st-peer"><thead><tr><th></th>${cols.map(([, l]) => `<th>${l}</th>`).join("")}</tr></thead>
+        <tbody>${prow(row, true)}${peers.map(r => prow(r, false)).join("")}</tbody></table></div>` : ""}
+      <p class="hint">Full UK comparison in <a href="#" class="st-open-study">Studies → UK Stadium Analysis</a>.</p>`;
+    const a = el().querySelector(".st-open-study");
+    if (a) a.addEventListener("click", e => { e.preventDefault(); if (d.openStudy) d.openStudy("stadia", row.source_id); });
+  }
+  function median(xs) {
+    const v = xs.filter(x => x != null).sort((a, b) => a - b);
+    return v.length ? v[Math.floor(v.length / 2)] : 0;
+  }
+
+  return { filterHTML, onLayers, openCard, profile, sectionHTML, wirePanel, clear, applyFilter, allMetrics };
 }

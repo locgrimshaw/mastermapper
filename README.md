@@ -59,9 +59,45 @@ looking at stadia as place anchors and regeneration tools:
   public land and land value — then the standard deprivation, population,
   density, house prices, brownfield and amenities blocks.
 
+- **Place-anchor profile** (top of the stadium sidebar): typology; regeneration,
+  social-value, visitor-economy and overall anchor indices (UK percentiles);
+  matchday vs everyday (matchdays, idle days, matchday crowd against residents
+  + workers within 800 m); network reach (walk 15, public transport 30/45,
+  drive 20); land supply within 800 m; hotel fit (bedspaces per 100 seats);
+  social value; and a peer table.
+- **Public-transport catchments at 30 and 45 min** are now precomputed
+  from the full national timetable (bus, tram, Underground, DLR and rail)
+  leaving the ground at 17:00 on a Saturday.
+
 Data: `pipeline/build_sport_leisure.py` (monthly "Load Sport & Leisure
 datasets" workflow); migration 0087 (`stadium_catchment_summary`,
-`point_rail_access`); front end `web/src/stadia.js`.
+`point_rail_access`); front end `web/src/stadia.js`. Benchmarks:
+`stadium_metrics` (migrations 0089/0090: `rebuild_stadium_metrics`,
+`derive_stadium_metrics`, `classify_stadia`, editable tier assumptions in
+`stadium_tiers`), with catchments and populations from
+`pipeline/build_stadium_catchments.py` (Valhalla walk/drive, a Connection
+Scan over BODS GTFS for public transport, the Meta 30 m population grid).
+
+## Studies
+
+**Studies** in the top bar opens long-form, data-led pages built on the
+tool's own data (`web/src/studies.js`; link straight to one with
+`#study=stadia`). The first is **UK Stadium Analysis**, covering:
+
+- the idle asset (days in use by tier, seats by decade opened);
+- matchday vs everyday surge;
+- deprivation deciles;
+- regenerable land and the "need + land" regeneration quadrant;
+- public-transport vs car reach;
+- hotel deserts;
+- stadium spending per seat in today's money;
+- typology fingerprints and index league tables;
+- a sortable, searchable comparison table of every ground, with CSV export.
+
+Filters (nation, sport, capacity) apply to the whole page. Every modelled
+assumption (matchdays and fill rate by tier, spend per head, build-out
+share, density) can be edited on the page, and every figure recomputes from
+them. Each chart has a table view. Click any ground to open it on the map.
 
 ## Transport layers
 
