@@ -187,7 +187,7 @@ class Wikidata:
             for q, e in ents.items():
                 claims = e.get("claims", {})
                 slim = {"label": e.get("labels", {}).get("en", {}).get("value")}
-                for p in ("P1083", "P466", "P641", "P1619", "P127", "P118"):
+                for p in ("P1083", "P466", "P641", "P1619", "P127", "P118", "P2130"):
                     vals = []
                     for c in claims.get(p, []):
                         if c.get("rank") == "deprecated":
@@ -201,8 +201,13 @@ class Wikidata:
                             vals.append({"id": dv["id"], "ended": ended,
                                          "pref": c.get("rank") == "preferred"})
                         elif isinstance(dv, dict) and "amount" in dv:
+                            when = None
+                            for qv in q2.get("P585", []):
+                                when = (qv.get("datavalue", {}).get("value", {}) or {}).get("time")
                             vals.append({"amount": dv["amount"], "ended": ended,
-                                         "pref": c.get("rank") == "preferred"})
+                                         "pref": c.get("rank") == "preferred",
+                                         "unit": str(dv.get("unit", "")).rsplit("/", 1)[-1],
+                                         "when": when})
                         elif isinstance(dv, dict) and "time" in dv:
                             vals.append({"time": dv["time"]})
                     if vals:
@@ -225,6 +230,45 @@ def wd_capacity(ent):
         return int(float(best[0]["amount"]))
     except (TypeError, ValueError):
         return None
+
+
+# Construction cost (Wikidata P2130) in today's money via the ONS long-run RPI
+# (CDKO, committed as pipeline/data/rpi_long_run.csv). Sterling only — other
+# currencies are left out rather than converted at an arbitrary rate.
+GBP = "Q25224"
+
+
+def load_rpi():
+    path = Path(__file__).resolve().parent / "data" / "rpi_long_run.csv"
+    out = {}
+    if path.exists():
+        for r in csv.DictReader(path.open()):
+            try:
+                out[int(r["year"])] = float(r["rpi"])
+            except (ValueError, KeyError):
+                pass
+    return out
+
+
+def wd_cost(ent, opened, rpi):
+    """(cost_gbp, cost_year, cost_2024_gbp) or Nones."""
+    for v in (ent or {}).get("P2130", []):
+        if "amount" not in v or v.get("unit") != GBP:
+            continue
+        try:
+            amt = float(v["amount"])
+        except (TypeError, ValueError):
+            continue
+        yr = None
+        m = re.match(r"[+-]?(\d{4})", v.get("when") or "")
+        if m:
+            yr = int(m.group(1))
+        yr = yr or opened
+        real = None
+        if yr and rpi.get(yr) and rpi.get(max(rpi)):
+            real = round(amt * rpi[max(rpi)] / rpi[yr])
+        return round(amt), yr, real
+    return None, None, None
 
 
 def current_ids(ent, prop):
@@ -303,6 +347,7 @@ def main():
                     "geom_wkt": f"SRID=4326;POINT({r['lon']:.6f} {r['lat']:.6f})"})
 
     # stadia
+    rpi = load_rpi()
     n_cap = 0
     for r in rows["stadium"]:
         t = r["t"]
@@ -333,6 +378,7 @@ def main():
                 opened = int(m.group(1))
                 break
         owner = [wd.label(o) for o in current_ids(ent, "P127") if wd.label(o)]
+        cost, cost_year, cost_real = wd_cost(ent, opened, rpi)
         name = r["name"] or (ent or {}).get("label") or "Stadium"
         r["name"] = name
         emit("stadium", r, {
@@ -343,6 +389,7 @@ def main():
             "owner": ", ".join(owner[:3]) or None,
             "site_ha": round(r["area"] / 1e4, 2) if r["area"] else None,
             "wikidata": t.get("wikidata"), "website": t.get("website"),
+            "cost_gbp": cost, "cost_year": cost_year, "cost_real_gbp": cost_real,
         })
     print(f"[sport] stadia: {len(rows['stadium'])}, {n_cap} with a capacity", flush=True)
 
